@@ -1,4 +1,4 @@
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { DeleteBlockParams } from "../types/blocks.js";
 import { handleNotionError } from "../utils/error.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -7,6 +7,7 @@ export const deleteBlock = async (
   params: DeleteBlockParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.blocks.delete({
       block_id: params.blockId,
     });

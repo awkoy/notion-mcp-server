@@ -1,5 +1,5 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import {
   AddDiscussionCommentParams,
   AddPageCommentParams,
@@ -12,6 +12,7 @@ const registerGetCommentsTool = async (
   params: GetCommentsParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.comments.list(params);
 
     return {
@@ -35,6 +36,7 @@ const registerAddPageCommentTool = async (
   params: AddPageCommentParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.comments.create(params);
 
     return {
@@ -58,6 +60,7 @@ const registerAddDiscussionCommentTool = async (
   params: AddDiscussionCommentParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.comments.create(params);
 
     return {

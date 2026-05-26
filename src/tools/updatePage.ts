@@ -1,4 +1,4 @@
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { handleNotionError } from "../utils/error.js";
 import { ArchivePageParams, RestorePageParams } from "../types/page.js";
@@ -7,6 +7,7 @@ export async function archivePage(
   params: ArchivePageParams
 ): Promise<CallToolResult> {
   try {
+    const notion = await getClient();
     const response = await notion.pages.update({
       page_id: params.pageId,
       archived: true,
@@ -29,6 +30,7 @@ export async function restorePage(
   params: RestorePageParams
 ): Promise<CallToolResult> {
   try {
+    const notion = await getClient();
     const response = await notion.pages.update({
       page_id: params.pageId,
       archived: false,

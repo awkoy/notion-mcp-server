@@ -1,5 +1,5 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { handleNotionError } from "../utils/error.js";
 import {
   GetUserParams,
@@ -11,6 +11,7 @@ export const registerGetListUsersTool = async (
   params: ListUsersParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.users.list(params);
 
     return {
@@ -34,6 +35,7 @@ export const registerGetUserTool = async (
   params: GetUserParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.users.retrieve(params);
 
     return {
@@ -55,6 +57,7 @@ export const registerGetUserTool = async (
 
 export const registerGetBotUserTool = async (): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.users.me({});
 
     return {

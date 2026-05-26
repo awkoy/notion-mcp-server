@@ -1,4 +1,4 @@
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { RetrieveBlockChildrenParams } from "../types/blocks.js";
 import { handleNotionError } from "../utils/error.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -7,6 +7,7 @@ export const retrieveBlockChildren = async (
   params: RetrieveBlockChildrenParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.blocks.children.list({
       block_id: params.blockId,
       start_cursor: params.start_cursor,

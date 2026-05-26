@@ -1,4 +1,4 @@
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { BatchMixedOperationsParams } from "../types/blocks.js";
 import { handleNotionError } from "../utils/error.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -7,6 +7,7 @@ export const batchMixedOperations = async (
   params: BatchMixedOperationsParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const results = [];
     const operationCounts = {
       append: 0,

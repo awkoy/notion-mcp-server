@@ -1,4 +1,4 @@
-import { notion } from "../services/notion.js";
+import { getClient } from "../services/notion.js";
 import { QueryDatabaseParams } from "../types/database.js";
 import { handleNotionError } from "../utils/error.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -7,6 +7,7 @@ export const queryDatabase = async (
   params: QueryDatabaseParams
 ): Promise<CallToolResult> => {
   try {
+    const notion = await getClient();
     const response = await notion.databases.query(params);
 
     return {
