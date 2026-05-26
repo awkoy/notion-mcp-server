@@ -100,29 +100,29 @@ register({
 // query_database
 // ──────────────────────────────────────────────────────────────────────────
 
-const QueryDatabaseParams = z.object({
-  database_id: z.string(),
-  filter: z.unknown().optional().describe(
-    "Notion filter object. See https://developers.notion.com/reference/post-database-query-filter. Example: {property: 'Status', status: {equals: 'Done'}}"
-  ),
-  sorts: z
-    .array(
-      z.union([
-        z.object({
-          property: z.string(),
-          direction: z.enum(["ascending", "descending"]),
-        }),
-        z.object({
-          timestamp: z.enum(["created_time", "last_edited_time"]),
-          direction: z.enum(["ascending", "descending"]),
-        }),
-      ])
-    )
-    .optional(),
-  page_size: z.number().min(1).max(100).optional(),
-  start_cursor: z.string().optional(),
-  verbose: VERBOSE,
-});
+const QueryDatabaseParams = z
+  .object({
+    database_id: z
+      .string()
+      .optional()
+      .describe(
+        "Database ID. If the database has exactly one data source, we resolve it automatically. For multi-source databases, pass data_source_id instead."
+      ),
+    data_source_id: z
+      .string()
+      .optional()
+      .describe(
+        "Data source ID. Use for multi-source databases or when you've already resolved the source via list_data_sources."
+      ),
+    filter: z.unknown().optional(),
+    sorts: z.array(z.unknown()).optional(),
+    start_cursor: z.string().optional(),
+    page_size: z.number().min(1).max(100).optional(),
+    verbose: VERBOSE,
+  })
+  .refine((v) => Boolean(v.database_id) !== Boolean(v.data_source_id), {
+    message: "Pass exactly one of `database_id` or `data_source_id`.",
+  });
 
 register({
   name: "query_database",
@@ -131,24 +131,46 @@ register({
   schema: QueryDatabaseParams,
   example: {
     database_id: "<database-id>",
-    filter: { property: "Status", status: { equals: "Open" } },
-    sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
-    page_size: 25,
+    filter: { property: "Status", status: { equals: "Done" } },
+    page_size: 50,
   },
-  handler: async ({ database_id, filter, sorts, page_size, start_cursor, verbose }) => {
+  handler: async ({ database_id, data_source_id, filter, sorts, start_cursor, page_size, verbose }) => {
     try {
       const notion = await getClient();
-      const response = await (notion.databases as never as { query: (args: unknown) => Promise<never> }).query({
-        database_id,
-        ...(filter ? { filter: filter as never } : {}),
-        ...(sorts ? { sorts: sorts as never } : {}),
-        page_size: page_size ?? 25,
+      let dsId = data_source_id;
+      if (!dsId) {
+        const db = await notion.databases.retrieve({ database_id: database_id! });
+        const sources = (db as { data_sources?: { id: string }[] }).data_sources ?? [];
+        if (sources.length === 0) {
+          return {
+            ok: false,
+            error: {
+              code: "no_data_source",
+              message: `Database ${database_id} has no data sources.`,
+              fix: "Pass data_source_id directly, or check the database in Notion.",
+            },
+          };
+        }
+        if (sources.length > 1) {
+          return {
+            ok: false,
+            error: {
+              code: "multi_source_database",
+              message: `Database ${database_id} has ${sources.length} data sources. Pass data_source_id explicitly.`,
+              fix: `Call list_data_sources first, then pass data_source_id. Available IDs: ${sources.map((s) => s.id).join(", ")}.`,
+            },
+          };
+        }
+        dsId = sources[0].id;
+      }
+      const response = await notion.dataSources.query({
+        data_source_id: dsId,
+        filter: filter as never,
+        sorts: sorts as never,
         start_cursor,
+        page_size: page_size ?? 100,
       });
-      return {
-        ok: true,
-        data: slimList(response, slimPage, verbose ?? false),
-      };
+      return { ok: true, data: slimList(response, slimPage, verbose ?? false) };
     } catch (error) {
       return { ok: false, error: toErrorEnvelope(error) };
     }
