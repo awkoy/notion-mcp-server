@@ -7,6 +7,8 @@ const notionStub = {
   databases: {
     retrieve: vi.fn(),
     query: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
   },
   dataSources: {
     query: vi.fn(),
@@ -412,5 +414,97 @@ describe("append_blocks position/after XOR", () => {
     });
     expect((res as { ok: boolean }).ok).toBe(false);
     expect((res as { error: { code: string } }).error.code).toBe("validation_error");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// 2025-09-03 surface modernization
+// ────────────────────────────────────────────────────────────────────────
+
+describe("create_database uses initial_data_source shape", () => {
+  it("nests properties under initial_data_source per 2025-09-03 surface", async () => {
+    notionStub.databases.create.mockResolvedValue({
+      id: "db-new",
+      title: [{ plain_text: "Tasks" }],
+      properties: {},
+    });
+
+    const res = await dispatch("create_database", {
+      parent: { type: "page_id", page_id: "p-1" },
+      title: "Tasks",
+      properties: {
+        Name: { type: "title", title: {} },
+      },
+    });
+    expect((res as { ok: boolean }).ok).toBe(true);
+
+    const call = notionStub.databases.create.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty("properties");
+    expect(call).toHaveProperty("initial_data_source");
+    expect((call.initial_data_source as { properties: unknown }).properties).toEqual({
+      Name: { type: "title", title: {} },
+    });
+  });
+});
+
+describe("archive_page / restore_page use in_trash", () => {
+  it("archive_page sends in_trash: true (not legacy archived)", async () => {
+    notionStub.pages.update.mockResolvedValue({
+      id: "p-1",
+      url: "u",
+      properties: {},
+      parent: {},
+      in_trash: true,
+    });
+
+    await dispatch("archive_page", { page_id: "p-1" });
+    expect(notionStub.pages.update).toHaveBeenCalledWith({ page_id: "p-1", in_trash: true });
+    const call = notionStub.pages.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty("archived");
+  });
+
+  it("restore_page sends in_trash: false", async () => {
+    notionStub.pages.update.mockResolvedValue({
+      id: "p-1",
+      url: "u",
+      properties: {},
+      parent: {},
+      in_trash: false,
+    });
+
+    await dispatch("restore_page", { page_id: "p-1" });
+    expect(notionStub.pages.update).toHaveBeenCalledWith({ page_id: "p-1", in_trash: false });
+  });
+});
+
+describe("update_database in_trash handling", () => {
+  it("forwards in_trash when caller passes in_trash", async () => {
+    notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
+
+    await dispatch("update_database", { database_id: "db-1", in_trash: true });
+    const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.in_trash).toBe(true);
+    expect(call).not.toHaveProperty("archived");
+  });
+
+  it("forwards in_trash when caller passes legacy archived", async () => {
+    notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
+
+    await dispatch("update_database", { database_id: "db-1", archived: true });
+    const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.in_trash).toBe(true);
+    expect(call).not.toHaveProperty("archived");
+  });
+
+  it("prefers in_trash when both are passed", async () => {
+    notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
+
+    await dispatch("update_database", {
+      database_id: "db-1",
+      in_trash: false,
+      archived: true,
+    });
+    const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.in_trash).toBe(false);
   });
 });

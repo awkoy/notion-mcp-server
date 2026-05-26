@@ -96,7 +96,7 @@ register({
     const id = (data as { id?: string }).id;
     if (!id) return;
     const notion = await getClient();
-    await notion.pages.update({ page_id: id, archived: true });
+    await notion.pages.update({ page_id: id, in_trash: true });
   },
   handler: async (params) => {
     try {
@@ -288,7 +288,7 @@ register({
   handler: async ({ page_id, verbose }) => {
     try {
       const notion = await getClient();
-      const response = await notion.pages.update({ page_id, archived: true });
+      const response = await notion.pages.update({ page_id, in_trash: true });
       return { ok: true, data: slimPage(response, verbose ?? false) };
     } catch (error) {
       return { ok: false, error: toErrorEnvelope(error) };
@@ -305,7 +305,7 @@ register({
   handler: async ({ page_id, verbose }) => {
     try {
       const notion = await getClient();
-      const response = await notion.pages.update({ page_id, archived: false });
+      const response = await notion.pages.update({ page_id, in_trash: false });
       return { ok: true, data: slimPage(response, verbose ?? false) };
     } catch (error) {
       return { ok: false, error: toErrorEnvelope(error) };

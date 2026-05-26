@@ -59,7 +59,7 @@ register({
     const id = (data as { id?: string }).id;
     if (!id) return;
     const notion = await getClient();
-    await notion.databases.update({ database_id: id, archived: true } as never);
+    await notion.databases.update({ database_id: id, in_trash: true } as never);
   },
   handler: async (params) => {
     try {
@@ -84,7 +84,7 @@ register({
         parent: parent as never,
         title: titleRich as never,
         ...(params.description ? { description: params.description as never } : {}),
-        properties: params.properties as never,
+        initial_data_source: { properties: params.properties as never },
         is_inline: params.is_inline ?? false,
         ...(params.icon !== undefined ? { icon: params.icon as never } : {}),
         ...(params.cover !== undefined ? { cover: params.cover as never } : {}),
@@ -188,7 +188,8 @@ const UpdateDatabaseParams = z.object({
   description: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
   properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
   is_inline: z.boolean().optional(),
-  archived: z.boolean().optional(),
+  in_trash: z.boolean().optional(),
+  archived: z.boolean().optional().describe("Deprecated alias for `in_trash`. Use `in_trash` on the 2025-09-03 surface."),
   icon: ICON_SCHEMA.nullable().optional(),
   cover: FILE_SCHEMA.nullable().optional(),
   verbose: VERBOSE,
@@ -210,6 +211,7 @@ register({
         : params.title !== undefined
           ? [{ type: "text" as const, text: { content: params.title } }]
           : undefined;
+      const inTrash = params.in_trash ?? params.archived;
       const notion = await getClient();
       const response = await notion.databases.update({
         database_id: params.database_id,
@@ -217,7 +219,7 @@ register({
         ...(params.description ? { description: params.description as never } : {}),
         ...(params.properties ? { properties: params.properties as never } : {}),
         ...(params.is_inline !== undefined ? { is_inline: params.is_inline } : {}),
-        ...(params.archived !== undefined ? { archived: params.archived } : {}),
+        ...(inTrash !== undefined ? { in_trash: inTrash } : {}),
         ...(params.icon !== undefined ? { icon: params.icon as never } : {}),
         ...(params.cover !== undefined ? { cover: params.cover as never } : {}),
       } as never);
