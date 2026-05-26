@@ -284,6 +284,28 @@ export const STATUS_DB_PROPERTY_SCHEMA = z.object({
   description: z.string().optional().describe("Property description"),
 });
 
+export const BUTTON_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("button"),
+  button: EMPTY_OBJECT_SCHEMA,
+  description: z.string().optional(),
+});
+
+export const UNIQUE_ID_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("unique_id"),
+  unique_id: z
+    .object({
+      prefix: z.string().nullable().optional().describe("Prefix shown before the auto-incrementing number."),
+    })
+    .describe("Unique ID property configuration"),
+  description: z.string().optional(),
+});
+
+export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("verification"),
+  verification: EMPTY_OBJECT_SCHEMA,
+  description: z.string().optional(),
+});
+
 // Combined database property schema
 export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
   preprocessJson,
@@ -308,6 +330,9 @@ export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
       CREATED_BY_DB_PROPERTY_SCHEMA,
       LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
       LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
+      BUTTON_DB_PROPERTY_SCHEMA,
+      UNIQUE_ID_DB_PROPERTY_SCHEMA,
+      VERIFICATION_DB_PROPERTY_SCHEMA,
     ])
     .describe("Union of all possible database property types")
 );
