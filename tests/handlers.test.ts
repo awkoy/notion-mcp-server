@@ -276,7 +276,7 @@ describe("get_page_markdown", () => {
 });
 
 describe("update_page_markdown", () => {
-  it("calls pages.updateMarkdown with markdown body (replace mode)", async () => {
+  it("sends replace_content discriminator on default replace", async () => {
     notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
 
     const res = await dispatch("update_page_markdown", {
@@ -286,11 +286,27 @@ describe("update_page_markdown", () => {
     expect((res as { ok: boolean }).ok).toBe(true);
     expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
       page_id: "p-1",
-      markdown: "## Updated",
+      type: "replace_content",
+      replace_content: { new_str: "## Updated" },
     });
   });
 
-  it("passes insert_content when provided", async () => {
+  it("forwards allow_deleting_content on replace", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
+
+    await dispatch("update_page_markdown", {
+      page_id: "p-1",
+      markdown: "x",
+      allow_deleting_content: true,
+    });
+    expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1",
+      type: "replace_content",
+      replace_content: { new_str: "x", allow_deleting_content: true },
+    });
+  });
+
+  it("maps insert_content.position into the insert_content discriminator", async () => {
     notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
 
     await dispatch("update_page_markdown", {
@@ -300,8 +316,30 @@ describe("update_page_markdown", () => {
     });
     expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
       page_id: "p-1",
+      type: "insert_content",
+      insert_content: {
+        content: "More",
+        position: { type: "end" },
+      },
+    });
+  });
+
+  it("forwards insert_content.after when provided", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
+
+    await dispatch("update_page_markdown", {
+      page_id: "p-1",
       markdown: "More",
-      insert_content: { position: "end" },
+      insert_content: { position: "start", after: "block-9" },
+    });
+    expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1",
+      type: "insert_content",
+      insert_content: {
+        content: "More",
+        after: "block-9",
+        position: { type: "start" },
+      },
     });
   });
 });

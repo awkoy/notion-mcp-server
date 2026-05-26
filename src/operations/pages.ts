@@ -436,12 +436,17 @@ register({
 
 const UpdatePageMarkdownParams = z.object({
   page_id: z.string(),
-  markdown: z.string().describe("New page content as Notion-flavored markdown. Replaces existing body unless insert_content is set."),
+  markdown: z.string().describe("Markdown content. Replaces the existing body by default; with insert_content it is inserted instead."),
   insert_content: z
     .object({
-      position: z.enum(["start", "end"]).describe("Insert at start or end instead of replacing."),
+      position: z.enum(["start", "end"]).describe("Insert at start or end of the page."),
+      after: z.string().optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
     })
     .optional(),
+  allow_deleting_content: z
+    .boolean()
+    .optional()
+    .describe("Required true when a replace would remove existing blocks; the API rejects destructive replaces without it."),
 });
 
 register({
@@ -452,14 +457,30 @@ register({
   example: {
     page_id: "<page-id>",
     markdown: "## Updated heading\n\nNew body.",
+    allow_deleting_content: true,
   },
-  handler: async ({ page_id, markdown, insert_content }) => {
+  handler: async ({ page_id, markdown, insert_content, allow_deleting_content }) => {
     try {
       const notion = await getClient();
+      const body = insert_content
+        ? {
+            type: "insert_content" as const,
+            insert_content: {
+              content: markdown,
+              ...(insert_content.after ? { after: insert_content.after } : {}),
+              position: { type: insert_content.position },
+            },
+          }
+        : {
+            type: "replace_content" as const,
+            replace_content: {
+              new_str: markdown,
+              ...(allow_deleting_content !== undefined ? { allow_deleting_content } : {}),
+            },
+          };
       const response = await notion.pages.updateMarkdown({
         page_id,
-        markdown,
-        ...(insert_content ? { insert_content } : {}),
+        ...body,
       } as never);
       return { ok: true, data: { page_id: (response as { id?: string }).id ?? page_id } };
     } catch (error) {
