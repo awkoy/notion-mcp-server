@@ -17,10 +17,11 @@
 
 ## 📑 Table of Contents
 
-- [Getting Started & Integration](#-getting-started--integration)
-  - [Setup Process](#setup-process)
-  - [Cursor Integration](#cursor-integration)
-  - [Claude Desktop Integration](#claude-desktop-integration)
+- [Quick start](#-quick-start)
+  - [Option 1 — Personal Access Token (recommended)](#option-1--personal-access-token-recommended)
+  - [Option 2 — Internal Integration (legacy)](#option-2--internal-integration-legacy)
+  - [Optional: `NOTION_PAGE_ID`](#optional-notion_page_id)
+  - [Cursor / Claude Desktop](#cursor--claude-desktop)
 - [Features](#-features)
 - [Documentation](#-documentation)
   - [Available Tools](#available-tools)
@@ -31,91 +32,65 @@
 - [Contributing](#-contributing)
 - [License](#-license)
 
-## 🚀 Getting Started & Integration
+## 🚀 Quick start
 
-### Setup Process
+> **Already running notion-mcp-server v1.1.x?** If your `NOTION_TOKEN` is set and tools work today, **nothing changes for you in v1.2.0**. The setup paths below are recommendations for new installs and for users hitting per-page sharing pain.
 
-1. **Obtain a Notion API Key**
-   - Create an integration at [Notion Developers](https://www.notion.so/my-integrations)
-   - Copy your API key
-   
-2. **Enable Integration for Your Pages**
-   - Select an existing page or create a new one in Notion
-   - Click the "..." menu in the top right corner
-   - Go to "Connections" 
-   - Find and enable your integration from the list
-   
-   ![Notion Page Connection](page_connection.png)
+### Option 1 — Personal Access Token (recommended)
 
-3. **Choose Your Integration Method**
-   - Follow one of the integration options below based on your preferred MCP client
+A Personal Access Token (PAT) acts as you. It sees every page you can see — no per-page "Connect" dance in Notion's UI.
 
-4. **Ask Your AI Assistant to Interact with Notion**
-   - "Create a new page with today's tasks"
-   - "Update my meeting notes in Notion"
-   - "Add bullet points to my meeting notes page"
-   - "Create a new database for tracking projects"
-   - "Add new entries to my task database"
-   - "Add a comment to my project page"
-   - "Show me all comments on this document"
-   - "List all users in my workspace"
-   - "Get information about a specific user"
+1. Open Notion → **Settings → My Settings → Personal Access Tokens** → **Generate**.
+2. Copy the `ntn_...` token.
+3. Add the MCP server (Claude Code shown; equivalent for Cursor and Claude Desktop below):
 
-### Cursor Integration
+```bash
+claude mcp add notion -s user \
+  -e NOTION_TOKEN=ntn_paste_your_token_here \
+  -- node /absolute/path/to/notion-mcp-server/build/index.js
+```
 
-#### Method 1: Using mcp.json
+That's it. The PAT does not expire under your control.
 
-1. Create or edit the `.cursor/mcp.json` file in your project directory:
+### Option 2 — Internal Integration (legacy)
+
+Use this if you specifically want a workspace-scoped integration with explicit per-page access.
+
+1. Open Notion → **Settings → Connections → Develop or manage integrations** → **New integration**.
+2. Copy the Internal Integration Secret (`ntn_...` on new integrations; `secret_...` on older ones).
+3. Use the same `claude mcp add` command as above — the env var is identical.
+4. **Important:** open each page or database in Notion's UI and click **• • • → Connect → \<your integration name\>** to grant access. This is the per-page friction that PATs eliminate.
+
+### Optional: `NOTION_PAGE_ID`
+
+A default parent page used by `create_page` / `create_database` when the caller doesn't pass one. Operations that need a parent and don't get one now return a clear validation error instead of crashing the server.
+
+To find a page ID: open the page in Notion → **Share → Copy link**. The ID is the last 32 characters of the URL.
+
+```bash
+claude mcp add notion -s user \
+  -e NOTION_TOKEN=ntn_xxx \
+  -e NOTION_PAGE_ID=abc123... \
+  -- node /absolute/path/to/notion-mcp-server/build/index.js
+```
+
+### Cursor / Claude Desktop
+
+Add this entry to your MCP config JSON (`~/.cursor/mcp.json` for Cursor, `~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop):
 
 ```json
 {
   "mcpServers": {
-    "notion-mcp-server": {
-      "command": "env NOTION_TOKEN=YOUR_KEY NOTION_PAGE_ID=YOUR_PAGE_ID npx",
-      "args": ["-y", "notion-mcp-server"]
-    }
-  }
-}
-```
-
-2. Replace `YOUR_KEY` and `YOUR_PAGE_ID` with your actual Notion API key and page ID
-3. Restart Cursor to apply the changes
-
-#### Method 2: Manual Mode
-
-1. Open Cursor and go to Settings
-2. Navigate to the "MCP" or "Model Context Protocol" section
-3. Click "Add Server" or equivalent
-4. Enter the following command in the appropriate field:
-
-```
-env NOTION_TOKEN=YOUR_KEY NOTION_PAGE_ID=YOUR_PAGE_ID npx -y notion-mcp-server
-```
-
-5. Replace `YOUR_KEY` and `YOUR_PAGE_ID` with your actual Notion API key and page ID
-6. Save the settings and restart Cursor if necessary
-
-### Claude Desktop Integration
-
-1. Create or edit the `mcp.json` file in your configuration directory:
-
-```json
-{
-  "mcpServers": {
-    "notion-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "notion-mcp-server"],
+    "notion": {
+      "command": "node",
+      "args": ["/absolute/path/to/notion-mcp-server/build/index.js"],
       "env": {
-        "NOTION_TOKEN": "YOUR_KEY",
-        "NOTION_PAGE_ID": "YOUR_PAGE_ID"
+        "NOTION_TOKEN": "ntn_paste_your_token_here"
       }
     }
   }
 }
 ```
-
-2. Replace `YOUR_KEY` and `YOUR_PAGE_ID` with your actual Notion API key and page ID
-3. Restart Claude Desktop to apply the changes
 
 ## 🌟 Features
 
@@ -282,15 +257,16 @@ The server currently does not expose any resources, focusing instead on tool-bas
 
 ## ❓ Troubleshooting
 
-- **Common Issues**
-  - **Authentication Errors**: Ensure your Notion token has the correct permissions and integration is enabled for your pages/databases
-  - **Page Access Issues**: Make sure your integration has been added to the pages you're attempting to access
-  - **Rate Limiting**: Notion API has rate limits - use batch operations to optimize requests
+- **"object_not_found" / "Could not find ..."** — the integration token can only see pages explicitly shared with it. Switch to a PAT (Option 1) to skip per-page sharing.
+- **"Notion auth failed: ..." on every call** — the token was missing, revoked, or rejected. Check `NOTION_TOKEN` is set in your MCP client config, and verify the token is still listed under Notion → Settings → My Settings → Personal Access Tokens (or Settings → Connections → Develop or manage integrations).
+- **"No parent page configured"** — pass `parent` in the call, or set `NOTION_PAGE_ID` to a default.
+- **Server logs "Notion auth check failed" on startup but tools still work** — the startup check is best-effort. If subsequent tool calls succeed, ignore the warning (Claude Code suppresses MCP stderr in normal operation anyway).
 
-- **Getting Help**
-  - Create an issue on the [GitHub repository](https://github.com/awkoy/notion-mcp-server/issues)
-  - Check the [Notion API documentation](https://developers.notion.com/reference/intro)
-  - Visit the MCP community channels for assistance
+### Getting Help
+
+- Create an issue on the [GitHub repository](https://github.com/awkoy/notion-mcp-server/issues)
+- Check the [Notion API documentation](https://developers.notion.com/reference/intro)
+- Visit the MCP community channels for assistance
 
 ## 🤝 Contributing
 
