@@ -11,6 +11,7 @@ export async function initOperations(): Promise<void> {
     import("./pages.js"),
     import("./blocks.js"),
     import("./databases.js"),
+    import("./data-sources.js"),
     import("./comments.js"),
     import("./users.js"),
   ]);

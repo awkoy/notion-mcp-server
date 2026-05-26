@@ -6,9 +6,15 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (23 total)", () => {
+  it("registers every name in the OperationName union (26 total)", () => {
     const names = operationNames();
-    expect(names.length).toBe(23);
+    expect(names.length).toBe(26);
+  });
+
+  it("includes the data-source ops", () => {
+    expect(getOperation("list_data_sources")).toBeDefined();
+    expect(getOperation("get_data_source")).toBeDefined();
+    expect(getOperation("update_data_source")).toBeDefined();
   });
 
   it("includes the v2 gap-closure ops added on top of v1 capabilities", () => {
