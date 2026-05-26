@@ -55,12 +55,16 @@ register({
           },
         };
       }
+      const positionArg = position
+        ? { type: position }
+        : after
+          ? { type: "after_block" as const, after_block: { id: after } }
+          : undefined;
       const notion = await getClient();
       const response = await notion.blocks.children.append({
         block_id,
         children: blocks as never,
-        ...(after ? { after } : {}),
-        ...(position ? { position } : {}),
+        ...(positionArg ? { position: positionArg } : {}),
       } as never);
       return {
         ok: true,

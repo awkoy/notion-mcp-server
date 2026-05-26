@@ -26,6 +26,11 @@ const notionStub = {
     update: vi.fn(),
     delete: vi.fn(),
   },
+  blocks: {
+    children: {
+      append: vi.fn(),
+    },
+  },
 };
 
 vi.mock("../src/services/notion.js", () => ({
@@ -41,11 +46,16 @@ beforeAll(async () => {
 
 beforeEach(() => {
   calls.length = 0;
-  for (const ns of Object.values(notionStub)) {
-    for (const fn of Object.values(ns)) {
-      (fn as ReturnType<typeof vi.fn>).mockReset();
+  const resetAll = (obj: unknown): void => {
+    if (typeof obj === "function" && "mockReset" in (obj as object)) {
+      (obj as ReturnType<typeof vi.fn>).mockReset();
+      return;
     }
-  }
+    if (obj && typeof obj === "object") {
+      for (const v of Object.values(obj as Record<string, unknown>)) resetAll(v);
+    }
+  };
+  resetAll(notionStub);
 });
 
 // ────────────────────────────────────────────────────────────────────────
@@ -452,6 +462,42 @@ describe("append_blocks position/after XOR", () => {
     });
     expect((res as { ok: boolean }).ok).toBe(false);
     expect((res as { error: { code: string } }).error.code).toBe("validation_error");
+  });
+});
+
+describe("append_blocks position wire shape", () => {
+  it("wraps position string into {type: position} on the SDK call", async () => {
+    notionStub.blocks.children.append.mockResolvedValue({ results: [] });
+    await dispatch("append_blocks", {
+      block_id: "b-1",
+      children: [{ type: "paragraph", paragraph: { rich_text: [] } }],
+      position: "end",
+    });
+    const call = notionStub.blocks.children.append.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.position).toEqual({ type: "end" });
+  });
+
+  it("translates legacy after into position.after_block", async () => {
+    notionStub.blocks.children.append.mockResolvedValue({ results: [] });
+    await dispatch("append_blocks", {
+      block_id: "b-1",
+      children: [{ type: "paragraph", paragraph: { rich_text: [] } }],
+      after: "b-prev",
+    });
+    const call = notionStub.blocks.children.append.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.position).toEqual({ type: "after_block", after_block: { id: "b-prev" } });
+    expect(call).not.toHaveProperty("after");
+  });
+
+  it("omits position when neither after nor position is given", async () => {
+    notionStub.blocks.children.append.mockResolvedValue({ results: [] });
+    await dispatch("append_blocks", {
+      block_id: "b-1",
+      children: [{ type: "paragraph", paragraph: { rich_text: [] } }],
+    });
+    const call = notionStub.blocks.children.append.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty("position");
+    expect(call).not.toHaveProperty("after");
   });
 });
 
