@@ -83,3 +83,18 @@ export const TITLE_PROPERTY_VALUE_SCHEMA = z.object({
 export const URL_PROPERTY_VALUE_SCHEMA = z.object({
   url: z.url({ protocol: /^https?$/ }),
 });
+
+export const VERIFICATION_PROPERTY_VALUE_SCHEMA = z.object({
+  verification: z
+    .object({
+      state: z.enum(["verified", "unverified", "expired"]),
+      verified_by: z
+        .object({ id: z.string(), object: z.literal("user").optional() })
+        .optional(),
+      date: z
+        .object({ start: z.string(), end: z.string().nullable().optional() })
+        .nullable()
+        .optional(),
+    })
+    .describe("Verification property value"),
+});

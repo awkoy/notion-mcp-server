@@ -2,10 +2,9 @@
 import { startServer } from "./server/index.js";
 import { registerAllTools } from "./tools/index.js";
 
-registerAllTools();
-
 async function main() {
   try {
+    await registerAllTools();
     await startServer();
   } catch (error) {
     console.error(

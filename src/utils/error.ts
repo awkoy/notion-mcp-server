@@ -1,13 +1,12 @@
 import { APIResponseError } from "@notionhq/client";
-import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AuthError } from "../services/auth.js";
+import type { OperationError } from "../operations/types.js";
 
 /**
  * Error codes from Notion API
  * @see https://developers.notion.com/reference/status-codes#error-codes
  */
 export enum NotionErrorCode {
-  // 400 errors
   InvalidJson = "invalid_json",
   InvalidRequestUrl = "invalid_request_url",
   InvalidRequest = "invalid_request",
@@ -17,125 +16,160 @@ export enum NotionErrorCode {
   UnsupportedExport = "unsupported_export",
   UnsupportedJsonType = "unsupported_json_type",
   UnsupportedJsonKey = "unsupported_json_key",
-  // 401 errors
   Unauthorized = "unauthorized",
   InvalidApiKey = "invalid_api_key",
-  // 403 errors
   RestrictedResource = "restricted_resource",
   InsufficientPermissions = "insufficient_permissions",
-  // 404 errors
   ObjectNotFound = "object_not_found",
-  // 409 errors
   ConflictError = "conflict_error",
   AlreadyExists = "already_exists",
-  // 429 errors
   RateLimited = "rate_limited",
-  // 500 errors
   InternalServerError = "internal_server_error",
-  // 503 errors
   ServiceUnavailable = "service_unavailable",
+  GatewayTimeout = "gateway_timeout",
   DatabaseConnectionUnavailable = "database_connection_unavailable",
 }
 
-const ERROR_MESSAGES: Record<string, string> = {
-  [NotionErrorCode.InvalidJson]:
-    "The request body could not be decoded as JSON",
-  [NotionErrorCode.InvalidRequestUrl]: "The request URL is not valid",
-  [NotionErrorCode.InvalidRequest]: "This request is not supported",
-  [NotionErrorCode.ValidationError]:
-    "The request body does not match the schema for the expected parameters",
-  [NotionErrorCode.MissingVersion]:
-    "The request is missing the required Notion-Version header",
-  [NotionErrorCode.UnsupportedVersion]:
-    "The specified version is not supported",
-  [NotionErrorCode.UnsupportedExport]:
-    "The specified export type is not supported",
-  [NotionErrorCode.UnsupportedJsonType]:
-    "The specified JSON type is not supported",
-  [NotionErrorCode.UnsupportedJsonKey]:
-    "The specified JSON key is not supported",
-  [NotionErrorCode.Unauthorized]: "The bearer token is not valid",
-  [NotionErrorCode.InvalidApiKey]: "The API key is invalid",
-  [NotionErrorCode.RestrictedResource]:
-    "The resource is restricted and cannot be accessed with this token",
-  [NotionErrorCode.InsufficientPermissions]:
-    "The bearer token does not have permission to perform this operation",
-  [NotionErrorCode.ObjectNotFound]: "The requested resource does not exist",
-  [NotionErrorCode.ConflictError]:
-    "The transaction could not be completed due to a conflict",
-  [NotionErrorCode.AlreadyExists]: "The resource already exists",
-  [NotionErrorCode.RateLimited]:
-    "The request was rate limited. Retry later with exponential backoff",
-  [NotionErrorCode.InternalServerError]:
-    "An unexpected error occurred on the Notion servers",
-  [NotionErrorCode.ServiceUnavailable]:
-    "The Notion service is unavailable. Retry later with exponential backoff",
-  [NotionErrorCode.DatabaseConnectionUnavailable]:
-    "The database connection is unavailable. Retry later with exponential backoff",
-};
+/**
+ * Codes that indicate a transient failure — the request either never ran or
+ * the server is asking us to back off. Safe to retry with exponential backoff.
+ * Shared by the dispatch retry wrapper and any caller that wants to classify
+ * an error envelope without re-encoding the same rules.
+ */
+export const RETRYABLE_NOTION_CODES: ReadonlySet<NotionErrorCode> = new Set([
+  NotionErrorCode.RateLimited,
+  NotionErrorCode.InternalServerError,
+  NotionErrorCode.ServiceUnavailable,
+  NotionErrorCode.GatewayTimeout,
+  NotionErrorCode.DatabaseConnectionUnavailable,
+]);
 
-function getErrorMessage(
-  notionErrorCode: string,
-  defaultMessage?: string
-): string {
-  return (
-    ERROR_MESSAGES[notionErrorCode] ||
-    defaultMessage ||
-    "An unknown error occurred"
-  );
+export function isRetryableNotionCode(code: string | undefined): boolean {
+  return code !== undefined && (RETRYABLE_NOTION_CODES as ReadonlySet<string>).has(code);
 }
 
-/**
- * Per MCP spec, tool execution errors are surfaced via isError: true and a
- * text content block; the JSON-RPC error envelope is reserved for
- * protocol-level errors only.
- */
-export function handleNotionError(error: unknown): CallToolResult {
+type ErrorEntry = { message: string; fix?: string };
+
+const ERROR_MESSAGES: Record<string, ErrorEntry> = {
+  [NotionErrorCode.InvalidJson]: {
+    message: "The request body could not be decoded as JSON.",
+    fix: "Pass the payload as an object, not as a JSON-encoded string.",
+  },
+  [NotionErrorCode.InvalidRequestUrl]: {
+    message: "The request URL is not valid.",
+  },
+  [NotionErrorCode.InvalidRequest]: {
+    message: "This request is not supported.",
+  },
+  [NotionErrorCode.ValidationError]: {
+    message: "The request body does not match the schema for the expected parameters.",
+    fix: "Call notion_describe with this operation name to fetch the schema, then retry. Check the 'path' field on the error for the specific bad property.",
+  },
+  [NotionErrorCode.MissingVersion]: {
+    message: "The request is missing the required Notion-Version header.",
+  },
+  [NotionErrorCode.UnsupportedVersion]: {
+    message: "The specified Notion-Version is not supported.",
+  },
+  [NotionErrorCode.UnsupportedExport]: {
+    message: "The specified export type is not supported.",
+  },
+  [NotionErrorCode.UnsupportedJsonType]: {
+    message: "The specified JSON type is not supported.",
+  },
+  [NotionErrorCode.UnsupportedJsonKey]: {
+    message: "The specified JSON key is not supported.",
+  },
+  [NotionErrorCode.Unauthorized]: {
+    message: "The bearer token is not valid.",
+    fix: "Set the NOTION_TOKEN environment variable to a valid Notion integration token (starts with `ntn_` or `secret_`).",
+  },
+  [NotionErrorCode.InvalidApiKey]: {
+    message: "The API key is invalid.",
+    fix: "Generate a new internal integration token in Notion → Settings → Integrations → My integrations.",
+  },
+  [NotionErrorCode.RestrictedResource]: {
+    message: "The resource is restricted and cannot be accessed with this token.",
+    fix: "In Notion, open Settings → Connections → [your integration] → Capabilities and enable the missing scope (e.g. 'Read user information' for /users endpoints, 'Insert content' for block writes). For pages/databases, also confirm the integration is shared with the resource via the page's ••• → Add connections menu.",
+  },
+  [NotionErrorCode.InsufficientPermissions]: {
+    message: "The bearer token does not have permission to perform this operation.",
+    fix: "Open the integration in Notion → Settings → Connections and enable the missing capability, then share the target page/database with the integration.",
+  },
+  [NotionErrorCode.ObjectNotFound]: {
+    message: "The requested resource does not exist.",
+    fix: "Either the ID is wrong, the integration hasn't been shared with the page/database (use the page's ••• → Add connections menu in Notion), or the object is in trash.",
+  },
+  [NotionErrorCode.ConflictError]: {
+    message: "The transaction could not be completed due to a conflict.",
+    fix: "Retry the operation after a short delay.",
+  },
+  [NotionErrorCode.AlreadyExists]: {
+    message: "The resource already exists.",
+  },
+  [NotionErrorCode.RateLimited]: {
+    message: "The request was rate limited.",
+    fix: "Retry later with exponential backoff. Notion limits to ~3 requests per second per integration.",
+  },
+  [NotionErrorCode.InternalServerError]: {
+    message: "An unexpected error occurred on the Notion servers.",
+    fix: "Retry the operation; if it persists, check status.notion.so.",
+  },
+  [NotionErrorCode.ServiceUnavailable]: {
+    message: "The Notion service is unavailable.",
+    fix: "Retry later with exponential backoff.",
+  },
+  [NotionErrorCode.GatewayTimeout]: {
+    message: "The Notion gateway timed out before the request could complete.",
+    fix: "Retry later with exponential backoff.",
+  },
+  [NotionErrorCode.DatabaseConnectionUnavailable]: {
+    message: "The database connection is unavailable.",
+    fix: "Retry later with exponential backoff.",
+  },
+};
+
+function lookup(code: string): ErrorEntry {
+  return ERROR_MESSAGES[code] ?? { message: "An unknown error occurred." };
+}
+
+export function toErrorEnvelope(error: unknown): OperationError {
   if (error instanceof APIResponseError) {
-    const code = error.code;
-    const message = getErrorMessage(code, error.message);
+    const entry = lookup(error.code);
+    const body = (error as APIResponseError & { body?: unknown }).body;
     return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Error: ${message} (${code})`,
-        },
-      ],
+      code: error.code,
+      message: entry.message + (error.message && error.message !== entry.message ? ` (${error.message})` : ""),
+      ...(entry.fix ? { fix: entry.fix } : {}),
+      ...(String(error.code) === NotionErrorCode.ValidationError && body
+        ? { path: extractValidationPath(body) }
+        : {}),
     };
   }
-
   if (error instanceof AuthError) {
     return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Notion auth failed: ${error.message}`,
-        },
-      ],
+      code: "auth_error",
+      message: `Notion auth failed: ${error.message}`,
+      fix: "Set NOTION_TOKEN env var, or configure OAuth credentials if using the auth gateway.",
     };
   }
-
   if (error instanceof Error) {
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Error: ${error.message}`,
-        },
-      ],
-    };
+    return { code: "internal_error", message: error.message };
   }
+  return { code: "unknown_error", message: String(error) };
+}
 
-  return {
-    isError: true,
-    content: [
-      {
-        type: "text",
-        text: `Error: ${String(error)}`,
-      },
-    ],
-  };
+function extractValidationPath(body: unknown): (string | number)[] | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const maybe = (body as { details?: unknown }).details;
+  if (!Array.isArray(maybe)) return undefined;
+  const first = maybe[0];
+  if (
+    typeof first === "object" &&
+    first !== null &&
+    Array.isArray((first as { path?: unknown }).path)
+  ) {
+    return (first as { path: (string | number)[] }).path;
+  }
+  return undefined;
 }

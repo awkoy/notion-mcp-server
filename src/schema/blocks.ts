@@ -66,6 +66,25 @@ export const HEADING3_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
   }).describe("Heading 3 block content"),
 });
 
+export const HEADING4_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
+  type: z.literal("heading_4").describe("Heading 4 block type"),
+  heading_4: TEXT_BLOCK_BASE_REQUEST_SCHEMA.extend({
+    is_toggleable: z
+      .boolean()
+      .optional()
+      .describe("Whether heading can be toggled"),
+  }).describe("Heading 4 block content"),
+});
+
+export const TAB_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
+  type: z.literal("tab").describe("Tab block type"),
+  tab: z
+    .object({
+      icon: ICON_SCHEMA.optional(),
+    })
+    .describe("Tab block content"),
+});
+
 export const QUOTE_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
   type: z.literal("quote").describe("Quote block type"),
   quote: TEXT_BLOCK_BASE_REQUEST_SCHEMA.describe("Quote block content"),
@@ -143,6 +162,7 @@ export const TEXT_BLOCK_REQUEST_SCHEMA = z.preprocess(
       HEADING1_BLOCK_REQUEST_SCHEMA,
       HEADING2_BLOCK_REQUEST_SCHEMA,
       HEADING3_BLOCK_REQUEST_SCHEMA,
+      HEADING4_BLOCK_REQUEST_SCHEMA,
       QUOTE_BLOCK_REQUEST_SCHEMA,
       CALLOUT_BLOCK_REQUEST_SCHEMA,
       TOGGLE_BLOCK_REQUEST_SCHEMA,
@@ -152,174 +172,8 @@ export const TEXT_BLOCK_REQUEST_SCHEMA = z.preprocess(
       CODE_BLOCK_REQUEST_SCHEMA,
       DIVIDER_BLOCK_REQUEST_SCHEMA,
       IMAGE_BLOCK_REQUEST_SCHEMA,
+      TAB_BLOCK_REQUEST_SCHEMA,
     ])
     .describe("Union of all possible text block request types")
 );
 
-export const APPEND_BLOCK_CHILDREN_SCHEMA = {
-  blockId: z.string().describe("The ID of the block to append children to"),
-  children: z
-    .array(TEXT_BLOCK_REQUEST_SCHEMA)
-    .describe("Array of blocks to append as children"),
-};
-
-export const RETRIEVE_BLOCK_SCHEMA = {
-  blockId: z.string().describe("The ID of the block to retrieve"),
-};
-
-export const RETRIEVE_BLOCK_CHILDREN_SCHEMA = {
-  blockId: z.string().describe("The ID of the block to retrieve children for"),
-  start_cursor: z.string().optional().describe("Cursor for pagination"),
-  page_size: z
-    .number()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe("Number of results to return (1-100)"),
-};
-
-export const UPDATE_BLOCK_SCHEMA = {
-  blockId: z.string().describe("The ID of the block to update"),
-  data: TEXT_BLOCK_REQUEST_SCHEMA.describe("The block data to update"),
-};
-
-export const DELETE_BLOCK_SCHEMA = {
-  blockId: z.string().describe("The ID of the block to delete/archive"),
-};
-
-// Batch operation schemas for multiple blocks
-
-export const BATCH_APPEND_BLOCK_CHILDREN_SCHEMA = {
-  operations: z
-    .array(
-      z.object({
-        blockId: z
-          .string()
-          .describe("The ID of the block to append children to"),
-        children: z
-          .array(TEXT_BLOCK_REQUEST_SCHEMA)
-          .describe("Array of blocks to append as children"),
-      })
-    )
-    .describe("Array of append operations to perform in a single batch"),
-};
-
-export const BATCH_UPDATE_BLOCKS_SCHEMA = {
-  operations: z
-    .array(
-      z.object({
-        blockId: z.string().describe("The ID of the block to update"),
-        data: TEXT_BLOCK_REQUEST_SCHEMA.describe("The block data to update"),
-      })
-    )
-    .describe("Array of update operations to perform in a single batch"),
-};
-
-export const BATCH_DELETE_BLOCKS_SCHEMA = {
-  blockIds: z
-    .array(z.string().describe("The ID of a block to delete/archive"))
-    .describe("Array of block IDs to delete in a single batch"),
-};
-
-// Schema for multi-operation batches (mixed operations)
-export const BATCH_MIXED_OPERATIONS_SCHEMA = {
-  operations: z
-    .array(
-      z.discriminatedUnion("operation", [
-        z.object({
-          operation: z.literal("append"),
-          blockId: z
-            .string()
-            .describe("The ID of the block to append children to"),
-          children: z
-            .array(TEXT_BLOCK_REQUEST_SCHEMA)
-            .describe("Array of blocks to append as children"),
-        }),
-        z.object({
-          operation: z.literal("update"),
-          blockId: z.string().describe("The ID of the block to update"),
-          data: TEXT_BLOCK_REQUEST_SCHEMA.describe("The block data to update"),
-        }),
-        z.object({
-          operation: z.literal("delete"),
-          blockId: z.string().describe("The ID of the block to delete/archive"),
-        }),
-      ])
-    )
-    .describe("Array of mixed operations to perform in a single batch"),
-};
-
-// Combined schema for all block operations
-export const BLOCKS_OPERATION_SCHEMA = {
-  payload: z
-    .preprocess(
-      preprocessJson,
-      z.discriminatedUnion("action", [
-        z.object({
-          action: z
-            .literal("append_block_children")
-            .describe("Use this action to append children to a block."),
-          params: z.object(APPEND_BLOCK_CHILDREN_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("retrieve_block")
-            .describe("Use this action to retrieve a block."),
-          params: z.object(RETRIEVE_BLOCK_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("retrieve_block_children")
-            .describe("Use this action to retrieve children of a block."),
-          params: z.object(RETRIEVE_BLOCK_CHILDREN_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("update_block")
-            .describe("Use this action to update a block."),
-          params: z.object(UPDATE_BLOCK_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("delete_block")
-            .describe("Use this action to delete/archive a block."),
-          params: z.object(DELETE_BLOCK_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("batch_append_block_children")
-            .describe(
-              "Use this action to perform batch append operations on blocks."
-            ),
-          params: z.object(BATCH_APPEND_BLOCK_CHILDREN_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("batch_update_blocks")
-            .describe(
-              "Use this action to perform batch update operations on blocks."
-            ),
-          params: z.object(BATCH_UPDATE_BLOCKS_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("batch_delete_blocks")
-            .describe(
-              "Use this action to perform batch delete operations on blocks."
-            ),
-          params: z.object(BATCH_DELETE_BLOCKS_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("batch_mixed_operations")
-            .describe(
-              "Use this action to perform batch mixed operations on blocks."
-            ),
-          params: z.object(BATCH_MIXED_OPERATIONS_SCHEMA),
-        }),
-      ])
-    )
-    .describe(
-      "A union of all possible block operations. Each operation has a specific action and corresponding parameters. Use this schema to validate the input for block operations such as appending, retrieving, updating, deleting, and performing batch operations. Available actions include: 'append_block_children', 'retrieve_block', 'retrieve_block_children', 'update_block', 'delete_block', 'batch_append_block_children', 'batch_update_blocks', 'batch_delete_blocks', and 'batch_mixed_operations'. Each operation requires specific parameters as defined in the corresponding schemas."
-    ),
-};

@@ -7,7 +7,10 @@ let cachedToken: string | null = null;
 export async function getClient(): Promise<Client> {
   const token = await authProvider.getToken();
   if (token !== cachedToken || cachedClient === null) {
-    const fresh = new Client({ auth: token });
+    const fresh = new Client({
+      auth: token,
+      notionVersion: "2025-09-03",
+    });
     cachedClient = fresh;
     cachedToken = token;
     return fresh;

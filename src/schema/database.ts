@@ -1,12 +1,4 @@
 import { z } from "zod";
-import { ICON_SCHEMA } from "./icon.js";
-import { FILE_SCHEMA } from "./file.js";
-import { PARENT_SCHEMA } from "./page.js";
-import {
-  RICH_TEXT_ITEM_REQUEST_SCHEMA,
-  TEXT_CONTENT_REQUEST_SCHEMA,
-  TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA,
-} from "./rich-text.js";
 import { preprocessJson } from "./preprocess.js";
 import { NUMBER_FORMAT } from "./number.js";
 
@@ -23,19 +15,6 @@ export const SELECT_COLOR_SCHEMA = z.enum([
   "pink",
   "red",
 ]);
-
-// Title property for database creation
-export const TITLE_PROPERTY_SCHEMA = z.object({
-  title: z
-    .array(
-      z.object({
-        text: TEXT_CONTENT_REQUEST_SCHEMA.describe(
-          "Text content for title segment"
-        ),
-      })
-    )
-    .describe("Array of text segments that make up the title"),
-});
 
 // Database property schemas
 // 1. Title property
@@ -305,6 +284,36 @@ export const STATUS_DB_PROPERTY_SCHEMA = z.object({
   description: z.string().optional().describe("Property description"),
 });
 
+export const BUTTON_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("button"),
+  button: EMPTY_OBJECT_SCHEMA,
+  description: z.string().optional(),
+});
+
+export const UNIQUE_ID_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("unique_id"),
+  unique_id: z
+    .object({
+      prefix: z
+        .string()
+        .regex(
+          /^[A-Za-z][A-Za-z0-9-]{1,9}$/,
+          "prefix must start with a letter, then 1–9 more letters/digits/hyphens (total length 2–10)"
+        )
+        .nullable()
+        .optional()
+        .describe("Prefix shown before the auto-incrementing number. 2–10 chars total, must start with a letter, alphanumeric + hyphen only. Single-letter prefixes are rejected by Notion."),
+    })
+    .describe("Unique ID property configuration"),
+  description: z.string().optional(),
+});
+
+export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
+  type: z.literal("verification"),
+  verification: EMPTY_OBJECT_SCHEMA,
+  description: z.string().optional(),
+});
+
 // Combined database property schema
 export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
   preprocessJson,
@@ -329,130 +338,10 @@ export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
       CREATED_BY_DB_PROPERTY_SCHEMA,
       LAST_EDITED_TIME_DB_PROPERTY_SCHEMA,
       LAST_EDITED_BY_DB_PROPERTY_SCHEMA,
+      BUTTON_DB_PROPERTY_SCHEMA,
+      UNIQUE_ID_DB_PROPERTY_SCHEMA,
+      VERIFICATION_DB_PROPERTY_SCHEMA,
     ])
     .describe("Union of all possible database property types")
 );
 
-// Create database schema
-export const CREATE_DATABASE_SCHEMA = {
-  parent: PARENT_SCHEMA.optional().describe(
-    "Optional parent. If omitted, the server falls back to the NOTION_PAGE_ID environment variable; if that's also unset, the call returns a clear error."
-  ),
-  title: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).describe("Database title"),
-  description: z
-    .array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA)
-    .optional()
-    .describe("Database description"),
-  properties: z
-    .record(
-      z.string().describe("Property name"),
-      DATABASE_PROPERTY_SCHEMA.describe("Property schema")
-    )
-    .describe("Database properties"),
-  is_inline: z
-    .boolean()
-    .optional()
-    .default(false)
-    .describe("Whether database is inline"),
-  icon: z.preprocess(
-    preprocessJson,
-    ICON_SCHEMA.nullable().optional().describe("Optional icon for the database")
-  ),
-  cover: z.preprocess(
-    preprocessJson,
-    FILE_SCHEMA.nullable()
-      .optional()
-      .describe("Optional cover image for the database")
-  ),
-};
-
-// Query database schema
-export const QUERY_DATABASE_SCHEMA = {
-  database_id: z.string().describe("The ID of the database to query"),
-  filter: z
-    .preprocess(preprocessJson, z.any())
-    .optional()
-    .describe("Filter criteria for the query"),
-  sorts: z
-    .array(
-      z.object({
-        property: z.string().optional().describe("Property to sort by"),
-        timestamp: z
-          .enum(["created_time", "last_edited_time"])
-          .describe("Timestamp to sort by"),
-        direction: z
-          .enum(["ascending", "descending"])
-          .describe("Sort direction"),
-      })
-    )
-    .optional()
-    .describe("Sort criteria for the query"),
-  start_cursor: z.string().optional().describe("Cursor for pagination"),
-  page_size: z
-    .number()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe("Number of results to return (1-100)"),
-};
-
-// Update database schema
-export const UPDATE_DATABASE_SCHEMA = {
-  database_id: z.string().describe("The ID of the database to update"),
-  title: z
-    .array(RICH_TEXT_ITEM_REQUEST_SCHEMA)
-    .optional()
-    .describe("Updated database title"),
-  description: z
-    .array(RICH_TEXT_ITEM_REQUEST_SCHEMA)
-    .optional()
-    .describe("Updated database description"),
-  properties: z
-    .record(
-      z.string().describe("Property name"),
-      DATABASE_PROPERTY_SCHEMA.describe("Property schema")
-    )
-    .describe("Properties of the page"),
-  is_inline: z.boolean().optional().describe("Whether database is inline"),
-  icon: z.preprocess(
-    preprocessJson,
-    ICON_SCHEMA.nullable().optional().describe("Updated icon for the database")
-  ),
-  cover: z.preprocess(
-    preprocessJson,
-    FILE_SCHEMA.nullable()
-      .optional()
-      .describe("Updated cover image for the database")
-  ),
-};
-
-// Combined schema for all database operations
-export const DATABASE_OPERATION_SCHEMA = {
-  payload: z
-    .preprocess(
-      preprocessJson,
-      z.discriminatedUnion("action", [
-        z.object({
-          action: z
-            .literal("create_database")
-            .describe("Use this action to create a new database."),
-          params: z.object(CREATE_DATABASE_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("query_database")
-            .describe("Use this action to query a database."),
-          params: z.object(QUERY_DATABASE_SCHEMA),
-        }),
-        z.object({
-          action: z
-            .literal("update_database")
-            .describe("Use this action to update a database."),
-          params: z.object(UPDATE_DATABASE_SCHEMA),
-        }),
-      ])
-    )
-    .describe(
-      "A union of all possible database operations. Each operation has a specific action and corresponding parameters. Use this schema to validate the input for database operations such as creating, querying, and updating databases. Available actions include: 'create_database', 'query_database', and 'update_database'. Each operation requires specific parameters as defined in the corresponding schemas."
-    ),
-};

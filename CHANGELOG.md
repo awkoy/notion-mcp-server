@@ -1,0 +1,121 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.4.0] — 2026-05-27
+
+### Breaking changes
+
+- **`upload_file` source discriminator renamed `kind` → `type`.** Brings the file source shape in line with every other discriminated union in the API (`parent.type`, `icon.type`, `block.type`, etc.). Pass `{ source: { type: "base64", data: "..." } }` or `{ source: { type: "url", url: "..." } }`. The legacy `kind` field is rejected outright. See [MIGRATION.md](./MIGRATION.md).
+
+### Added
+
+- **`get_self` alias for `get_bot_user`.** LLMs reach for `get_self` reflexively when probing identity. Both names now resolve to the same handler.
+- **`include_properties` flag on `get_page`.** Defaults to `false`. Pass `true` to receive the flattened `properties` map alongside the page metadata — same shape `query_database` emits per row.
+
+### Changed
+
+- **Validation error envelopes are now path-sliced.** Instead of dumping the full operation schema (5–13KB on `set_page_property`, `update_database`, `query_database`), the envelope now slices the schema down to the failing field and summarizes any large unions into one-line-per-branch discriminator tags. Typical envelopes shrink from ~10KB to <1KB. The full schema is still one `notion_describe` call away.
+- **`set_page_property` / `set_page_properties` accept a plain string for the title.** When `name === "title"` (singular) or `properties.title` (plural) is a string, the server wraps it into Notion's `{title:[{type:"text",text:{content}}]}` shape before validation. Removes the most common LLM authoring mistake.
+- **`update_block` infers the block type from `data`.** When `data` contains exactly one recognized block-type key (e.g. `{ paragraph: {...} }`), the server fills in the `type` discriminator automatically. Old shape `{ type: "paragraph", data: { paragraph: {...} } }` still works.
+- **`upload_file` mode defaults to `"single"`.** No need to pass `mode` for the 99% case; only specify `"multi"` for files >5MB.
+- **`batch_mixed_blocks` now returns `wrong_envelope` instead of `not_batchable`** when called with the universal `{ items: [...] }` form. The error message points callers at the correct `{ operations: [...] }` envelope.
+
+## [2.3.0] — 2026-05-27
+
+### Changed
+
+- **`get_data_source` now returns `properties` as a `{ name: type }` map** instead of a name-only array. Same byte cost, but the type info is what `query_database` planners actually need — callers no longer have to drop `verbose: true` just to learn property types.
+- **`move_page` renamed `new_parent` → `parent`** so the field matches `create_page`. One less inconsistency to memorize.
+- **`query_database` hoists the per-row `parent` to the list level.** Every row in a `query_database` result has the same parent (single data source), so the parent is emitted once on the list and stripped from each row — on a 100-row page this saves ≈8KB. `verbose: true` keeps per-row parents.
+- **`slimUser` omits `avatar_url`** when it's missing, instead of serializing `avatar_url: null`. Bot `workspace_name` is also conditional now.
+- **`slimComment` drops `created_time`** for consistency with other slim shapes (other ops dropped it in v2.2). Use `verbose: true` if you need it.
+- **WHERE DSL keywords are case-insensitive.** `and`/`or`/`not` (canonical, matches Notion's filter JSON) and `AND`/`OR`/`NOT` (SQL-style) both work. If a column is literally named `and`/`or`/`not`, wrap it as an operator object with `__type` to disambiguate.
+- **`upload_file` description expanded** to spell out the two supported source shapes (`base64` and `url`) up front, so the LLM doesn't have to call `notion_describe` first for the common case.
+
+### Fixed
+
+- **`unique_id` prefix is validated locally.** Notion rejects single-letter prefixes with a generic 400; we now reject them at the schema layer with a precise message (2–10 chars, letter-prefixed, alphanumeric + hyphen only). Saves a round-trip and gives the LLM a clean "fix" instead of an API echo.
+
+## [2.2.0] — 2026-05-27
+
+### Changed
+
+- **Slim shapers trimmed for token efficiency.** Default reads now omit duplicate, default-state, and otherwise noisy fields: pages drop `archived`, `created_time`, `last_edited_time`, and the `in_trash: false` default (only emit when trashed); databases drop the `in_trash: false`, `is_inline: false`, `is_locked: false`, and empty-`description` defaults; blocks omit `has_children: false` and `in_trash: false`; data sources drop empty-`description` defaults. The `count` field is gone from `list_data_sources` (`results.length` is the source of truth). Pass `verbose: true` to get the raw Notion SDK response.
+- **`query_database` now flattens property values by default.** Each row carries a `properties` map of name → primitive (or small object) for `title`, `rich_text`, `number`, `select`, `multi_select`, `status`, `date`, `people`, `files`, `checkbox`, `url`, `email`, `phone_number`, `formula`, `relation`, `rollup`, `created_time`, `last_edited_time`, `created_by`, `last_edited_by`, `unique_id`, `verification`. `verbose: true` keeps the full Notion shape.
+- **`append_blocks` returns `{ appended, ids }` by default**, slimmed from the full block array. Pass `verbose: true` to receive each appended block in slim shape; the same applies to the `append` branch in `batch_mixed_blocks`.
+- **`notion_execute` / `notion_describe` now serialize JSON without indentation** for ~30% smaller wire responses (agents parse JSON either way).
+
+### Fixed
+
+- Rollup `array` rows now flatten each element via the property-value flattener instead of returning the array length (`r.array.length` was emitted as the "value").
+- `unique_id` properties with a missing `number` no longer leak the string `"PREFIX-null"` — the property is omitted from the flattened map instead.
+- `append_blocks` (and `batch_mixed_blocks` `append`) only emits an `ids` field when the SDK response is long enough to cover the requested children; otherwise the field is omitted so callers don't see incorrect IDs.
+
+## [2.1.0] — 2026-05-26
+
+### Changed
+
+- Bumped to `@notionhq/client@^5.22.0` and pinned `Notion-Version: 2025-09-03`. Server now talks to the modern Notion API line. Tool surface (`notion_execute`, `notion_describe`) is unchanged for callers.
+- `query_database` now routes through `dataSources.query` under the hood. Single-source databases continue to work transparently when you pass `database_id`. Multi-source databases require `data_source_id` (returns a `multi_source_database` self-healing error pointing to `list_data_sources` if ambiguous).
+
+### Added
+
+- **Data sources as first-class entities** — `list_data_sources`, `get_data_source`, `update_data_source`.
+- **New page endpoints** — `move_page` (relocate without recreating), `get_page_markdown` / `update_page_markdown` (server-rendered markdown round-trip).
+- **Comment lifecycle** — `get_comment`, `update_comment`, `delete_comment`. `add_page_comment` / `add_discussion_comment` / `update_comment` also accept a `markdown` body as an alternative to plain text / rich text.
+- **New parent types** — `data_source_id`, `workspace`, `block_id` accepted in `create_page` and elsewhere `PARENT_SCHEMA` is used.
+- **New block types** — `heading_4`, `tab` accepted in structured input; the markdown parser emits `heading_4` for `####`.
+- **New database property types** — `button`, `unique_id`, `verification`. `verification` is writable on pages.
+- **`position` param** on `append_blocks` (preferred over legacy `after`; XOR-refined so callers can't pass both).
+
+## [2.0.0] — 2026-05-26
+
+### Breaking changes
+
+- **Replaced five domain tools (`notion_pages`, `notion_blocks`, `notion_database`, `notion_comments`, `notion_users`) with two:** `notion_execute` and `notion_describe`. Any client that hard-codes the old tool names must rename — see [MIGRATION.md](./MIGRATION.md).
+- The `action` / `params` envelope is gone. Call sites now pass `{ operation, payload }` directly.
+- Renamed operations to verb-first names: `update_page_properties` → `set_page_title` (title rename) / `set_page_property` (single field) / `set_page_properties` (multi field), `get_comments` → `list_comments`, `retrieve_block` → `get_block`, `retrieve_block_children` → `get_block_children`, `append_block_children` → `append_blocks`, etc. Full mapping in MIGRATION.md.
+
+### Added
+
+- **`notion_execute`** — single tool that dispatches every operation by name.
+- **`notion_describe`** — returns JSON Schema + a working example for any operation.
+- **`get_block`** — retrieve a single block by ID (closes the v1 `retrieve_block` gap). Batchable.
+- **`set_page_properties`** — set multiple page properties in a single API call (the multi-field equivalent of v1's `update_page_properties`). Batchable.
+- **`notion://operations`** resource — a markdown cheat sheet of every supported operation.
+- **Self-healing errors** — validation failures return `{ code, message, path, issues, schema, example, fix }`, so an LLM can correct a malformed payload in one round-trip.
+- **Universal batch envelope** — every batchable op accepts `{ items: [...], atomic?: boolean, idempotency_key?: string, concurrency?: 1..10 }`. Per-item validation, per-item results, summary counts.
+- **Atomic batches with best-effort rollback** — `atomic: true` aborts on the first failure and (where the op defines a `rollback`) archives entities created earlier in the batch.
+- **Idempotency keys** — same `(operation, idempotency_key)` returns the cached batch result for 5 minutes (max 512 entries).
+- **Markdown shortcut** — `create_page`, `append_blocks`, and `update_block` accept a `markdown` string. The remark / remark-gfm pipeline converts paragraphs, headings 1–3, bulleted / numbered lists, to-do items (including nested children), blockquotes, fenced code with language normalization, thematic breaks, images, and inline annotations (bold, italic, strikethrough, inline code, links).
+- **Slim response shapers** — every read returns a compact projection by default; pass `verbose: true` to get the raw Notion SDK response.
+- **JSON Schema `$defs` deduplication** — shared sub-schemas (rich text, parent, icon, file) are hoisted to `$defs` instead of being inlined, shrinking error envelopes significantly.
+- **Improved error envelopes** — `code` + `message` + `fix` for restricted_resource, unauthorized, validation_error, conflict_error, etc.
+- **Vitest smoke harness** (`npm test`) — covers the markdown parser, slim shapers, schema emitter (`$defs` hoisting), and dispatcher (validation paths, batch partial success, atomic rollback, idempotency dedupe).
+
+### Changed
+
+- Bumped to `zod@^4.4.3` (the 2.0.0 line targets Zod 4 only — Zod 3 is no longer supported).
+- Default batch concurrency is 3 (matches Notion's rate-limit budget); max is 10.
+- Notion errors now carry the path of the offending payload field where the SDK supplies one.
+
+### Removed
+
+- The 21 individual tool files under `src/tools/*.ts` have been deleted. The operation logic now lives in `src/operations/`, registered into a central dispatcher.
+- The `handleNotionError` `CallToolResult` shim is gone — the dispatcher uses `toErrorEnvelope` directly.
+
+## [1.4.0] — earlier
+
+- Migrated to `zod@^4.4`. Restricted `z.url()` to http/https schemes.
+
+## [1.3.0] — earlier
+
+- Hardened Docker image, GHCR publish workflow, Docker Hub catalog submission.
+
+## [1.2.x] — earlier
+
+- README rewrite for PAT-first onboarding; final-review fixes on the OAuth auth gateway.

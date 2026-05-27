@@ -13,6 +13,7 @@ export const server = new McpServer(
   {
     capabilities: {
       tools: {},
+      prompts: {},
     },
     instructions: `
       MCP server for Notion.
