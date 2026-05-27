@@ -28,21 +28,35 @@ const SourceSchema = z.discriminatedUnion("type", [
 
 type Source = z.infer<typeof SourceSchema>;
 
-async function resolveBytes(source: Source): Promise<Buffer> {
-  if (source.type === "base64") return Buffer.from(source.data, "base64");
+// Returns Uint8Array<ArrayBuffer> — the DOM Blob constructor's BlobPart type
+// rejects Uint8Array<ArrayBufferLike> under newer @types/node (it widens to
+// include SharedArrayBuffer). Allocating fresh guarantees the concrete type.
+async function resolveBytes(source: Source): Promise<Uint8Array<ArrayBuffer>> {
+  if (source.type === "base64") {
+    const buf = Buffer.from(source.data, "base64");
+    const out = new Uint8Array(buf.byteLength);
+    out.set(buf);
+    return out;
+  }
   const res = await fetch(source.url);
   if (!res.ok) {
     throw new Error(
       `Failed to fetch ${source.url}: ${res.status} ${res.statusText}`
     );
   }
-  return Buffer.from(await res.arrayBuffer());
+  return new Uint8Array(await res.arrayBuffer());
 }
 
-function splitIntoParts(buf: Buffer, partSize = MAX_PART_BYTES): Buffer[] {
-  const parts: Buffer[] = [];
+function splitIntoParts(
+  buf: Uint8Array<ArrayBuffer>,
+  partSize = MAX_PART_BYTES
+): Uint8Array<ArrayBuffer>[] {
+  const parts: Uint8Array<ArrayBuffer>[] = [];
   for (let offset = 0; offset < buf.length; offset += partSize) {
-    parts.push(buf.subarray(offset, Math.min(offset + partSize, buf.length)));
+    const end = Math.min(offset + partSize, buf.length);
+    const part = new Uint8Array(end - offset);
+    part.set(buf.subarray(offset, end));
+    parts.push(part);
   }
   return parts;
 }
