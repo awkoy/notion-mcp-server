@@ -24,7 +24,14 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: npm ci
+        # 'npm install' (not 'npm ci') because npm 11+ strict mode rejects
+        # the macOS-generated lockfile for missing Linux-only optional native
+        # deps (e.g. @emnapi/core via @rolldown/binding-wasm32-wasi). Running
+        # 'npm install' on each platform prunes those entries; maintaining a
+        # cross-platform lockfile would require all maintainers to dev inside
+        # Linux containers. Lockfile is still respected — just non-strictly.
+        run: npm install --no-audit --no-fund
+
 
       - name: Run tests
         run: npm test
