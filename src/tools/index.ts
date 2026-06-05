@@ -1,7 +1,14 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { server } from "../server/index.js";
-import { initOperations, getOperation, listOperations, operationNames } from "../operations/index.js";
+import { initOperations, getOperation } from "../operations/index.js";
+import {
+  isOperationAllowed,
+  operationNotAllowedError,
+  enabledOperationNames,
+  enabledOperations,
+  accessSummary,
+} from "../operations/access.js";
 import { dispatch } from "../dispatch/index.js";
 import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
@@ -94,9 +101,12 @@ export async function registerAllTools(): Promise<void> {
           error: {
             code: "unknown_operation",
             message: `Unknown operation: "${operation}".`,
-            fix: `Available: ${operationNames().join(", ")}`,
+            fix: `Available: ${enabledOperationNames().join(", ")}`,
           },
         });
+      }
+      if (!isOperationAllowed(operation)) {
+        return errorContent({ ok: false, error: operationNotAllowedError(operation) });
       }
       return jsonContent({
         name: def.name,
@@ -130,6 +140,11 @@ export async function registerAllTools(): Promise<void> {
   );
 
   registerAllPrompts();
+
+  const s = accessSummary();
+  console.error(
+    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block})`
+  );
 }
 
 function renderOperationsIndex(): string {
@@ -141,7 +156,7 @@ function renderOperationsIndex(): string {
     "| Operation | Batchable | Description |",
     "| --- | --- | --- |",
   ];
-  for (const def of listOperations()) {
+  for (const def of enabledOperations()) {
     lines.push(`| \`${def.name}\` | ${def.batchable ? "yes" : "no"} | ${def.description} |`);
   }
   lines.push("", "## `query_database` WHERE DSL", "");
