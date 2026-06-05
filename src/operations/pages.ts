@@ -85,6 +85,8 @@ const CreatePageParams = z
 
 register({
   name: "create_page",
+  access: "write",
+  domain: "pages",
   description: "Create a new Notion page. Body can be markdown (recommended) or structured blocks.",
   batchable: true,
   schema: CreatePageParams,
@@ -154,6 +156,8 @@ const SetPageTitleParams = z.object({
 
 register({
   name: "set_page_title",
+  access: "write",
+  domain: "pages",
   description: "Rename a page. Updates the page's title property.",
   batchable: true,
   schema: SetPageTitleParams,
@@ -211,6 +215,8 @@ const SetPagePropertyParams = z.preprocess(
 
 register({
   name: "set_page_property",
+  access: "write",
+  domain: "pages",
   description: "Set one property on one page. For batch updates use items[].",
   batchable: true,
   schema: SetPagePropertyParams,
@@ -269,6 +275,8 @@ const SetPagePropertiesParams = z.preprocess(
 
 register({
   name: "set_page_properties",
+  access: "write",
+  domain: "pages",
   description: "Set multiple properties on one page in a single API call. Use set_page_property for one-off updates.",
   batchable: true,
   schema: SetPagePropertiesParams,
@@ -317,6 +325,9 @@ const archivePageHandler = tryHandler(async ({ page_id, verbose }: z.infer<typeo
 
 register({
   name: "archive_page",
+  access: "write",
+  domain: "pages",
+  destructive: true,
   description: "Move a page to trash. Reversible via restore_page. Alias: trash_page.",
   batchable: true,
   schema: PageIdParams,
@@ -327,6 +338,9 @@ register({
 
 register({
   name: "trash_page",
+  access: "write",
+  domain: "pages",
+  destructive: true,
   description: "Alias of archive_page (2025-09-03 surface naming). Moves a page to trash.",
   batchable: true,
   schema: PageIdParams,
@@ -337,6 +351,8 @@ register({
 
 register({
   name: "restore_page",
+  access: "write",
+  domain: "pages",
   description: "Restore a page previously moved to trash.",
   batchable: true,
   schema: PageIdParams,
@@ -374,6 +390,8 @@ const SearchPagesParams = z.object({
 
 register({
   name: "search_pages",
+  access: "read",
+  domain: "pages",
   description: "Search pages and databases by title. Title-only; does NOT search page body content. Pass paginate:true to auto-walk all pages.",
   batchable: false,
   schema: SearchPagesParams,
@@ -434,6 +452,8 @@ const GetPageParams = z.object({
 
 register({
   name: "get_page",
+  access: "read",
+  domain: "pages",
   description:
     "Retrieve a page's metadata and (optionally) properties. No body blocks — use get_block_children for those. Pass `include_properties: true` to also return a flattened properties map.",
   batchable: true,
@@ -461,6 +481,8 @@ const MovePageParams = z.object({
 
 register({
   name: "move_page",
+  access: "write",
+  domain: "pages",
   description: "Move a page to a new parent without recreating it. Preserves the page's blocks, properties, and comments. The destination uses `parent` — same field name as create_page.",
   batchable: true,
   schema: MovePageParams,
@@ -506,6 +528,8 @@ const GetPageMarkdownParams = z.object({
 
 register({
   name: "get_page_markdown",
+  access: "read",
+  domain: "pages",
   description: "Return a page's body as Notion-rendered markdown. Server-side conversion; round-trips with update_page_markdown.",
   batchable: true,
   schema: GetPageMarkdownParams,
@@ -538,6 +562,8 @@ const UpdatePageMarkdownParams = z.object({
 
 register({
   name: "update_page_markdown",
+  access: "write",
+  domain: "pages",
   description: "Replace (or insert into) a page's body using Notion's server-side markdown renderer. Skip the local remark pipeline.",
   batchable: true,
   schema: UpdatePageMarkdownParams,

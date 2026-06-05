@@ -36,6 +36,8 @@ const ListCommentsParams = z.object({
 
 register({
   name: "list_comments",
+  access: "read",
+  domain: "comments",
   description: "List comments on a page or block. Pass paginate:true to auto-walk all pages.",
   batchable: false,
   schema: ListCommentsParams,
@@ -91,6 +93,8 @@ const AddPageCommentParams = z
 
 register({
   name: "add_page_comment",
+  access: "write",
+  domain: "comments",
   description: "Add a top-level comment to a page. Body can be plain text or markdown.",
   batchable: true,
   schema: AddPageCommentParams,
@@ -128,6 +132,8 @@ const AddDiscussionCommentParams = z
 
 register({
   name: "add_discussion_comment",
+  access: "write",
+  domain: "comments",
   description: "Reply to an existing discussion thread. Body can be plain text or markdown.",
   batchable: true,
   schema: AddDiscussionCommentParams,
@@ -153,6 +159,8 @@ const GetCommentParams = z.object({
 
 register({
   name: "get_comment",
+  access: "read",
+  domain: "comments",
   description: "Retrieve a single comment by ID.",
   batchable: true,
   schema: GetCommentParams,
@@ -181,6 +189,8 @@ const UpdateCommentParams = z
 
 register({
   name: "update_comment",
+  access: "write",
+  domain: "comments",
   description: "Replace a comment's body. Pass markdown or rich_text (not both).",
   batchable: true,
   schema: UpdateCommentParams,
@@ -205,6 +215,9 @@ const DeleteCommentParams = z.object({
 
 register({
   name: "delete_comment",
+  access: "write",
+  domain: "comments",
+  destructive: true,
   description: "Delete a comment.",
   batchable: true,
   schema: DeleteCommentParams,

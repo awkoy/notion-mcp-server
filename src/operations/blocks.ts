@@ -37,6 +37,8 @@ const AppendBlocksParams = z
 
 register({
   name: "append_blocks",
+  access: "write",
+  domain: "blocks",
   description: "Append children to a page or block. Use markdown for prose content.",
   batchable: true,
   schema: AppendBlocksParams,
@@ -112,6 +114,8 @@ const GetBlockParams = z.object({
 
 register({
   name: "get_block",
+  access: "read",
+  domain: "blocks",
   description: "Retrieve a single block by ID (metadata + type-specific body). For its children, use get_block_children.",
   batchable: true,
   schema: GetBlockParams,
@@ -139,6 +143,8 @@ const GetBlockChildrenParams = z.object({
 
 register({
   name: "get_block_children",
+  access: "read",
+  domain: "blocks",
   description: "List child blocks under a page or block, paginated.",
   batchable: false,
   schema: GetBlockChildrenParams,
@@ -218,6 +224,8 @@ const UpdateBlockParams = z
 
 register({
   name: "update_block",
+  access: "write",
+  domain: "blocks",
   description:
     "Update an existing block's content. Pass `markdown` for prose blocks (parsed locally to a single block), or `data` for structured updates such as toggling a to_do's `checked` field or setting a code block's language.",
   batchable: true,
@@ -266,6 +274,9 @@ const DeleteBlockParams = z.object({ block_id: z.string(), verbose: VERBOSE });
 
 register({
   name: "delete_block",
+  access: "write",
+  domain: "blocks",
+  destructive: true,
   description: "Archive (soft-delete) a block.",
   batchable: true,
   schema: DeleteBlockParams,
@@ -308,6 +319,9 @@ const BatchMixedBlocksParams = z.object({
 
 register({
   name: "batch_mixed_blocks",
+  access: "write",
+  domain: "blocks",
+  destructive: true,
   description:
     "Run a sequence of mixed block operations (append/update/delete) in order. Uses a non-standard envelope: { operations: [{ op: \"append\"|\"update\"|\"delete\", ... }] } — NOT the universal { items: [...] } batch envelope. For pure single-op batches, prefer the items[] form on append_blocks / update_block / delete_block.",
   batchable: false,

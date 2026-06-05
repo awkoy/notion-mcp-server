@@ -142,6 +142,8 @@ const UploadFileParams = z.object({
 
 register({
   name: "upload_file",
+  access: "write",
+  domain: "files",
   description:
     "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.",
   batchable: false,
@@ -235,6 +237,8 @@ const ListFileUploadsParams = z.object({
 
 register({
   name: "list_file_uploads",
+  access: "read",
+  domain: "files",
   description: "List file uploads, optionally filtered by status.",
   batchable: false,
   schema: ListFileUploadsParams,
@@ -264,6 +268,8 @@ const GetFileUploadParams = z.object({
 
 register({
   name: "get_file_upload",
+  access: "read",
+  domain: "files",
   description: "Retrieve a single file upload by ID.",
   batchable: true,
   schema: GetFileUploadParams,
