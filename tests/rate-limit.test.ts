@@ -91,6 +91,8 @@ describe("dispatch — rate-limiter integration", () => {
       name: OP_NAME,
       description: "rate-limit synthetic op",
       batchable: true,
+      access: "write",
+      domain: "pages",
       schema: z.object({ n: z.number() }),
       example: { n: 0 },
       handler: async ({ n }) => {

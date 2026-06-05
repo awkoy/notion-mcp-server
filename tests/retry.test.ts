@@ -230,6 +230,8 @@ describe("dispatch — handler retry on retryable envelope", () => {
       name: OP_NAME,
       description: "retry synthetic op",
       batchable: false,
+      access: "read",
+      domain: "pages",
       schema: z.object({ ping: z.boolean() }),
       example: { ping: true },
       handler: async ({ ping }) => {
