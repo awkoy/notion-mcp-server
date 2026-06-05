@@ -39,6 +39,17 @@ export type OperationName =
   | "list_file_uploads"
   | "get_file_upload";
 
+export type OperationAccess = "read" | "write";
+
+export type OperationDomain =
+  | "pages"
+  | "blocks"
+  | "databases"
+  | "data_sources"
+  | "comments"
+  | "users"
+  | "files";
+
 export type OperationResult<T = unknown> =
   | { ok: true; data: T }
   | { ok: false; error: OperationError };
@@ -75,6 +86,12 @@ export type OperationDef<TParams = unknown, TResult = unknown> = {
   schema: ZodType<TParams>;
   handler: (params: TParams) => Promise<OperationResult<TResult>>;
   batchable: boolean;
+  /** Whether the operation mutates Notion state. `read` ops are side-effect free. */
+  access: OperationAccess;
+  /** The Notion resource family this operation belongs to. */
+  domain: OperationDomain;
+  /** Removes or hides content (trash/archive/delete). Defaults to false. */
+  destructive?: boolean;
   example: unknown;
   exampleBatch?: unknown;
   rollback?: RollbackFn;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -29,6 +29,7 @@ vi.mock("../src/services/notion.js", () => ({
 // stubbed `getClient`.
 import { server } from "../src/server/index.js";
 import { registerAllTools } from "../src/tools/index.js";
+import { configureOperationAccess } from "../src/operations/access.js";
 
 let client: Client;
 
@@ -226,5 +227,56 @@ describe("MCP wrapper: operations resource", () => {
     expect(block.text).toContain("Notion MCP — Operations");
     expect(block.text).toContain("archive_page");
     expect(block.text).toContain("notion_execute");
+  });
+});
+
+describe("MCP wrapper: operation access gating", () => {
+  // Restrict to a blocklist for these tests, then restore the all-enabled
+  // default so the rest of the suite is unaffected.
+  afterEach(() => {
+    delete process.env.NOTION_BLOCKED_OPERATIONS;
+    configureOperationAccess();
+  });
+
+  it("notion_describe rejects a disabled op with operation_not_allowed", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "trash_page";
+    configureOperationAccess();
+
+    const res = await client.callTool({
+      name: "notion_describe",
+      arguments: { operation: "trash_page" },
+    });
+    expect(res.isError).toBe(true);
+    const envelope = readJson(res as Parameters<typeof readJson>[0]) as {
+      error: { code: string };
+    };
+    expect(envelope.error.code).toBe("operation_not_allowed");
+  });
+
+  it("notion://operations omits disabled ops from the rendered menu", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "trash_page";
+    configureOperationAccess();
+
+    const res = await client.readResource({ uri: "notion://operations" });
+    const block = res.contents[0];
+    if (!("text" in block) || typeof block.text !== "string") {
+      throw new Error("Expected text resource content");
+    }
+    expect(block.text).not.toContain("`trash_page`");
+    // A still-enabled op remains listed.
+    expect(block.text).toContain("`get_page`");
+  });
+
+  it("notion://operations drops the query_database DSL help when that op is blocked", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "query_database";
+    configureOperationAccess();
+
+    const res = await client.readResource({ uri: "notion://operations" });
+    const block = res.contents[0];
+    if (!("text" in block) || typeof block.text !== "string") {
+      throw new Error("Expected text resource content");
+    }
+    expect(block.text).not.toContain("WHERE DSL");
+    expect(block.text).not.toContain("`query_database`");
   });
 });

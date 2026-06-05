@@ -56,6 +56,8 @@ function resolveParent(parent: z.infer<typeof PARENT_SCHEMA> | undefined) {
 
 register({
   name: "create_database",
+  access: "write",
+  domain: "databases",
   description: "Create a new database. Properties is a map of name → property-type definition.",
   batchable: true,
   schema: CreateDatabaseParams,
@@ -160,6 +162,8 @@ const QueryDatabaseParams = z
 
 register({
   name: "query_database",
+  access: "read",
+  domain: "databases",
   description: "Query a database with optional filter and sorts. Results are page objects.",
   batchable: false,
   schema: QueryDatabaseParams,
@@ -347,6 +351,8 @@ const UpdateDatabaseParams = z.object({
 
 register({
   name: "update_database",
+  access: "write",
+  domain: "databases",
   description: "Update database-level metadata (title, description, icon, cover, is_inline, is_locked, in_trash). For schema/property changes, use update_data_source.",
   batchable: true,
   schema: UpdateDatabaseParams,

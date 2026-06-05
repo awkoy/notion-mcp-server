@@ -30,6 +30,8 @@ const ListUsersParams = z.object({
 
 register({
   name: "list_users",
+  access: "read",
+  domain: "users",
   description: "List all users in the workspace. Requires the integration to have 'Read user information' capability enabled. Pass paginate:true to auto-walk all pages.",
   batchable: false,
   schema: ListUsersParams,
@@ -83,6 +85,8 @@ const GetUserParams = z.object({ user_id: z.string(), verbose: VERBOSE });
 
 register({
   name: "get_user",
+  access: "read",
+  domain: "users",
   description: "Get one user by ID. Requires 'Read user information' capability.",
   batchable: true,
   schema: GetUserParams,
@@ -108,6 +112,8 @@ const getBotUserHandler = tryHandler(async ({ verbose }: z.infer<typeof GetBotUs
 
 register({
   name: "get_bot_user",
+  access: "read",
+  domain: "users",
   description: "Get the integration's bot user. Always works without extra capabilities. Alias: get_self.",
   batchable: false,
   schema: GetBotUserParams,
@@ -117,6 +123,8 @@ register({
 
 register({
   name: "get_self",
+  access: "read",
+  domain: "users",
   description: "Alias of get_bot_user. Returns the integration's bot user (i.e. the identity behind the current token).",
   batchable: false,
   schema: GetBotUserParams,

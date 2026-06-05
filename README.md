@@ -209,6 +209,8 @@ If you ran a v1.x setup, **nothing in your environment needs to change**. Both e
 | `NOTION_TOKEN` | ✅ Required | Accepts **PATs** (`ntn_…`, recommended) and **Internal Integration secrets** (`secret_…` or `ntn_…`, legacy). Identical handling. |
 | `NOTION_PAGE_ID` | ✅ Optional | Still works as the default parent page for `create_page` / `create_database` when no `parent` is passed. v2 added a clean `missing_parent` validation error instead of v1's crash when neither is provided. |
 | `NOTION_RATE_LIMIT` | ✅ New, optional | Requests per second for the shared limiter. Defaults to `3` (Notion's documented per-integration limit). |
+| `NOTION_ALLOWED_OPERATIONS` | ✅ New, optional | Comma-separated allowlist of operations or group presets (`read`, `write`, `destructive`, plus per-domain groups `pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files`). Unset ⇒ all operations enabled. See [Restricting operations](#restricting-operations). |
+| `NOTION_BLOCKED_OPERATIONS` | ✅ New, optional | Comma-separated blocklist (same token vocabulary). Applied after the allowlist, so a blocked operation is always disabled. |
 | `NOTION_DAILY_LOG_PAGE_ID` | ✅ Optional | Used only by the daily-log MCP prompt. Ignore if you don't call that prompt. |
 
 The only v2 break is the **tool surface itself** — v1's `notion_pages`, `notion_blocks`, `notion_database`, `notion_comments`, `notion_users` are replaced by `notion_execute` and `notion_describe`. Modern MCP clients (Claude Code, Cursor, Claude Desktop) rediscover tools at startup, so they pick up the new surface automatically. If your client hard-codes the v1 tool names, see [MIGRATION.md](./MIGRATION.md) for the rename map.
@@ -218,6 +220,93 @@ A typical v1.x invocation continues to work unchanged:
 ```bash
 NOTION_TOKEN=secret_xxx NOTION_PAGE_ID=abc123... node build/index.js
 ```
+
+### Restricting operations
+
+By default every operation is available. To limit what an agent can do, set
+`NOTION_ALLOWED_OPERATIONS` (an allowlist) and/or `NOTION_BLOCKED_OPERATIONS` (a
+blocklist). Each is a comma-separated list of **tokens**, where a token is either a
+**group preset** or an exact **operation name**.
+
+**Group presets** (one token expands to many operations):
+
+| Token | Expands to |
+| --- | --- |
+| `read` | every non-mutating operation |
+| `write` | every mutating operation |
+| `destructive` | operations whose purpose is removal (marked † below) |
+| `pages` `blocks` `databases` `data_sources` `comments` `users` `files` | every operation in that resource family (read **and** write) |
+
+**All operations** — use any name directly for a precise allow/blocklist. († = also in the `destructive` group.)
+
+| Domain | Read | Write |
+| --- | --- | --- |
+| `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
+| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
+| `databases` | `query_database` | `create_database` `update_database` |
+| `data_sources` | `list_data_sources` `get_data_source` | `update_data_source` |
+| `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
+| `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
+| `files` | `list_file_uploads` `get_file_upload` | `upload_file` |
+
+Read-only deployment (the most common case):
+
+```json
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "notion-mcp-server"],
+      "env": {
+        "NOTION_TOKEN": "ntn_paste_your_token_here",
+        "NOTION_ALLOWED_OPERATIONS": "read"
+      }
+    }
+  }
+}
+```
+
+Allow everything except destructive operations:
+
+```json
+{ "env": { "NOTION_BLOCKED_OPERATIONS": "destructive" } }
+```
+
+Mix presets and individual ops (read everything, plus append blocks and comments):
+
+```json
+{ "env": { "NOTION_ALLOWED_OPERATIONS": "read,append_blocks,add_page_comment" } }
+```
+
+**Rules:** tokens are case-insensitive; unknown tokens are ignored with a warning; the
+blocklist wins on conflict; and if the allowlist is set but resolves to no enabled
+operations (all tokens invalid, or every allowed op also blocked), **all** operations are
+disabled (fail-closed). Disabled operations are hidden from the `notion://operations`
+menu and from `notion_describe`, and `notion_execute` rejects them with
+`operation_not_allowed`.
+
+**Verifying your configuration.** On startup the server prints one line to **stderr**
+(visible in your MCP client's server logs) summarizing what resolved, e.g.:
+
+```text
+Operation access: 16/37 enabled (allow=read; block=(none))
+```
+
+Unknown tokens and a fail-closed allowlist are logged there too. If the count or the
+`allow`/`block` values aren't what you expect, check that line first.
+
+**Limitations** (control is per-operation, not per-parameter):
+
+- The `destructive` group covers operations whose *purpose* is removal (`trash_page`,
+  `archive_page`, `delete_block`, `delete_comment`, `batch_mixed_blocks`). A few *write*
+  operations can also remove content via a parameter — e.g. `update_database` /
+  `update_data_source` accept `in_trash`, and `update_page_markdown` can replace a page
+  body. Blocking `destructive` does **not** disable those write ops. **For a guaranteed
+  no-mutation deployment, use the allowlist** (`NOTION_ALLOWED_OPERATIONS=read`), which
+  excludes every write operation.
+- MCP *prompts* (e.g. the daily-log prompt) may still reference operations you have
+  disabled. The prompt text is unaffected by the allowlist; the underlying operation is
+  still rejected at execution time.
 
 ### Claude Code / Cursor / Claude Desktop
 
