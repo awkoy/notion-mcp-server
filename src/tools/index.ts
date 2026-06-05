@@ -159,6 +159,11 @@ function renderOperationsIndex(): string {
   for (const def of enabledOperations()) {
     lines.push(`| \`${def.name}\` | ${def.batchable ? "yes" : "no"} | ${def.description} |`);
   }
+  // Only document the query_database filter DSL when that op is actually enabled —
+  // otherwise the menu advertises a disabled operation.
+  if (!isOperationAllowed("query_database")) {
+    return lines.join("\n");
+  }
   lines.push("", "## `query_database` WHERE DSL", "");
   lines.push(
     "`query_database.where` is a compact DSL that compiles to the Notion filter object. AND-by-default at the top level; nest `and`/`or`/`not` (case-insensitive — `AND`/`OR`/`NOT` also work) for boolean groups, prefix scalars with `__type` to force the property type, or fall back to raw `filter` for anything the DSL can't express.",

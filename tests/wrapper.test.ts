@@ -266,4 +266,17 @@ describe("MCP wrapper: operation access gating", () => {
     // A still-enabled op remains listed.
     expect(block.text).toContain("`get_page`");
   });
+
+  it("notion://operations drops the query_database DSL help when that op is blocked", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "query_database";
+    configureOperationAccess();
+
+    const res = await client.readResource({ uri: "notion://operations" });
+    const block = res.contents[0];
+    if (!("text" in block) || typeof block.text !== "string") {
+      throw new Error("Expected text resource content");
+    }
+    expect(block.text).not.toContain("WHERE DSL");
+    expect(block.text).not.toContain("`query_database`");
+  });
 });

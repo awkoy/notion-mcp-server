@@ -67,6 +67,22 @@ describe("resolveEnabled", () => {
     expect(names(r.enabled)).toEqual(["add_page_comment", "list_comments"].sort());
   });
 
+  it("expands every domain as a group token (pages, blocks)", () => {
+    expect(names(resolveEnabled(OPS, "pages", undefined).enabled)).toEqual(
+      ["get_page", "search_pages", "create_page", "trash_page"].sort()
+    );
+    expect(resolveEnabled(OPS, "pages", undefined).warnings).toHaveLength(0);
+    expect([...resolveEnabled(OPS, "blocks", undefined).enabled]).toEqual(["delete_block"]);
+  });
+
+  it("blocks a domain group (block=pages removes all page ops)", () => {
+    const r = resolveEnabled(OPS, undefined, "pages");
+    expect(r.enabled.has("get_page")).toBe(false);
+    expect(r.enabled.has("create_page")).toBe(false);
+    expect(r.enabled.has("list_users")).toBe(true);
+    expect(r.warnings).toHaveLength(0);
+  });
+
   it("is case- and whitespace-insensitive", () => {
     const r = resolveEnabled(OPS, " READ , Create_Page ", undefined);
     expect(r.enabled.has("get_page")).toBe(true);

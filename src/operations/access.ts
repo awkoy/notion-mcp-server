@@ -26,6 +26,17 @@ function parseList(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/** Every domain is a valid group token. Typed so a new OperationDomain is a compile error here until added. */
+const DOMAIN_GROUPS: readonly OperationDomain[] = [
+  "pages",
+  "blocks",
+  "databases",
+  "data_sources",
+  "comments",
+  "users",
+  "files",
+];
+
 /** Expand a single token to op names, or null if it matches no group and no op. */
 function expandToken(token: string, ops: OpMeta[]): string[] | null {
   switch (token) {
@@ -35,11 +46,10 @@ function expandToken(token: string, ops: OpMeta[]): string[] | null {
       return ops.filter((o) => o.access === "write").map((o) => o.name);
     case "destructive":
       return ops.filter((o) => o.destructive === true).map((o) => o.name);
-    case "comments":
-    case "users":
-    case "files":
-      return ops.filter((o) => o.domain === token).map((o) => o.name);
     default:
+      if ((DOMAIN_GROUPS as readonly string[]).includes(token)) {
+        return ops.filter((o) => o.domain === token).map((o) => o.name);
+      }
       return ops.some((o) => o.name === token) ? [token] : null;
   }
 }
@@ -107,7 +117,7 @@ function compute(): ResolveResult {
   }
   if (result.failedClosed) {
     console.error(
-      `[operation-access] ${ALLOWED_ENV_VAR} resolved to zero valid operations — ALL operations are disabled. Check for typos.`
+      `[operation-access] ${ALLOWED_ENV_VAR} resolved to zero enabled operations — ALL operations are disabled. Check for unknown tokens, or an allowlist fully cancelled by ${BLOCKED_ENV_VAR}.`
     );
   }
   return result;

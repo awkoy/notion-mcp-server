@@ -209,7 +209,7 @@ If you ran a v1.x setup, **nothing in your environment needs to change**. Both e
 | `NOTION_TOKEN` | ✅ Required | Accepts **PATs** (`ntn_…`, recommended) and **Internal Integration secrets** (`secret_…` or `ntn_…`, legacy). Identical handling. |
 | `NOTION_PAGE_ID` | ✅ Optional | Still works as the default parent page for `create_page` / `create_database` when no `parent` is passed. v2 added a clean `missing_parent` validation error instead of v1's crash when neither is provided. |
 | `NOTION_RATE_LIMIT` | ✅ New, optional | Requests per second for the shared limiter. Defaults to `3` (Notion's documented per-integration limit). |
-| `NOTION_ALLOWED_OPERATIONS` | ✅ New, optional | Comma-separated allowlist of operations or group presets (`read`, `write`, `destructive`, `comments`, `users`, `files`). Unset ⇒ all operations enabled. See [Restricting operations](#restricting-operations). |
+| `NOTION_ALLOWED_OPERATIONS` | ✅ New, optional | Comma-separated allowlist of operations or group presets (`read`, `write`, `destructive`, plus per-domain groups `pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files`). Unset ⇒ all operations enabled. See [Restricting operations](#restricting-operations). |
 | `NOTION_BLOCKED_OPERATIONS` | ✅ New, optional | Comma-separated blocklist (same token vocabulary). Applied after the allowlist, so a blocked operation is always disabled. |
 | `NOTION_DAILY_LOG_PAGE_ID` | ✅ Optional | Used only by the daily-log MCP prompt. Ignore if you don't call that prompt. |
 
@@ -228,7 +228,9 @@ By default every operation is available. To limit what an agent can do, set
 blocklist). Each is a comma-separated list of **tokens**, where a token is either a
 **group preset** or an exact **operation name**.
 
-**Group presets:** `read`, `write`, `destructive`, `comments`, `users`, `files`.
+**Group presets:**
+- By access: `read` (all non-mutating ops), `write` (all mutating ops), `destructive` (ops whose purpose is removal — trash/archive/delete).
+- By domain: `pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files` (every op in that resource family, read and write).
 
 Read-only deployment (the most common case):
 

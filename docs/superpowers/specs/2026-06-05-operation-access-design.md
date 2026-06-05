@@ -50,9 +50,7 @@ Derived from operation metadata (see below), not hand-maintained lists:
 | `read` | every non-mutating op (`access === "read"`) |
 | `write` | every mutating op (`access === "write"`) |
 | `destructive` | ops that remove/hide content (`destructive === true`) |
-| `comments` | every op with `domain === "comments"` |
-| `users` | every op with `domain === "users"` |
-| `files` | every op with `domain === "files"` |
+| `pages` / `blocks` / `databases` / `data_sources` / `comments` / `users` / `files` | every op with the matching `domain` (read + write) |
 
 **`read` members:** `search_pages`, `get_page`, `get_page_markdown`, `get_block`,
 `get_block_children`, `query_database`, `list_data_sources`, `get_data_source`,
