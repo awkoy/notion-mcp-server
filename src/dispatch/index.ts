@@ -42,7 +42,7 @@ function isBatchPayload(payload: RawPayload): payload is BatchPayload {
 function unknownOperationError(name: string): OperationError {
   return {
     code: "unknown_operation",
-    message: `Unknown operation: "${name}". Use notion_describe with a valid operation name, or check the notion://operations resource for the full list.`,
+    message: `Unknown operation: "${name}". Use notion_describe with a valid operation name, or check the notion://operations resource for the available list.`,
     fix: `Available operations: ${enabledOperationNames().join(", ")}`,
   };
 }

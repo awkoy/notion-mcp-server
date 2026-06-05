@@ -166,6 +166,22 @@ Plus update `tests/registry.test.ts` if metadata assertions are useful.
 - Add a short "Restricting operations" section leading with the issue's read-only use
   case (now `NOTION_ALLOWED_OPERATIONS=read`), the group list, and the precedence rule.
 
+## Known limitations (per-operation, not per-parameter)
+
+Access control gates whole operations, not individual parameters. Consequences,
+surfaced during code review and accepted for this version:
+
+- A few `write` operations can remove content via a parameter rather than being
+  dedicated removal ops: `update_database` / `update_data_source` accept `in_trash` /
+  `archived`, and `update_page_markdown` (replace mode) can drop a page body. They are
+  **not** tagged `destructive`, because doing so would over-block benign metadata/schema
+  updates. Blocking `destructive` therefore does not disable them. The airtight lockdown
+  is the `read` allowlist, which excludes all writes — and that is the issue's primary
+  use case. Documented in the README.
+- MCP prompts may name disabled operations in their rendered text. This is not an
+  execution bypass (dispatch still rejects the op), only a discoverability wrinkle.
+  Gating prompt registration is deferred (it would require per-prompt op metadata).
+
 ## Backward compatibility
 
 Both env vars unset ⇒ identical behavior to today. The new `OperationDef` fields are

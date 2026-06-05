@@ -84,6 +84,12 @@ describe("resolveEnabled", () => {
     expect(r.enabled.size).toBe(0);
     expect(r.failedClosed).toBe(true);
   });
+
+  it("fails closed when the blocklist cancels out the entire allowlist", () => {
+    const r = resolveEnabled(OPS, "get_page", "get_page");
+    expect(r.enabled.size).toBe(0);
+    expect(r.failedClosed).toBe(true);
+  });
 });
 
 describe("dispatch access gating", () => {

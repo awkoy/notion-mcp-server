@@ -1,6 +1,7 @@
 import { listOperations } from "./registry.js";
 import type {
   OperationAccess,
+  OperationDef,
   OperationDomain,
   OperationError,
   OperationName,
@@ -16,15 +17,6 @@ export type OpMeta = {
   domain: OperationDomain;
   destructive?: boolean;
 };
-
-const GROUP_TOKENS = new Set([
-  "read",
-  "write",
-  "destructive",
-  "comments",
-  "users",
-  "files",
-]);
 
 function parseList(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -86,7 +78,10 @@ export function resolveEnabled(
   const blockSet = expand(parseList(blockEnv), BLOCKED_ENV_VAR);
 
   const enabled = new Set<string>([...allowSet].filter((n) => !blockSet.has(n)));
-  const failedClosed = allowSpecified && allowSet.size === 0;
+  // An allowlist that resolves to nothing executable — every token invalid, or
+  // every allowed op also blocked — is a misconfiguration. Surface it loudly
+  // rather than silently running the server with zero operations enabled.
+  const failedClosed = allowSpecified && enabled.size === 0;
 
   return { enabled, warnings, failedClosed };
 }
@@ -119,8 +114,12 @@ function compute(): ResolveResult {
 }
 
 function get(): ResolveResult {
-  if (!cache) cache = compute();
-  return cache;
+  if (cache) return cache;
+  const result = compute();
+  // Don't memoize a result derived from an unpopulated registry (e.g. if called
+  // before initOperations() ran) — recompute once operations are registered.
+  if (listOperations().length > 0) cache = result;
+  return result;
 }
 
 export function isOperationAllowed(name: string): boolean {
@@ -135,7 +134,7 @@ export function enabledOperationNames(): OperationName[] {
     .filter((n) => enabled.has(n));
 }
 
-export function enabledOperations() {
+export function enabledOperations(): OperationDef[] {
   const { enabled } = get();
   return listOperations().filter((o) => enabled.has(o.name));
 }

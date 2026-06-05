@@ -260,10 +260,24 @@ Mix presets and individual ops (read everything, plus append blocks and comments
 ```
 
 **Rules:** tokens are case-insensitive; unknown tokens are ignored with a warning; the
-blocklist wins on conflict; and if the allowlist is set but contains no valid tokens,
-**all** operations are disabled (fail-closed). Disabled operations are hidden from the
-`notion://operations` menu and from `notion_describe`, and `notion_execute` rejects them
-with `operation_not_allowed`.
+blocklist wins on conflict; and if the allowlist is set but resolves to no enabled
+operations (all tokens invalid, or every allowed op also blocked), **all** operations are
+disabled (fail-closed). Disabled operations are hidden from the `notion://operations`
+menu and from `notion_describe`, and `notion_execute` rejects them with
+`operation_not_allowed`.
+
+**Limitations** (control is per-operation, not per-parameter):
+
+- The `destructive` group covers operations whose *purpose* is removal (`trash_page`,
+  `archive_page`, `delete_block`, `delete_comment`, `batch_mixed_blocks`). A few *write*
+  operations can also remove content via a parameter — e.g. `update_database` /
+  `update_data_source` accept `in_trash`, and `update_page_markdown` can replace a page
+  body. Blocking `destructive` does **not** disable those write ops. **For a guaranteed
+  no-mutation deployment, use the allowlist** (`NOTION_ALLOWED_OPERATIONS=read`), which
+  excludes every write operation.
+- MCP *prompts* (e.g. the daily-log prompt) may still reference operations you have
+  disabled. The prompt text is unaffected by the allowlist; the underlying operation is
+  still rejected at execution time.
 
 ### Claude Code / Cursor / Claude Desktop
 
