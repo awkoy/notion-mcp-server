@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getOperation, operationNames } from "../operations/registry.js";
+import { getOperation } from "../operations/registry.js";
 import type {
   BatchItemResult,
   BatchResult,
@@ -13,6 +13,11 @@ import { rateLimiter } from "./rate-limit.js";
 import { isRetryableErrorCode, withRetry } from "./retry.js";
 import { buildValidationError } from "../utils/learning-error.js";
 import { toErrorEnvelope } from "../utils/error.js";
+import {
+  isOperationAllowed,
+  operationNotAllowedError,
+  enabledOperationNames,
+} from "../operations/access.js";
 
 const DEFAULT_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 10;
@@ -38,7 +43,7 @@ function unknownOperationError(name: string): OperationError {
   return {
     code: "unknown_operation",
     message: `Unknown operation: "${name}". Use notion_describe with a valid operation name, or check the notion://operations resource for the full list.`,
-    fix: `Available operations: ${operationNames().join(", ")}`,
+    fix: `Available operations: ${enabledOperationNames().join(", ")}`,
   };
 }
 
@@ -49,6 +54,10 @@ export async function dispatch(
   const def = getOperation(operationName);
   if (!def) {
     return { ok: false, error: unknownOperationError(operationName) };
+  }
+
+  if (!isOperationAllowed(operationName)) {
+    return { ok: false, error: operationNotAllowedError(operationName) };
   }
 
   if (isBatchPayload(payload)) {

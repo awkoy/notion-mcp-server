@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { resolveEnabled, type OpMeta } from "../src/operations/access.js";
+import { z } from "zod";
+import {
+  resolveEnabled,
+  configureOperationAccess,
+  type OpMeta,
+} from "../src/operations/access.js";
+import { register } from "../src/operations/registry.js";
+import type { OperationDef, OperationName } from "../src/operations/types.js";
+import { dispatch } from "../src/dispatch/index.js";
 
 const OPS: OpMeta[] = [
   { name: "get_page", access: "read", domain: "pages" },
@@ -75,5 +83,43 @@ describe("resolveEnabled", () => {
     const r = resolveEnabled(OPS, "nope,alsobad", undefined);
     expect(r.enabled.size).toBe(0);
     expect(r.failedClosed).toBe(true);
+  });
+});
+
+describe("dispatch access gating", () => {
+  // Reuse names from the OperationName union; real ops are not imported here.
+  const ALLOWED = "get_user" as OperationName;
+  const BLOCKED = "search_pages" as OperationName;
+
+  function fakeDef(name: OperationName): OperationDef {
+    return {
+      name,
+      description: `fake ${name}`,
+      batchable: false,
+      access: "read",
+      domain: "pages",
+      schema: z.object({ id: z.string() }),
+      example: { id: "x" },
+      handler: async ({ id }: { id: string }) => ({ ok: true, data: { echo: id } }),
+    } as OperationDef;
+  }
+
+  it("runs an allowed op and blocks a disabled op", async () => {
+    register(fakeDef(ALLOWED));
+    register(fakeDef(BLOCKED));
+    process.env.NOTION_BLOCKED_OPERATIONS = "search_pages";
+    configureOperationAccess();
+
+    const ok = await dispatch(ALLOWED, { id: "hi" });
+    expect("ok" in ok && ok.ok).toBe(true);
+
+    const denied = await dispatch(BLOCKED, { id: "hi" });
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { code: "operation_not_allowed" },
+    });
+
+    delete process.env.NOTION_BLOCKED_OPERATIONS;
+    configureOperationAccess();
   });
 });
