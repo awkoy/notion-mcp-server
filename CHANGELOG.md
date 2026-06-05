@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] — 2026-06-05
+
+### Fixed
+
+- **Multi-arch Docker publish.** The `linux/amd64` + `linux/arm64` images build concurrently and shared a single npm cache mount (its id defaulted to the target), so the two parallel `npm ci` runs collided writing the same cacache blob (`EEXIST: rename … _cacache/tmp → _cacache/content-v2`) — failing the Docker release on v2.4.5–v2.5.0 while npm always succeeded. The cache mount is now scoped per `$TARGETARCH` with `sharing=locked`. No change to the published package or runtime behavior.
+
 ## [2.5.0] — 2026-06-05
 
 ### Added
