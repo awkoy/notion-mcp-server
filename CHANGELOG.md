@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-06-05
+
+### Added
+
+- **Operation access control via `NOTION_ALLOWED_OPERATIONS` / `NOTION_BLOCKED_OPERATIONS`.** Restrict which operations an agent can execute using group presets — `read`, `write`, `destructive`, or a per-domain group (`pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files`) — and/or individual operation names. The most common case, a read-only deployment, is just `NOTION_ALLOWED_OPERATIONS=read`. The blocklist is applied after the allowlist (block wins on conflict); an allowlist that resolves to nothing fails closed. Disabled operations are rejected by `notion_execute` with `operation_not_allowed` and hidden from the `notion://operations` menu and from `notion_describe`. Both env vars are optional — unset means every operation is enabled, exactly as before. Closes [#7](https://github.com/awkoy/notion-mcp-server/issues/7). See [README → Restricting operations](./README.md#restricting-operations).
+
 ## [2.4.0] — 2026-05-27
 
 ### Breaking changes
