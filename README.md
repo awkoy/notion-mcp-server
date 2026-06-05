@@ -228,9 +228,26 @@ By default every operation is available. To limit what an agent can do, set
 blocklist). Each is a comma-separated list of **tokens**, where a token is either a
 **group preset** or an exact **operation name**.
 
-**Group presets:**
-- By access: `read` (all non-mutating ops), `write` (all mutating ops), `destructive` (ops whose purpose is removal — trash/archive/delete).
-- By domain: `pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files` (every op in that resource family, read and write).
+**Group presets** (one token expands to many operations):
+
+| Token | Expands to |
+| --- | --- |
+| `read` | every non-mutating operation |
+| `write` | every mutating operation |
+| `destructive` | operations whose purpose is removal (marked † below) |
+| `pages` `blocks` `databases` `data_sources` `comments` `users` `files` | every operation in that resource family (read **and** write) |
+
+**All operations** — use any name directly for a precise allow/blocklist. († = also in the `destructive` group.)
+
+| Domain | Read | Write |
+| --- | --- | --- |
+| `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
+| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
+| `databases` | `query_database` | `create_database` `update_database` |
+| `data_sources` | `list_data_sources` `get_data_source` | `update_data_source` |
+| `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
+| `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
+| `files` | `list_file_uploads` `get_file_upload` | `upload_file` |
 
 Read-only deployment (the most common case):
 
@@ -267,6 +284,16 @@ operations (all tokens invalid, or every allowed op also blocked), **all** opera
 disabled (fail-closed). Disabled operations are hidden from the `notion://operations`
 menu and from `notion_describe`, and `notion_execute` rejects them with
 `operation_not_allowed`.
+
+**Verifying your configuration.** On startup the server prints one line to **stderr**
+(visible in your MCP client's server logs) summarizing what resolved, e.g.:
+
+```text
+Operation access: 16/37 enabled (allow=read; block=(none))
+```
+
+Unknown tokens and a fail-closed allowlist are logged there too. If the count or the
+`allow`/`block` values aren't what you expect, check that line first.
 
 **Limitations** (control is per-operation, not per-parameter):
 
