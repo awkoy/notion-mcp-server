@@ -9,6 +9,13 @@ import type {
 
 export const ALLOWED_ENV_VAR = "NOTION_ALLOWED_OPERATIONS";
 export const BLOCKED_ENV_VAR = "NOTION_BLOCKED_OPERATIONS";
+export const READ_ONLY_ENV_VAR = "NOTION_READ_ONLY";
+
+/** Interpret common truthy strings ("true", "1", "yes", "on") as enabling read-only mode. */
+export function parseReadOnly(raw: string | undefined): boolean {
+  if (!raw) return false;
+  return ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
+}
 
 /** Minimal shape the resolver needs — decoupled from the full OperationDef for testability. */
 export type OpMeta = {
@@ -60,11 +67,12 @@ export type ResolveResult = {
   failedClosed: boolean;
 };
 
-/** Pure resolver: (ops, allow, block) -> enabled set. No env / registry access. */
+/** Pure resolver: (ops, allow, block, readOnly) -> enabled set. No env / registry access. */
 export function resolveEnabled(
   ops: OpMeta[],
   allowEnv: string | undefined,
-  blockEnv: string | undefined
+  blockEnv: string | undefined,
+  readOnly = false
 ): ResolveResult {
   const warnings: string[] = [];
 
@@ -86,6 +94,11 @@ export function resolveEnabled(
     ? expand(parseList(allowEnv), ALLOWED_ENV_VAR)
     : new Set(ops.map((o) => o.name));
   const blockSet = expand(parseList(blockEnv), BLOCKED_ENV_VAR);
+  // Read-only mode is sugar for "block every write op" — it layers onto the
+  // blocklist so it composes with any allow/block configuration already set.
+  if (readOnly) {
+    for (const o of ops) if (o.access === "write") blockSet.add(o.name);
+  }
 
   const enabled = new Set<string>([...allowSet].filter((n) => !blockSet.has(n)));
   // An allowlist that resolves to nothing executable — every token invalid, or
@@ -110,7 +123,8 @@ function compute(): ResolveResult {
   const result = resolveEnabled(
     ops,
     process.env[ALLOWED_ENV_VAR],
-    process.env[BLOCKED_ENV_VAR]
+    process.env[BLOCKED_ENV_VAR],
+    parseReadOnly(process.env[READ_ONLY_ENV_VAR])
   );
   for (const w of result.warnings) {
     console.error(`[operation-access] ${w}`);
@@ -154,12 +168,14 @@ export function accessSummary(): {
   total: number;
   allow: string;
   block: string;
+  readOnly: boolean;
 } {
   return {
     enabled: get().enabled.size,
     total: listOperations().length,
     allow: process.env[ALLOWED_ENV_VAR]?.trim() || "(all)",
     block: process.env[BLOCKED_ENV_VAR]?.trim() || "(none)",
+    readOnly: parseReadOnly(process.env[READ_ONLY_ENV_VAR]),
   };
 }
 

@@ -106,6 +106,23 @@ describe("resolveEnabled", () => {
     expect(r.enabled.size).toBe(0);
     expect(r.failedClosed).toBe(true);
   });
+
+  it("read-only mode blocks every write op but keeps reads", () => {
+    const r = resolveEnabled(OPS, undefined, undefined, true);
+    expect(r.enabled.has("get_page")).toBe(true);
+    expect(r.enabled.has("list_users")).toBe(true);
+    expect(r.enabled.has("create_page")).toBe(false);
+    expect(r.enabled.has("trash_page")).toBe(false);
+    expect(r.enabled.has("upload_file")).toBe(false);
+  });
+
+  it("read-only mode composes with an allowlist (writes still removed)", () => {
+    const r = resolveEnabled(OPS, "pages", undefined, true);
+    expect(r.enabled.has("get_page")).toBe(true);
+    expect(r.enabled.has("search_pages")).toBe(true);
+    expect(r.enabled.has("create_page")).toBe(false);
+    expect(r.enabled.has("trash_page")).toBe(false);
+  });
 });
 
 describe("dispatch access gating", () => {
@@ -142,6 +159,43 @@ describe("dispatch access gating", () => {
     });
 
     delete process.env.NOTION_BLOCKED_OPERATIONS;
+    configureOperationAccess();
+  });
+});
+
+describe("NOTION_READ_ONLY env wiring", () => {
+  const READ = "get_block" as OperationName;
+  const WRITE = "update_block" as OperationName;
+
+  function fakeDef(name: OperationName, access: "read" | "write"): OperationDef {
+    return {
+      name,
+      description: `fake ${name}`,
+      batchable: false,
+      access,
+      domain: "blocks",
+      schema: z.object({ id: z.string() }),
+      example: { id: "x" },
+      handler: async ({ id }: { id: string }) => ({ ok: true, data: { echo: id } }),
+    } as OperationDef;
+  }
+
+  it("blocks write ops and allows read ops when NOTION_READ_ONLY=true", async () => {
+    register(fakeDef(READ, "read"));
+    register(fakeDef(WRITE, "write"));
+    process.env.NOTION_READ_ONLY = "true";
+    configureOperationAccess();
+
+    const ok = await dispatch(READ, { id: "hi" });
+    expect("ok" in ok && ok.ok).toBe(true);
+
+    const denied = await dispatch(WRITE, { id: "hi" });
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { code: "operation_not_allowed" },
+    });
+
+    delete process.env.NOTION_READ_ONLY;
     configureOperationAccess();
   });
 });

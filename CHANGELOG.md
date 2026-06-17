@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-06-17
+
+### Added
+
+- **`NOTION_READ_ONLY` switch.** Set `NOTION_READ_ONLY=true` (also accepts `1`/`yes`/`on`) to disable every write operation in one flag — equivalent to `NOTION_BLOCKED_OPERATIONS=write`, and it composes with the existing allow/block lists. Read-only is reflected in the startup access log. Optional; unset means no change. See [README → Restricting operations](./README.md#restricting-operations).
+- **Dynamic MCP resources for pages and databases.** In addition to the `notion://operations` cheat sheet, the server now serves `notion://page/<page_id>` (page body as markdown) and `notion://database/<data_source_id>` (data source schema as JSON), so clients that support resource attachment can pull Notion content into context without a tool call. Both route through the normal dispatch path, so they inherit auth, rate limiting, retries, and access gating (a disabled or read-only target returns an error envelope rather than content).
+
+### Fixed
+
+- **Reported server version was stuck at `1.4.0`.** The MCP handshake version was a hand-maintained constant left over from the Zod 4 migration and had drifted from the published package version. It is now read directly from `package.json`, so the handshake and startup log always report the real version.
+
 ## [2.5.1] — 2026-06-05
 
 ### Fixed

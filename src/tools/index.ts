@@ -1,6 +1,8 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { server } from "../server/index.js";
+import { readNotionResource } from "./resources.js";
 import { initOperations, getOperation } from "../operations/index.js";
 import {
   isOperationAllowed,
@@ -139,11 +141,51 @@ export async function registerAllTools(): Promise<void> {
     })
   );
 
+  // Dynamic resources: let clients @-mention / attach a Notion page or database
+  // by id. Pages come back as markdown; databases as their (slim) schema JSON.
+  const firstVar = (v: string | string[]): string => (Array.isArray(v) ? v[0] : v);
+
+  server.registerResource(
+    "notion-page",
+    new ResourceTemplate("notion://page/{pageId}", { list: undefined }),
+    {
+      title: "Notion page (markdown)",
+      description:
+        "Read any Notion page as markdown by id — notion://page/<page_id>.",
+      mimeType: "text/markdown",
+    },
+    async (uri, variables) => {
+      const { mimeType, text } = await readNotionResource(
+        "page",
+        firstVar(variables.pageId)
+      );
+      return { contents: [{ uri: uri.href, mimeType, text }] };
+    }
+  );
+
+  server.registerResource(
+    "notion-database",
+    new ResourceTemplate("notion://database/{dataSourceId}", { list: undefined }),
+    {
+      title: "Notion database (schema)",
+      description:
+        "Read a Notion data source's schema by id — notion://database/<data_source_id>.",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const { mimeType, text } = await readNotionResource(
+        "database",
+        firstVar(variables.dataSourceId)
+      );
+      return { contents: [{ uri: uri.href, mimeType, text }] };
+    }
+  );
+
   registerAllPrompts();
 
   const s = accessSummary();
   console.error(
-    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block})`
+    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block}${s.readOnly ? "; read-only" : ""})`
   );
 }
 

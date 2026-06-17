@@ -211,6 +211,7 @@ If you ran a v1.x setup, **nothing in your environment needs to change**. Both e
 | `NOTION_RATE_LIMIT` | ✅ New, optional | Requests per second for the shared limiter. Defaults to `3` (Notion's documented per-integration limit). |
 | `NOTION_ALLOWED_OPERATIONS` | ✅ New, optional | Comma-separated allowlist of operations or group presets (`read`, `write`, `destructive`, plus per-domain groups `pages`, `blocks`, `databases`, `data_sources`, `comments`, `users`, `files`). Unset ⇒ all operations enabled. See [Restricting operations](#restricting-operations). |
 | `NOTION_BLOCKED_OPERATIONS` | ✅ New, optional | Comma-separated blocklist (same token vocabulary). Applied after the allowlist, so a blocked operation is always disabled. |
+| `NOTION_READ_ONLY` | ✅ New, optional | Set to `true`/`1`/`yes` to disable every write operation in one switch (equivalent to `NOTION_BLOCKED_OPERATIONS=write`). Composes with the allow/block lists. See [Restricting operations](#restricting-operations). |
 | `NOTION_DAILY_LOG_PAGE_ID` | ✅ Optional | Used only by the daily-log MCP prompt. Ignore if you don't call that prompt. |
 
 The only v2 break is the **tool surface itself** — v1's `notion_pages`, `notion_blocks`, `notion_database`, `notion_comments`, `notion_users` are replaced by `notion_execute` and `notion_describe`. Modern MCP clients (Claude Code, Cursor, Claude Desktop) rediscover tools at startup, so they pick up the new surface automatically. If your client hard-codes the v1 tool names, see [MIGRATION.md](./MIGRATION.md) for the rename map.
@@ -302,8 +303,8 @@ Unknown tokens and a fail-closed allowlist are logged there too. If the count or
   operations can also remove content via a parameter — e.g. `update_database` /
   `update_data_source` accept `in_trash`, and `update_page_markdown` can replace a page
   body. Blocking `destructive` does **not** disable those write ops. **For a guaranteed
-  no-mutation deployment, use the allowlist** (`NOTION_ALLOWED_OPERATIONS=read`), which
-  excludes every write operation.
+  no-mutation deployment, use the allowlist** (`NOTION_ALLOWED_OPERATIONS=read`) or the
+  shorthand `NOTION_READ_ONLY=true` — both leave only read operations enabled.
 - MCP *prompts* (e.g. the daily-log prompt) may still reference operations you have
   disabled. The prompt text is unaffected by the allowlist; the underlying operation is
   still rejected at execution time.
@@ -474,6 +475,18 @@ Return the JSON Schema + working example for a single operation. Use this when y
 | **Files** | `upload_file`, `list_file_uploads`, `get_file_upload` |
 
 The authoritative list (with batchability) is also served as an MCP resource at `notion://operations` — useful as a one-shot cheat sheet for the LLM.
+
+### MCP resources
+
+The server exposes three resources, so clients that support resource attachment (`@`-mention) can pull Notion content into context without a tool call:
+
+| Resource URI | Returns |
+| --- | --- |
+| `notion://operations` | Markdown cheat sheet of every enabled operation. |
+| `notion://page/<page_id>` | The page body as markdown. |
+| `notion://database/<data_source_id>` | The data source's schema as JSON. |
+
+The dynamic page/database resources route through the same auth, rate limiting, and access gating as tool calls — a page disabled by your allow/block config (or `NOTION_READ_ONLY`) returns an error envelope, not content.
 
 ---
 
