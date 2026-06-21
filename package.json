@@ -43,6 +43,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@notionhq/client": "^5.22.0",
+    "https-proxy-agent": "9.1.0",
+    "node-fetch": "3.3.2",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **HTTP(S) proxy support.** The Notion client now routes its requests through an HTTP(S) proxy when one is configured via the standard `HTTPS_PROXY` / `HTTP_PROXY` (and lowercase) environment variables; with no proxy set, behavior is unchanged. Useful behind corporate proxies. (Thanks @KokomiSensei — original PR #17, rebased onto v2.8.0.)
+
 ## [2.8.0] — 2026-06-21
 
 ### Added
