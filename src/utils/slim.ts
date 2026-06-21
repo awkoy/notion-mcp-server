@@ -245,6 +245,27 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
   };
 }
 
+// View objects are loosely typed on the SDK surface, so accept `unknown` and
+// narrow defensively. Default keeps the high-signal fields (id/name/type and
+// any filter/sorts); the bulky type-specific `configuration` is verbose-only.
+export function slimView(view: unknown, verbose = false) {
+  if (verbose) return view;
+  const v = (view ?? {}) as {
+    id?: string;
+    name?: string;
+    type?: string;
+    filter?: unknown;
+    sorts?: unknown;
+  };
+  return {
+    id: v.id,
+    ...(v.name !== undefined ? { name: v.name } : {}),
+    ...(v.type !== undefined ? { type: v.type } : {}),
+    ...(v.filter ? { filter: v.filter } : {}),
+    ...(Array.isArray(v.sorts) && v.sorts.length ? { sorts: v.sorts } : {}),
+  };
+}
+
 export function slimItem(
   item: SearchItemResponse,
   verbose = false,
