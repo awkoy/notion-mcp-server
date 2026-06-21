@@ -64,7 +64,7 @@ const UpdateDataSourceParams = z.object({
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
   properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
   icon: z.unknown().optional(),
-  archived: z.boolean().optional(),
+  archived: z.boolean().optional().describe("Deprecated alias for in_trash (removed on the 2026-03-11 surface). Routed to in_trash."),
   in_trash: z.boolean().optional(),
   verbose: VERBOSE,
 });
@@ -84,13 +84,15 @@ register({
   },
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
     const notion = await getClient();
+    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
+    // into `in_trash` so we never send a field the API rejects.
+    const trash = in_trash ?? archived;
     const body = {
       data_source_id,
       ...(title !== undefined ? { title } : {}),
       ...(properties !== undefined ? { properties } : {}),
       ...(icon !== undefined ? { icon } : {}),
-      ...(archived !== undefined ? { archived } : {}),
-      ...(in_trash !== undefined ? { in_trash } : {}),
+      ...(trash !== undefined ? { in_trash: trash } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
     return { ok: true, data: slimDataSource(response, verbose ?? false) };

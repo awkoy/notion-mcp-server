@@ -22,6 +22,7 @@ export const BASE_BLOCK_REQUEST_SCHEMA = z.object({
     .optional()
     .describe("Whether block has child blocks"),
   archived: z.boolean().optional().describe("Whether block is archived"),
+  in_trash: z.boolean().optional().describe("Whether block is in trash (2026-03-11 surface)"),
 });
 
 export const TEXT_BLOCK_BASE_REQUEST_SCHEMA = z.object({

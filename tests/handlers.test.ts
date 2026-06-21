@@ -357,7 +357,7 @@ describe("get_data_source", () => {
 });
 
 describe("update_data_source", () => {
-  it("forwards only the fields that were provided", async () => {
+  it("routes legacy archived to in_trash (2026-03-11 surface) and forwards only provided fields", async () => {
     notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
 
     const res = await dispatch("update_data_source", {
@@ -367,8 +367,10 @@ describe("update_data_source", () => {
     expect((res as { ok: boolean }).ok).toBe(true);
     expect(notionStub.dataSources.update).toHaveBeenCalledWith({
       data_source_id: "ds-1",
-      archived: true,
+      in_trash: true,
     });
+    const call = notionStub.dataSources.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty("archived");
   });
 });
 
