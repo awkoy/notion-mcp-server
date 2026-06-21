@@ -5,11 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.9.0] — 2026-06-21
 
 ### Added
 
-- **HTTP(S) proxy support.** The Notion client now routes its requests through an HTTP(S) proxy when one is configured via the standard `HTTPS_PROXY` / `HTTP_PROXY` (and lowercase) environment variables; with no proxy set, behavior is unchanged. Useful behind corporate proxies. (Thanks @KokomiSensei — original PR #17, rebased onto v2.8.0.)
+- **HTTP(S) proxy support.** The Notion client now routes its requests through an HTTP(S) proxy when one is configured via the standard `HTTPS_PROXY` / `HTTP_PROXY` (and lowercase) environment variables; with no proxy set, behavior is unchanged. Useful behind corporate proxies. (Thanks @KokomiSensei — original PR #17.)
+
+### Changed
+
+- **Docker base image → `node:24-alpine`** (current Active LTS, digest-pinned), up from `node:22-alpine`. Dependabot proposed the non-LTS `node:26`; we stay on LTS.
+- **Dev toolchain bumps:** TypeScript `5.9 → 6.0`, `@types/node` `22 → 25`, `shx` `0.3 → 0.4`, `vitest` `4.1.7 → 4.1.8`, and pinned GitHub Actions SHAs refreshed. No runtime impact.
 
 ## [2.8.0] — 2026-06-21
 
