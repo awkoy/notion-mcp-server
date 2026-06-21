@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-# Base image pinned to its multi-arch index digest (not the mutable `22-alpine`
+# Base image pinned to its multi-arch index digest (not the mutable `24-alpine`
 # tag) so the registry can't swap the contents under us. Dependabot's docker
 # ecosystem bumps this digest in a reviewed PR. Resolve a new one with:
-#   docker buildx imagetools inspect node:22-alpine
-FROM node:22-alpine@sha256:e58326d0d441090181ac150dc2078d3e2cf6a0d42e809aebba3ef5880935ffdd AS builder
+#   docker buildx imagetools inspect node:24-alpine
+FROM node:24-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6 AS builder
 
 WORKDIR /app
 
@@ -25,7 +25,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
-FROM node:22-alpine@sha256:e58326d0d441090181ac150dc2078d3e2cf6a0d42e809aebba3ef5880935ffdd AS release
+FROM node:24-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6 AS release
 
 WORKDIR /app
 
