@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-06-21
+
+### Added
+
+- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-41-ops-plus-one-alias).
+
+### Changed
+
+- **Pinned `Notion-Version` bumped `2025-09-03` → `2026-03-11`.** The append-children `position` object and page/database `in_trash` field were already in use; this release also routes the legacy `update_data_source` `archived` alias into `in_trash` (the `archived` field was removed on the new surface) and adds `in_trash` to the block response schema. No dependency change (`@notionhq/client@^5.22.0`).
+
 ## [2.7.0] — 2026-06-17
 
 ### Added

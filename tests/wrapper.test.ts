@@ -268,7 +268,7 @@ describe("MCP wrapper: operation access gating", () => {
     expect(block.text).toContain("`get_page`");
   });
 
-  it("notion://operations drops the query_database DSL help when that op is blocked", async () => {
+  it("notion://operations keeps the WHERE DSL help when query_database is blocked but view ops still use it", async () => {
     process.env.NOTION_BLOCKED_OPERATIONS = "query_database";
     configureOperationAccess();
 
@@ -277,7 +277,22 @@ describe("MCP wrapper: operation access gating", () => {
     if (!("text" in block) || typeof block.text !== "string") {
       throw new Error("Expected text resource content");
     }
-    expect(block.text).not.toContain("WHERE DSL");
+    // query_database is gone, but create_view/update_view share the same DSL,
+    // so the help stays — now attributed to the still-enabled view ops.
     expect(block.text).not.toContain("`query_database`");
+    expect(block.text).toContain("WHERE filter DSL");
+    expect(block.text).toContain("`create_view`");
+  });
+
+  it("notion://operations drops the WHERE DSL help only when every where-op is blocked", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "query_database,create_view,update_view";
+    configureOperationAccess();
+
+    const res = await client.readResource({ uri: "notion://operations" });
+    const block = res.contents[0];
+    if (!("text" in block) || typeof block.text !== "string") {
+      throw new Error("Expected text resource content");
+    }
+    expect(block.text).not.toContain("WHERE filter DSL");
   });
 });

@@ -193,14 +193,17 @@ function renderOperationsIndex(): string {
   for (const def of enabledOperations()) {
     lines.push(`| \`${def.name}\` | ${def.batchable ? "yes" : "no"} | ${def.description} |`);
   }
-  // Only document the query_database filter DSL when that op is actually enabled —
-  // otherwise the menu advertises a disabled operation.
-  if (!isOperationAllowed("query_database")) {
+  // Document the WHERE DSL when any operation that accepts it is enabled.
+  // query_database, create_view, and update_view all take the same `where`.
+  const whereOps = ["query_database", "create_view", "update_view"].filter((op) =>
+    isOperationAllowed(op)
+  );
+  if (whereOps.length === 0) {
     return lines.join("\n");
   }
-  lines.push("", "## `query_database` WHERE DSL", "");
+  lines.push("", "## WHERE filter DSL", "");
   lines.push(
-    "`query_database.where` is a compact DSL that compiles to the Notion filter object. AND-by-default at the top level; nest `and`/`or`/`not` (case-insensitive — `AND`/`OR`/`NOT` also work) for boolean groups, prefix scalars with `__type` to force the property type, or fall back to raw `filter` for anything the DSL can't express.",
+    `The same \`where\` DSL is accepted by ${whereOps.map((o) => `\`${o}\``).join(", ")}. It is a compact shorthand that compiles to the Notion filter object. AND-by-default at the top level; nest \`and\`/\`or\`/\`not\` (case-insensitive — \`AND\`/\`OR\`/\`NOT\` also work) for boolean groups, prefix scalars with \`__type\` to force the property type, or fall back to raw \`filter\` for anything the DSL can't express.`,
     "",
     "Common shapes:",
     "",

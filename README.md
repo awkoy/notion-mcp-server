@@ -247,6 +247,7 @@ blocklist). Each is a comma-separated list of **tokens**, where a token is eithe
 | `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
 | `databases` | `query_database` | `create_database` `update_database` |
 | `data_sources` | `list_data_sources` `get_data_source` | `update_data_source` |
+| `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
 | `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
 | `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
 | `files` | `list_file_uploads` `get_file_upload` | `upload_file` |
@@ -445,6 +446,7 @@ docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -p 3000:3000 ghcr.
 - **File uploads** — `upload_file` handles single-part and multi-part (5 MB chunks) transparently; auto-detects MIME from filename; rejects `application/octet-stream`.
 - **Opt-in auto-pagination** — pass `paginate: true` on `search_pages`, `list_comments`, or `query_database` and the server walks `next_cursor` for you (capped by `page_limit`, default 10 pages ≈ 1000 items at `page_size: 100`). Other list ops return a single Notion page with `has_more` / `next_cursor`.
 - **Typed `where` filter shorthand** — `query_database` accepts a `where` clause like `{Status: {equals: "Done"}, AND: [...]}` with operator objects (`eq`, `ne`, `gte`, `lte`, `contains`, `starts_with`, etc.); the server compiles it to Notion filter JSON. Pass raw Notion `filter` JSON for edge cases the shorthand can't express (the two fields are mutually exclusive).
+- **Database views** — `list_views` / `get_view` / `query_view` plus `create_view` / `update_view` / `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (`hydrate: false` for ids only); `create_view` / `update_view` reuse the same `where` shorthand for filters and take a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it).
 - **Universal MCP compatibility** — Cursor, Claude Desktop, Claude Code, Cline, Zed, Continue, anything that speaks MCP stdio.
 
 ---
@@ -506,7 +508,7 @@ Return the JSON Schema + working example for a single operation. Use this when y
 { "operation": "query_database" }
 ```
 
-### Operations menu (35 ops, plus one alias)
+### Operations menu (41 ops, plus one alias)
 
 | Area | Operations |
 | --- | --- |
@@ -514,6 +516,7 @@ Return the JSON Schema + working example for a single operation. Use this when y
 | **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
 | **Databases** | `create_database`, `query_database`, `update_database` |
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source` |
+| **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
 | **Users** | `list_users`, `get_user`, `get_bot_user` |
 | **Files** | `upload_file`, `list_file_uploads`, `get_file_upload` |

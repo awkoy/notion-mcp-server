@@ -42,6 +42,7 @@ const DOMAIN_GROUPS: readonly OperationDomain[] = [
   "comments",
   "users",
   "files",
+  "views",
 ];
 
 /** Expand a single token to op names, or null if it matches no group and no op. */
