@@ -59,6 +59,36 @@ register({
   }),
 });
 
+const ListDataSourceTemplatesParams = z.object({
+  data_source_id: z.string().describe("Data source ID to list templates for."),
+  name: z.string().optional().describe("Case-insensitive substring filter on template name."),
+  start_cursor: z.string().optional(),
+  page_size: z.number().int().min(1).max(100).optional(),
+});
+
+register({
+  name: "list_data_source_templates",
+  access: "read",
+  domain: "data_sources",
+  description: "List the page templates available for a data source. Returns {id, name, is_default} per template. Pass a returned id as template.template_id to create_page to apply it.",
+  batchable: false,
+  schema: ListDataSourceTemplatesParams,
+  example: { data_source_id: "<data-source-id>" },
+  handler: tryHandler(async ({ data_source_id, name, start_cursor, page_size }) => {
+    const notion = await getClient();
+    const res = await notion.dataSources.listTemplates({
+      data_source_id,
+      ...(name !== undefined ? { name } : {}),
+      ...(start_cursor !== undefined ? { start_cursor } : {}),
+      ...(page_size !== undefined ? { page_size } : {}),
+    });
+    return {
+      ok: true,
+      data: { data_source_id, templates: res.templates },
+    };
+  }),
+});
+
 const UpdateDataSourceParams = z.object({
   data_source_id: z.string(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),

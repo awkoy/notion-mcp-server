@@ -75,12 +75,26 @@ const CreatePageParams = z
     properties: z.record(z.string(), PROPERTY_VALUE_SCHEMA).optional(),
     markdown: z.string().optional().describe("Page body as markdown. Parsed server-side."),
     children: z.array(z.unknown()).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
+    template: z
+      .object({
+        type: z.enum(["default", "none", "template_id"]).describe("`template_id` to apply a specific template, `default` for the data source's default template, `none` for no template."),
+        template_id: z.string().optional().describe("Required when type is 'template_id'. Discover IDs via list_data_source_templates."),
+        timezone: z.string().optional().describe("IANA tz (e.g. 'Asia/Hong_Kong') controlling @now/@today resolution inside the template."),
+      })
+      .optional()
+      .describe("Create the page from a Notion template. The API forbids `markdown`/`children` alongside a template; only data_source_id parents support templates."),
     icon: ICON_SCHEMA.nullable().optional(),
     cover: FILE_SCHEMA.nullable().optional(),
     verbose: VERBOSE,
   })
   .refine((v) => !(v.markdown && v.children), {
     message: "Pass either `markdown` or `children`, not both.",
+  })
+  .refine((v) => !(v.template && (v.markdown || v.children)), {
+    message: "Pass either a `template` or body content (`markdown`/`children`), not both — the Notion API rejects children alongside a template.",
+  })
+  .refine((v) => !(v.template?.type === "template_id" && !v.template.template_id), {
+    message: "template.template_id is required when template.type is 'template_id'.",
   });
 
 register({
@@ -127,15 +141,19 @@ register({
         title: [{ type: "text", text: { content: params.title } }],
       };
     }
-    const children = params.markdown
-      ? parseMarkdownToBlocks(params.markdown)
-      : params.children;
+    // A template and explicit body content are mutually exclusive (API rule).
+    const children = params.template
+      ? undefined
+      : params.markdown
+        ? parseMarkdownToBlocks(params.markdown)
+        : params.children;
 
     const notion = await getClient();
     const body = {
       parent,
       properties,
       ...(children && children.length ? { children } : {}),
+      ...(params.template ? { template: params.template } : {}),
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),
     };
