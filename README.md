@@ -21,7 +21,7 @@ Three reasons it exists when Notion ships its own MCP:
 
 ## ⚡ Quick start
 
-**Step 1 — get a Notion token (1 minute).** Open **[notion.so/profile/integrations](https://www.notion.so/profile/integrations)** → **Personal access tokens** tab → **+ New personal access token** → pick your workspace → **Create** → copy the `ntn_…` value. That's it — a PAT sees everything *you* can see, no per-page sharing required. (Tab missing? Your admin disabled PATs — see [auth alternatives](#authentication-pat-recommended-vs-internal-integration).)
+**Step 1 — get a Notion token (1 minute).** Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** (the **Personal access tokens** page of Notion's developer portal) → **+ New token** → name it, pick your workspace → **Create token** → copy the `ntn_…` value. That's it — a PAT sees everything *you* can see, no per-page sharing required. (Page missing or empty? Your admin disabled PATs — see [auth alternatives](#authentication-pat-recommended-vs-internal-integration).)
 
 **Step 2 — add the server to your client.**
 
@@ -157,9 +157,9 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 
 A Personal Access Token (PAT) is like a key that lets the AI act as **you** inside Notion — it sees every page you can see, with no per-page setup.
 
-1. Open **[notion.so/profile/integrations](https://www.notion.so/profile/integrations)** while logged into Notion (same page via the app: **Settings → Connections → Develop or manage integrations**).
-2. Open the **Personal access tokens** tab → **+ New personal access token**.
-3. Name it (e.g. `Claude`), pick the workspace, leave default capabilities, click **Create token**.
+1. Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** while logged into Notion — that's the **Personal access tokens** page of Notion's developer portal (also reachable from the app via **Settings → Connections → Develop or manage integrations** → **Personal access tokens** in the sidebar).
+2. Click **+ New token**.
+3. Name it (e.g. `Claude`), pick the workspace, leave the default **Notion API** capability checked, click **Create token**.
 4. **Copy the token now** — Notion shows it only once. It starts with `ntn_`. Treat it like a password.
 
 > PATs **expire 1 year after creation** — set a reminder to rotate. No "Personal access tokens" tab? Your admin disabled them; use the [Internal Integration alternative](#authentication-pat-recommended-vs-internal-integration).
@@ -208,7 +208,7 @@ Both use the same `NOTION_TOKEN` env var — only where you get the token differ
 
 | | **Personal Access Token** (recommended) | **Internal Integration** (scoped) |
 | --- | --- | --- |
-| Where | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **Personal access tokens** → **+ New** | [notion.so/profile/integrations/internal](https://www.notion.so/profile/integrations/internal) → **+ New connection** |
+| Where | [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) → **+ New token** | [app.notion.com/developers/connections](https://app.notion.com/developers/connections) → **+ New connection** |
 | Scope | Everything **you** can see | Only pages where you clicked **• • • → Connect → \<integration\>** |
 | Friction | None | Per-page Connect step for every page/database |
 | Use when | Default: personal + team workspaces, prototyping | Admin requires explicit per-resource scoping, or shared production bots |
@@ -223,9 +223,9 @@ Both use the same `NOTION_TOKEN` env var — only where you get the token differ
 
 **Expiry:** PATs expire **1 year after creation** ([Notion docs](https://developers.notion.com/guides/get-started/personal-access-tokens)); set a reminder for ~11 months.
 
-**Revoking:** [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **Personal access tokens** → **• • • → Revoke** (immediate). Workspace admins can revoke anyone's from **Settings & members → Connections → All personal access tokens**.
+**Revoking:** [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) → **Revoke** next to the token (immediate). Workspace admins can revoke anyone's from **Settings & members → Connections → All personal access tokens**.
 
-**Admin disabled PATs?** Ask them to enable, or create an [Internal Integration](https://www.notion.so/profile/integrations/internal) and **• • • → Connect** it to every page the agent should touch — same `NOTION_TOKEN` env var.
+**Admin disabled PATs?** Ask them to enable, or create an Internal Integration at [app.notion.com/developers/connections](https://app.notion.com/developers/connections) (**+ New connection**) and **• • • → Connect** it to every page the agent should touch — same `NOTION_TOKEN` env var.
 
 Official reference: [PAT guide](https://developers.notion.com/guides/get-started/personal-access-tokens) · [Authorization overview](https://developers.notion.com/docs/authorization).
 
@@ -450,7 +450,7 @@ Dynamic resources route through the same auth, rate limiting, and access gating 
 ## ❓ Troubleshooting the Notion MCP server
 
 - **`object_not_found` / "Could not find …"** — an Internal Integration token only sees pages explicitly Connected to it. Switch to a PAT to skip per-page sharing.
-- **"Notion auth failed" on every call** — token missing, revoked, or expired (PATs expire after 1 year). Check `NOTION_TOKEN` in your client config, then confirm the token still exists at [notion.so/profile/integrations](https://www.notion.so/profile/integrations).
+- **"Notion auth failed" on every call** — token missing, revoked, or expired (PATs expire after 1 year). Check `NOTION_TOKEN` in your client config, then confirm the token is still listed as Active at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens).
 - **"No parent page configured"** — pass `parent` in the call, or set `NOTION_PAGE_ID`.
 - **`multi_source_database` from `query_database`** — the database has multiple data sources. Call `list_data_sources`, then pass `data_source_id` instead of `database_id`.
 - **Tools don't appear in Claude Desktop** — token typo (must stay inside the quotes) or the app wasn't fully quit (`Cmd+Q`, not window close) before reopening.
@@ -468,7 +468,7 @@ A Model Context Protocol server that connects AI assistants — Claude, Cursor, 
 
 ### How do I connect Claude to Notion using MCP?
 
-See the [Quick start](#-quick-start): get a PAT at [notion.so/profile/integrations](https://www.notion.so/profile/integrations), then one `claude mcp add` command (Claude Code) or one JSON paste (Claude Desktop). Non-developers: the [complete walkthrough](#-complete-walkthrough-no-coding-required) assumes nothing.
+See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens), then one `claude mcp add` command (Claude Code) or one JSON paste (Claude Desktop). Non-developers: the [complete walkthrough](#-complete-walkthrough-no-coding-required) assumes nothing.
 
 ### What's the difference between this and Notion's official MCP?
 
@@ -480,7 +480,7 @@ Cursor, VS Code (Copilot agent mode), Cline, Zed, Continue: yes — install badg
 
 ### Is it safe to give an AI my Notion token?
 
-The token lives in your MCP client's local config and is only sent to `api.notion.com` over HTTPS. The server is open source — read every line. A PAT has the same access you do, so don't paste it into untrusted clients, and revoke it at [notion.so/profile/integrations](https://www.notion.so/profile/integrations) if a laptop is lost. For agents that should never write, set `NOTION_READ_ONLY=true`.
+The token lives in your MCP client's local config and is only sent to `api.notion.com` over HTTPS. The server is open source — read every line. A PAT has the same access you do, so don't paste it into untrusted clients, and revoke it at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens) if a laptop is lost. For agents that should never write, set `NOTION_READ_ONLY=true`.
 
 ### Does it work with self-hosted or local-only LLMs?
 
