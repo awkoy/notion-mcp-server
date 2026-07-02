@@ -23,6 +23,8 @@ Three reasons it exists when Notion ships its own MCP:
 
 **Step 1 — get a Notion token (1 minute).** Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** (the **Personal access tokens** page of Notion's developer portal) → **+ New token** → name it, pick your workspace → **Create token** → copy the `ntn_…` value. That's it — a PAT sees everything *you* can see, no per-page sharing required. (Page missing or empty? Your admin disabled PATs — see [auth alternatives](#authentication-pat-recommended-vs-internal-integration).)
 
+<img src="https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/notion-pat-page.png" width="640" alt="Notion developer portal — the Personal access tokens page with the + New token button in the top right">
+
 **Step 2 — add the server to your client.**
 
 ### Claude Code
@@ -160,6 +162,9 @@ A Personal Access Token (PAT) is like a key that lets the AI act as **you** insi
 1. Open **[app.notion.com/developers/tokens](https://app.notion.com/developers/tokens)** while logged into Notion — that's the **Personal access tokens** page of Notion's developer portal (also reachable from the app via **Settings → Connections → Develop or manage integrations** → **Personal access tokens** in the sidebar).
 2. Click **+ New token**.
 3. Name it (e.g. `Claude`), pick the workspace, leave the default **Notion API** capability checked, click **Create token**.
+
+   <img src="https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/notion-new-token-modal.png" width="460" alt="The New personal access token dialog: enter a token name, pick the workspace it has access to, keep the Notion API capability checked, then press Create token">
+
 4. **Copy the token now** — Notion shows it only once. It starts with `ntn_`. Treat it like a password.
 
 > PATs **expire 1 year after creation** — set a reminder to rotate. No "Personal access tokens" tab? Your admin disabled them; use the [Internal Integration alternative](#authentication-pat-recommended-vs-internal-integration).
