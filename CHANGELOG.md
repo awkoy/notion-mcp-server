@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] — 2026-07-02
+
+### Added
+
+- **Create pages from Notion templates.** `create_page` gains an optional `template` field — `{ type: "template_id" | "default" | "none", template_id?, timezone? }` — passed through to the Notion API's page-create template support. It is mutually exclusive with `markdown`/`children` (the API rejects body content alongside a template) and requires `template_id` when `type` is `"template_id"`; both rules are validated locally with clear messages. (Thanks @Omee11 — PR #24.)
+- **`list_data_source_templates`.** New read operation wrapping the SDK's `dataSources.listTemplates`, returning `{ id, name, is_default }` per template so callers can discover the `template_id` to apply. No new dependencies — the already-pinned `Notion-Version: 2026-03-11` covers both endpoints.
+
+### Changed
+
+- **Dev toolchain bumps:** `vitest` `4.1.8 → 4.1.9`. No runtime impact.
+
 ## [2.9.0] — 2026-06-21
 
 ### Added
