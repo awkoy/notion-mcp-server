@@ -160,9 +160,9 @@ export const RELATION_DB_PROPERTY_SCHEMA = z.object({
   type: z.literal("relation").describe("Relation property type"),
   relation: z
     .object({
-      database_id: z
+      data_source_id: z
         .string()
-        .describe("The ID of the database this relation refers to"),
+        .describe("The ID of the data source this relation refers to"),
       synced_property_name: z
         .string()
         .optional()
