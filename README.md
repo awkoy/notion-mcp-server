@@ -12,7 +12,7 @@ Give your AI full read/write access to Notion with **one token and one paste**. 
 Three reasons it exists when Notion ships its own MCP:
 
 - **Built for agents, not humans-in-the-loop.** Notion's hosted MCP is OAuth-only — it cannot run headless. This server authenticates with a token, so it works in **CI, cron jobs, background agents, and self-hosted deployments** where nobody can click "Authorize".
-- **~90% less context overhead.** Two MCP tools (`notion_execute` + `notion_describe`) dispatch **43 operations**, instead of one tool schema per endpoint flooding your agent's context.
+- **97% smaller tool footprint at connection.** Two MCP tools (**422 tokens**) instead of one schema per endpoint — the official open-source server loads **17,163 tokens** of tool schemas before you do anything. Operation schemas load on demand via `notion_describe`, so even a typical multi-operation task stays 85–95% lighter. [Measured, reproducible →](./benchmarks)
 - **The operational stuff is built in.** Batched mutations with atomic rollback, idempotency keys, automatic retry on rate limits, slim token-efficient responses, full markdown round-trip, and self-healing validation errors that let the model fix its own bad payloads in one turn.
 
 <a href="https://glama.ai/mcp/servers/zrh07hteaa">
@@ -123,7 +123,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 
 | Capability | Official Notion MCP (open source) | **This server** |
 | --- | --- | --- |
-| **Tool surface** | ~24 tools (one per endpoint) loaded into context | **2 tools** — the LLM loads ~90% less schema |
+| **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **2 tools**, 422 tokens — [97% less schema at connection](./benchmarks) |
 | **Operations covered** | ~24 endpoints | **43 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
