@@ -6,12 +6,12 @@
     "url": "https://github.com/awkoy/notion-mcp-server",
     "source": "github"
   },
-  "version": "2.10.0",
+  "version": "2.10.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "notion-mcp-server",
-      "version": "2.10.0",
+      "version": "2.10.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

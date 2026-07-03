@@ -1,6 +1,6 @@
 {
   "name": "notion-mcp-server",
-  "version": "2.10.0",
+  "version": "2.10.1",
   "mcpName": "io.github.awkoy/notion-mcp-server",
   "type": "module",
   "bin": {

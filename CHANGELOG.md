@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.1] — 2026-07-03
+
+Distribution release — no runtime changes to the server itself.
+
+### Added
+
+- **Official MCP registry.** The server is published to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) as `io.github.awkoy/notion-mcp-server`: `server.json` manifest, `mcpName` field in package.json, and automatic registry publish (GitHub OIDC) in the npm release workflow. (#29)
+- **Claude Desktop one-click extension.** Every release now attaches `notion-mcp-server.mcpb` — download, double-click, paste your Notion token; no config-file editing or Node.js required. (#30)
+- **OCI registry label.** Docker images now carry `io.modelcontextprotocol.server.name`, allowing the GHCR image to be added to the MCP registry entry later. (#29)
+
 ## [2.10.0] — 2026-07-02
 
 ### Added
