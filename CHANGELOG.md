@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-07-03
+
+### Fixed
+
+- **Relation properties now target a data source, not a database.** When defining a `relation` database property, the field is now `data_source_id` (was `database_id`), matching Notion's data-source model under the pinned `Notion-Version: 2026-03-11` — the old field was rejected by the API. If you were passing `database_id` inside a relation config, switch to `data_source_id` (resolve it with `list_data_sources` if needed). (Thanks @insane66613 — PR #28.)
+
 ## [2.10.1] — 2026-07-03
 
 Distribution release — no runtime changes to the server itself.
