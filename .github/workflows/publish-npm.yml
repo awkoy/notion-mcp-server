@@ -50,3 +50,31 @@ jobs:
 
       - name: Publish to npm
         run: npm publish
+
+      - name: Sync server.json version with package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const { version } = require('./package.json');
+            const s = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+            s.version = version;
+            for (const p of s.packages) p.version = version;
+            fs.writeFileSync('server.json', JSON.stringify(s, null, 2) + '\n');
+          "
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+
+      - name: Publish to MCP Registry
+        # Retries because the registry validates the mcpName field against the
+        # package.json served by registry.npmjs.org, and the version published
+        # above can take a minute to propagate.
+        run: |
+          ./mcp-publisher login github-oidc
+          for i in 1 2 3 4 5; do
+            ./mcp-publisher publish && exit 0
+            echo "Publish attempt $i failed, retrying in 60s..."
+            sleep 60
+          done
+          exit 1

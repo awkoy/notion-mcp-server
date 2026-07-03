@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.awkoy/notion-mcp-server",
+  "description": "Token-auth Notion MCP: pages, databases, blocks, comments, files. Runs headless in CI and agents.",
+  "repository": {
+    "url": "https://github.com/awkoy/notion-mcp-server",
+    "source": "github"
+  },
+  "version": "2.10.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "notion-mcp-server",
+      "version": "2.10.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NOTION_TOKEN",
+          "description": "Notion Personal Access Token (ntn_...) or Internal Integration Secret. Create at https://app.notion.com/developers/tokens",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "NOTION_PAGE_ID",
+          "description": "Optional default parent page ID used by create_page / create_database when no parent is passed.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

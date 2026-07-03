@@ -1,6 +1,7 @@
 {
   "name": "notion-mcp-server",
   "version": "2.10.0",
+  "mcpName": "io.github.awkoy/notion-mcp-server",
   "type": "module",
   "bin": {
     "notion-mcp-server": "build/index.js"

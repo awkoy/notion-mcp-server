@@ -52,6 +52,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          # The io.modelcontextprotocol.server.name label lets the official MCP
+          # registry verify image ownership if we later add an OCI package to
+          # server.json.
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            io.modelcontextprotocol.server.name=io.github.awkoy/notion-mcp-server
           cache-from: type=gha
           cache-to: type=gha,mode=max

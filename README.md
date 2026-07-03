@@ -533,3 +533,7 @@ PRs welcome. Fork → branch → commit → push → PR. Run `npm test` before s
 ## 📄 License
 
 MIT — see [LICENSE](./LICENSE).
+
+---
+
+mcp-name: io.github.awkoy/notion-mcp-server
