@@ -61,7 +61,9 @@ VS Code prompts for the token on install and stores it as a secret input.
 
 ### Claude Desktop
 
-Settings → Developer → Edit Config, then add:
+**Easiest: the one-click extension.** Download [`notion-mcp-server.mcpb` from the latest release](https://github.com/awkoy/notion-mcp-server/releases/latest/download/notion-mcp-server.mcpb), double-click it (or drag into Claude Desktop → Settings → Extensions), paste your Notion token when prompted — done. No config files, Node.js not required.
+
+**Or via the config file:** Settings → Developer → Edit Config, then add:
 
 ```json
 {

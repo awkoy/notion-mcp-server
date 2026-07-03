@@ -1,0 +1,56 @@
+{
+  "manifest_version": "0.2",
+  "name": "notion-mcp-server",
+  "display_name": "Notion MCP Server",
+  "version": "0.0.0",
+  "description": "Connect Claude to Notion: create pages, query databases, append blocks, comment, and upload files.",
+  "long_description": "Token-auth Notion MCP server. 43 operations behind 2 context-efficient tools: pages, databases, blocks, comments, users, files, and templates — with batched mutations, automatic retry on rate limits, and full markdown round-trip. Paste a Notion Personal Access Token (create one at https://app.notion.com/developers/tokens) and everything you can see in Notion, Claude can work with.",
+  "author": {
+    "name": "Yaroslav Boiko",
+    "email": "y.boikodeveloper@gmail.com",
+    "url": "https://github.com/awkoy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/awkoy/notion-mcp-server"
+  },
+  "homepage": "https://github.com/awkoy/notion-mcp-server",
+  "documentation": "https://github.com/awkoy/notion-mcp-server#readme",
+  "license": "MIT",
+  "keywords": ["notion", "notion-api", "productivity", "pages", "databases", "markdown"],
+  "server": {
+    "type": "node",
+    "entry_point": "build/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/build/index.js"],
+      "env": {
+        "NOTION_TOKEN": "${user_config.notion_token}",
+        "NOTION_PAGE_ID": "${user_config.notion_page_id}"
+      }
+    }
+  },
+  "user_config": {
+    "notion_token": {
+      "type": "string",
+      "title": "Notion token",
+      "description": "Personal Access Token (ntn_...) or Internal Integration Secret. Create one at https://app.notion.com/developers/tokens — a PAT sees everything you can see, no per-page sharing needed.",
+      "sensitive": true,
+      "required": true
+    },
+    "notion_page_id": {
+      "type": "string",
+      "title": "Default parent page ID (optional)",
+      "description": "Used by create_page / create_database when no parent is specified. Leave empty to always pass a parent explicitly.",
+      "sensitive": false,
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  }
+}
