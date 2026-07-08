@@ -20,8 +20,22 @@ npm install
 npm run build      # compiles to build/index.js
 ```
 
-Then configure the client to launch that build directly. For Claude Code
-(`~/.claude.json`) or Claude Desktop (`claude_desktop_config.json`):
+Then register it with Claude Code — the `claude mcp add` CLI writes the entry
+into `~/.claude.json` for you (everything after `--` is how to launch the
+server):
+
+```bash
+claude mcp add notion -s user \
+  -e NOTION_TOKEN=ntn_your_token \
+  -e NOTION_RATE_LIMIT=5 \
+  -- node /absolute/path/to/notion-mcp-server/build/index.js
+```
+
+If a `notion` entry already exists, remove it first:
+`claude mcp remove notion -s user`.
+
+Or edit the config file by hand (Claude Code `~/.claude.json`, Claude Desktop
+`claude_desktop_config.json`):
 
 ```jsonc
 "notion": {
@@ -43,6 +57,15 @@ Reconnect the MCP server (in Claude Code: `/mcp reconnect`).
 
 No local checkout to maintain — npm clones the branch and runs the `prepare`
 script (which builds) on install.
+
+```bash
+claude mcp add notion -s user \
+  -e NOTION_TOKEN=ntn_your_token \
+  -e NOTION_RATE_LIMIT=5 \
+  -- npx -y github:qch2012/notion-mcp-server#feat/local-path-source
+```
+
+Or by hand:
 
 ```jsonc
 "notion": {
