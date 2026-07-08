@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename } from "node:path";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
@@ -24,9 +27,26 @@ const SourceSchema = z.discriminatedUnion("type", [
     type: z.literal("url"),
     url: z.url().describe("Public URL to fetch the file bytes from."),
   }),
+  z.object({
+    type: z.literal("path"),
+    path: z
+      .string()
+      .describe(
+        "Local filesystem path (absolute, or ~-relative). The server reads the file directly — bytes never pass through the tool call, so this is the fastest, cheapest source for files on the same machine as the server."
+      ),
+  }),
 ]);
 
 type Source = z.infer<typeof SourceSchema>;
+
+// Expand a leading ~ or ~/ to the current user's home directory. Node's fs
+// does not do this itself, and ~-relative paths are the common shape a caller
+// hands to a local stdio server.
+function expandHome(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return homedir() + p.slice(1);
+  return p;
+}
 
 // Returns Uint8Array<ArrayBuffer> — the DOM Blob constructor's BlobPart type
 // rejects Uint8Array<ArrayBufferLike> under newer @types/node (it widens to
@@ -34,6 +54,12 @@ type Source = z.infer<typeof SourceSchema>;
 async function resolveBytes(source: Source): Promise<Uint8Array<ArrayBuffer>> {
   if (source.type === "base64") {
     const buf = Buffer.from(source.data, "base64");
+    const out = new Uint8Array(buf.byteLength);
+    out.set(buf);
+    return out;
+  }
+  if (source.type === "path") {
+    const buf = await readFile(expandHome(source.path));
     const out = new Uint8Array(buf.byteLength);
     out.set(buf);
     return out;
@@ -115,8 +141,17 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   // Documents
   csv: "text/csv",
   json: "application/json",
+  md: "text/markdown",
+  markdown: "text/markdown",
   pdf: "application/pdf",
   txt: "text/plain",
+  // Microsoft Office
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 
 function inferContentType(filename: string): string | undefined {
@@ -135,7 +170,12 @@ const UploadFileParams = z.object({
     .enum(["single", "multi"])
     .optional()
     .describe("'single' (default) = one create+send call. 'multi' = chunk into 5MB parts then complete."),
-  filename: z.string(),
+  filename: z
+    .string()
+    .optional()
+    .describe(
+      "Required for base64 and url sources. Optional for a path source — defaults to the file's basename."
+    ),
   content_type: z.string().optional(),
   source: SourceSchema,
 });
@@ -145,7 +185,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.",
+    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.",
   batchable: false,
   schema: UploadFileParams,
   example: {
@@ -155,19 +195,36 @@ register({
   },
   handler: tryHandler(async ({ mode, filename, content_type, source }) => {
     const effectiveMode = mode ?? "single";
+    // A path source carries its own name; fall back to the basename when the
+    // caller doesn't pass filename explicitly. base64/url have no name to
+    // derive, so filename stays required there.
+    const effectiveFilename =
+      filename ??
+      (source.type === "path" ? basename(expandHome(source.path)) : undefined);
+    if (!effectiveFilename) {
+      return {
+        ok: false,
+        error: {
+          code: "validation_error",
+          message:
+            "filename is required for base64 and url sources (there is no name to derive).",
+          fix: 'Pass `filename` (e.g. "report.pdf"), or use a path source to derive it from the path.',
+        },
+      };
+    }
     const notion = await getClient();
     const bytes = await resolveBytes(source);
     // Notion rejects send() when the Blob's MIME doesn't match the
     // content_type stored at create(), and rejects application/octet-stream
     // outright. Resolve a single MIME for both sides: caller's content_type
     // wins, else infer from the filename extension.
-    const effectiveType = content_type ?? inferContentType(filename);
+    const effectiveType = content_type ?? inferContentType(effectiveFilename);
     if (!effectiveType) {
       return {
         ok: false,
         error: {
           code: "validation_error",
-          message: `Could not infer content_type from filename "${filename}". Notion's File Upload API rejects application/octet-stream and only accepts a fixed allowlist of MIME types.`,
+          message: `Could not infer content_type from filename "${effectiveFilename}". Notion's File Upload API rejects application/octet-stream and only accepts a fixed allowlist of MIME types.`,
           fix: "Pass `content_type` explicitly (e.g. \"application/pdf\", \"image/png\", \"text/plain\"). See https://developers.notion.com/docs/working-with-files-and-media for the full list.",
         },
       };
@@ -176,13 +233,16 @@ register({
     if (effectiveMode === "single") {
       const createBody: CreateFileUploadBody = {
         mode: "single_part",
-        filename,
+        filename: effectiveFilename,
         content_type: effectiveType,
       };
       const created = await notion.fileUploads.create(createBody);
       const sendBody: SendFileUploadBody = {
         file_upload_id: created.id,
-        file: { filename, data: new Blob([bytes], { type: effectiveType }) },
+        file: {
+          filename: effectiveFilename,
+          data: new Blob([bytes], { type: effectiveType }),
+        },
       };
       const sent = await notion.fileUploads.send(sendBody);
       return { ok: true, data: slimFileUpload(sent) };
@@ -191,7 +251,7 @@ register({
     const parts = splitIntoParts(bytes);
     const createBody: CreateFileUploadBody = {
       mode: "multi_part",
-      filename,
+      filename: effectiveFilename,
       content_type: effectiveType,
       number_of_parts: parts.length,
     };
@@ -201,7 +261,10 @@ register({
       const partNumber = index + 1;
       const sendBody: SendFileUploadBody = {
         file_upload_id: created.id,
-        file: { filename, data: new Blob([part], { type: effectiveType }) },
+        file: {
+          filename: effectiveFilename,
+          data: new Blob([part], { type: effectiveType }),
+        },
         part_number: String(partNumber),
       };
       try {
