@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] — 2026-07-10
+
+### Added
+
+- **`path` source for `upload_file`.** Upload a local file by path — the server reads the bytes directly (`fs.readFile`) instead of receiving them as base64 through the tool call. For a local stdio server the base64 path forces the whole file (≈33% larger encoded) through the MCP client and, in agent setups, the model's output; reading from disk skips that entirely. Use `source: { type: "path", path: "/abs/or/~/file.pdf" }`; a leading `~`/`~/` expands to the home directory. `filename` is now optional for a `path` source (derived from the basename) and stays required for `base64`/`url`. Content-type inference gains Markdown (`.md`, `.markdown`) and Microsoft Office formats (`.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`). Purely additive — `base64` and `url` sources are unchanged. (Thanks @qch2012 — PR #38.)
+
 ## [2.11.0] — 2026-07-03
 
 ### Fixed
