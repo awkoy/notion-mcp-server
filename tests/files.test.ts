@@ -193,6 +193,30 @@ describe("upload_file (single-part)", () => {
     expect(blob.type).toBe("text/plain");
   });
 
+  it.each([
+    ["notes.md", "text/markdown"],
+    ["deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+    ["sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    ["doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  ])("infers content_type for %s", async (filename, expectedType) => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-infer" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-infer",
+      status: "uploaded",
+    });
+
+    await dispatch("upload_file", {
+      filename,
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+      mode: "single_part",
+      filename,
+      content_type: expectedType,
+    });
+  });
+
   it("returns validation_error envelope when content_type is omitted and the extension isn't on the allowlist", async () => {
     const res = await dispatch("upload_file", {
       mode: "single",
@@ -343,6 +367,85 @@ describe("upload_file (URL source)", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// upload_file: local path source
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (path source)", () => {
+  it("reads the file from disk and derives filename from the path basename", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const filePath = join(dir, "report.txt");
+    const payload = Buffer.from("local bytes on disk");
+    await writeFile(filePath, payload);
+
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-path" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-path",
+      status: "uploaded",
+    });
+
+    try {
+      const res = await dispatch("upload_file", {
+        source: { type: "path", path: filePath },
+      });
+
+      expect(res).toMatchObject({ ok: true });
+      // filename derived from basename, content_type inferred from .txt
+      expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+        mode: "single_part",
+        filename: "report.txt",
+        content_type: "text/plain",
+      });
+      expect((await sendBytes(0)).equals(payload)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors an explicit filename over the path basename", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const filePath = join(dir, "tmpname.bin");
+    await writeFile(filePath, Buffer.from("x"));
+
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-path2" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-path2",
+      status: "uploaded",
+    });
+
+    try {
+      await dispatch("upload_file", {
+        filename: "real.txt",
+        source: { type: "path", path: filePath },
+      });
+      expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+        mode: "single_part",
+        filename: "real.txt",
+        content_type: "text/plain",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces the fs error when the path does not exist and makes no SDK calls", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "/no/such/file-xyz.txt" },
+    });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // upload_file: validation error path
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -367,6 +470,17 @@ describe("upload_file (validation)", () => {
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.complete).not.toHaveBeenCalled();
+  });
+
+  it("rejects a base64 source with no filename (nothing to derive) and makes no SDK calls", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain("filename is required");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
   });
 });
 
