@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   BatchResult,
   OperationError,
@@ -542,5 +545,60 @@ describe("get_file_upload", () => {
         content_length: 1234,
       },
     });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_file: NOTION_UPLOAD_ROOT
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (upload root)", () => {
+  const root = mkdtempSync(join(tmpdir(), "notion-root-"));
+  writeFileSync(join(root, "inside.txt"), "in");
+  const outside = mkdtempSync(join(tmpdir(), "notion-out-"));
+  writeFileSync(join(outside, "outside.txt"), "out");
+
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-root", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-root",
+      status: "uploaded",
+      filename: "inside.txt",
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.NOTION_UPLOAD_ROOT;
+  });
+
+  it("takes a relative path inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", { source: { type: "path", path: "inside.txt" } });
+    assertOk(res);
+  });
+
+  it("refuses a path outside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: join(outside, "outside.txt") },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+  });
+
+  it("refuses a traversal out of the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "../../etc/passwd" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+  });
+
+  it("leaves absolute paths alone when no root is set", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: join(outside, "outside.txt") },
+    });
+    assertOk(res);
   });
 });
