@@ -20,13 +20,23 @@ export const EMAIL_PROPERTY_VALUE_SCHEMA = z.object({
 });
 
 export const FILES_PROPERTY_VALUE_SCHEMA = z.object({
+  // A file property value carries no `type` discriminator, unlike a file on a
+  // block or a cover.
   files: z.array(
-    z.object({
-      name: z.string(),
-      external: z.object({
-        url: z.url({ protocol: /^https?$/ }),
+    z.union([
+      z.object({
+        name: z.string(),
+        external: z.object({
+          url: z.url({ protocol: /^https?$/ }),
+        }),
       }),
-    })
+      z.object({
+        name: z.string(),
+        file_upload: z.object({
+          id: z.string().describe("file_upload_id returned by upload_file"),
+        }),
+      }),
+    ])
   ),
 });
 
