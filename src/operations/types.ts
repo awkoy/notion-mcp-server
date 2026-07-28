@@ -44,7 +44,9 @@ export type OperationName =
   | "get_self"
   | "upload_file"
   | "list_file_uploads"
-  | "get_file_upload";
+  | "get_file_upload"
+  | "get_file_url"
+  | "get_image";
 
 export type OperationAccess = "read" | "write";
 
