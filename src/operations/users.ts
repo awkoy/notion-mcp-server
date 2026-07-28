@@ -5,6 +5,7 @@ import { tryHandler } from "../utils/handler.js";
 import { slimUser, slimList } from "../utils/slim.js";
 import { paginateAll } from "../utils/paginate.js";
 import type { OperationResult } from "./types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -81,7 +82,7 @@ register({
 // get_user
 // ──────────────────────────────────────────────────────────────────────────
 
-const GetUserParams = z.object({ user_id: z.string(), verbose: VERBOSE });
+const GetUserParams = z.object({ user_id: notionId(), verbose: VERBOSE });
 
 register({
   name: "get_user",

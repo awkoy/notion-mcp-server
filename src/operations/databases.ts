@@ -18,6 +18,7 @@ import {
   type QueryDataSourceBody,
   type UpdateDatabaseBody,
 } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -332,7 +333,7 @@ function hoistParent(rows: readonly RowWithParent[]): {
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdateDatabaseParams = z.object({
-  database_id: z.string(),
+  database_id: notionId(),
   title: z.string().optional(),
   title_rich: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
   description: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),

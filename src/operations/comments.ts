@@ -6,6 +6,7 @@ import { slimComment, slimList } from "../utils/slim.js";
 import { asSdk, type CreateCommentBody, type UpdateCommentBody } from "../utils/notion-types.js";
 import { paginateAll } from "../utils/paginate.js";
 import type { OperationResult } from "./types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -18,7 +19,7 @@ function plainTextRich(text: string) {
 // ──────────────────────────────────────────────────────────────────────────
 
 const ListCommentsParams = z.object({
-  block_id: z.string().describe("Page or block ID to list comments from."),
+  block_id: notionId().describe("Page or block ID to list comments from."),
   start_cursor: z.string().optional(),
   page_size: z.number().min(1).max(100).optional(),
   paginate: z
@@ -82,7 +83,7 @@ register({
 
 const AddPageCommentParams = z
   .object({
-    page_id: z.string(),
+    page_id: notionId(),
     text: z.string().optional().describe("Plain-text comment body."),
     markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
     verbose: VERBOSE,
@@ -121,7 +122,7 @@ register({
 
 const AddDiscussionCommentParams = z
   .object({
-    discussion_id: z.string(),
+    discussion_id: notionId(),
     text: z.string().optional(),
     markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
     verbose: VERBOSE,
@@ -153,7 +154,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetCommentParams = z.object({
-  comment_id: z.string(),
+  comment_id: notionId(),
   verbose: VERBOSE,
 });
 
@@ -178,7 +179,7 @@ register({
 
 const UpdateCommentParams = z
   .object({
-    comment_id: z.string(),
+    comment_id: notionId(),
     rich_text: z.array(z.unknown()).optional(),
     markdown: z.string().optional(),
     verbose: VERBOSE,
@@ -210,7 +211,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const DeleteCommentParams = z.object({
-  comment_id: z.string(),
+  comment_id: notionId(),
 });
 
 register({

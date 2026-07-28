@@ -10,6 +10,7 @@ import type {
   CreateFileUploadBody,
   SendFileUploadBody,
 } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
 
 // Notion's documented per-part ceiling for multi-part uploads.
 const MAX_PART_BYTES = 5 * 1024 * 1024;
@@ -325,7 +326,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetFileUploadParams = z.object({
-  file_upload_id: z.string(),
+  file_upload_id: notionId(),
   verbose: VERBOSE,
 });
 

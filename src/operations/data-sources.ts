@@ -6,11 +6,12 @@ import { tryHandler } from "../utils/handler.js";
 import { slimDataSource } from "../utils/slim.js";
 import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
 const ListDataSourcesParams = z.object({
-  database_id: z.string().describe("Database ID to list data sources for."),
+  database_id: notionId().describe("Database ID to list data sources for."),
   verbose: VERBOSE,
 });
 
@@ -39,7 +40,7 @@ register({
 });
 
 const GetDataSourceParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   verbose: VERBOSE,
 });
 
@@ -60,7 +61,7 @@ register({
 });
 
 const ListDataSourceTemplatesParams = z.object({
-  data_source_id: z.string().describe("Data source ID to list templates for."),
+  data_source_id: notionId().describe("Data source ID to list templates for."),
   name: z.string().optional().describe("Case-insensitive substring filter on template name."),
   start_cursor: z.string().optional(),
   page_size: z.number().int().min(1).max(100).optional(),
@@ -90,7 +91,7 @@ register({
 });
 
 const UpdateDataSourceParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
   properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
   icon: z.unknown().optional(),
