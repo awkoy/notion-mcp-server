@@ -34,6 +34,7 @@ import {
   URL_PROPERTY_VALUE_SCHEMA,
   VERIFICATION_PROPERTY_VALUE_SCHEMA,
 } from "../schema/page-properties.js";
+import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -74,7 +75,7 @@ const CreatePageParams = z
     title: z.string().optional().describe("Shortcut for setting the title property."),
     properties: z.record(z.string(), PROPERTY_VALUE_SCHEMA).optional(),
     markdown: z.string().optional().describe("Page body as markdown. Parsed server-side."),
-    children: z.array(z.unknown()).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
+    children: z.array(BLOCK_INPUT_SCHEMA).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
     template: z
       .object({
         type: z.enum(["default", "none", "template_id"]).describe("`template_id` to apply a specific template, `default` for the data source's default template, `none` for no template."),
