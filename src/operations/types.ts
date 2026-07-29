@@ -22,6 +22,7 @@ export type OperationName =
   | "create_database"
   | "query_database"
   | "update_database"
+  | "delete_database"
   | "list_data_sources"
   | "get_data_source"
   | "update_data_source"
