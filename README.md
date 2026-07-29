@@ -127,7 +127,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 | **Operations covered** | ~24 endpoints | **43 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
-| **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
+| **Idempotency** | Not documented | ✅ Durable `idempotency_key` receipts survive restarts, deduplicate identical replay, and reject conflicting reuse |
 | **Rate-limit handling** | 429s bubble up | ✅ Token-bucket limiter (3 req/s default) + exponential backoff, honors `Retry-After` |
 | **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default; `verbose: true` opts out |
 | **Database queries** | Raw `properties` bag per row | **Flattened** name → primitive map (all 20+ property types) |
@@ -245,6 +245,9 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | `NOTION_TOKEN` | ✅ | — | PAT (`ntn_…`, recommended) or Internal Integration secret (`secret_…` / `ntn_…`) |
 | `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; ID = last 32 chars) |
 | `NOTION_RATE_LIMIT` | — | `3` | Requests/second for the shared limiter (Notion's documented per-integration limit) |
+| `NOTION_IDEMPOTENCY_STATE_PATH` | — | `~/.notion-mcp-server/idempotency-ledger.json` | Durable keyed-batch receipt ledger |
+| `NOTION_IDEMPOTENCY_TTL_MS` | — | `2592000000` (30 days) | Retention for completed receipts; pending entries are never auto-pruned |
+| `NOTION_IDEMPOTENCY_MAX_ENTRIES` | — | `2048` | Maximum completed receipts retained on disk |
 | `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
 | `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
 | `NOTION_BLOCKED_OPERATIONS` | — | — | Comma-separated blocklist (same vocabulary); wins over the allowlist |
@@ -360,7 +363,7 @@ docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -p 3000:3000 ghcr.
 - **Two-tool surface** — `notion_execute` (do it) + `notion_describe` (learn the shape). The whole API is one schema deep.
 - **Universal batch envelope** — every mutating op accepts `{ items: [...], atomic?, idempotency_key?, concurrency? }` with per-item validation and results.
 - **Atomic batches with best-effort rollback** — `atomic: true` aborts on first failure and archives anything created earlier in the batch.
-- **Idempotency keys** — same `(operation, idempotency_key)` returns the cached result for 5 minutes. Safe to retry on flaky networks.
+- **Durable idempotency receipts** — keyed batches survive process restarts, deduplicate identical replay, reject conflicting key reuse, and block replay while a prior outcome is uncertain.
 - **Rate-limit + retry baked in** — token-bucket limiter (3 req/s default, `NOTION_RATE_LIMIT` to change) with exponential backoff on 429/5xx/timeouts, honoring `Retry-After`.
 - **Self-healing validation errors** — failures return `{ schema, example, fix }` so the model corrects bad payloads in one round-trip.
 - **Markdown everywhere** — `create_page` / `append_blocks` / `update_block` / comment bodies accept a `markdown` string (full GFM: headings 1–4, lists, nested to-dos, blockquotes, fenced code with language detection, images, dividers, inline formatting), plus full round-trip via `get_page_markdown` / `update_page_markdown`.
@@ -388,6 +391,8 @@ Run any operation: `{ operation, payload }`, where payload is a single object or
   "payload": { "page_id": "<page-id>", "title": "Q3 plan" }
 }
 ```
+
+Keyed batches run serially so ledger failure cannot race with later mutations. Responses include an additive `idempotency_receipt`. The on-disk ledger stores request fingerprints and privacy-sanitized results, never raw keys, payload text, titles, URLs, credentials, or tokens. If a prior process stopped after a downstream attempt but before durable completion, replay fails with `idempotency_indeterminate`; reconcile Notion before authorizing a new key.
 
 ```jsonc
 // batch
@@ -522,7 +527,7 @@ claude mcp add notion -s user \
 - Zod 4 payload validation; emits draft-7 JSON Schema with `$defs` deduplication for error envelopes
 - Markdown → Notion blocks via `remark` / `remark-gfm`
 - Bounded-concurrency batch worker (default 3, max 10); shared token-bucket rate limiter; `withRetry` with exponential backoff around every dispatched call
-- In-memory idempotency cache (5-minute TTL, 512 entries)
+- Atomic, lock-protected idempotency ledger (30-day completed-receipt TTL, 2,048 entries by default)
 - Slim shapers per entity type with `verbose: true` opt-out
 - Vitest suite covering the markdown parser, shapers, schema emitter, dispatcher, batch semantics (partial success / atomic rollback / idempotency), access control, and HTTP transport
 

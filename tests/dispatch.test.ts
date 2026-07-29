@@ -146,8 +146,10 @@ describe("dispatch — batch", () => {
       items: [{ value: 200 }],
       idempotency_key: key,
     });
-    // Same cached result is returned and no new side effects ran.
-    expect(second).toEqual(first);
+    expect((first as any).idempotency_receipt.decision).toBe("accepted");
+    expect((second as any).idempotency_receipt.decision).toBe("deduplicated");
+    expect((second as any).summary).toEqual((first as any).summary);
+    expect((second as any).results[0].data.value).toBe(200);
     expect(tracker.created.length).toBe(createdAfterFirst);
   });
 });
