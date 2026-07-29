@@ -35,7 +35,7 @@ const EXECUTE_INPUT = {
   payload: z
     .record(z.string(), z.unknown())
     .describe(
-      "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch."
+      "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch. Keyed batches use durable idempotency receipts."
     ),
 };
 
@@ -50,6 +50,8 @@ Two ways to call:
   • Batch:  { operation: "set_page_title", payload: { items: [{page_id, title}, ...], atomic?: false, idempotency_key?: "...", concurrency?: 3 } }
 
 If the payload is malformed, the error response includes the full schema + a working example so you can correct and retry in one round-trip. Call notion_describe(operation) ahead of time only for complex shapes (query_database filters, batch_mixed_blocks).
+
+For a batch items[] mutation, idempotency_key is durably bound to the operation and canonical payload fingerprint. Identical replay does not invoke the downstream handler again; conflicting key reuse and pending or indeterminate replay fail closed. The response includes an additive idempotency_receipt. Single-operation payloads are not idempotency-protected.
 
 Most responses are slimmed by default. Pass verbose:true inside payload (single) or per-item (batch) to get the raw Notion SDK response.`;
 
