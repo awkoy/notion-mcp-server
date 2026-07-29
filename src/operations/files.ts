@@ -6,7 +6,10 @@ import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { slimFileUpload, slimList } from "../utils/slim.js";
+import { asSdk } from "../utils/notion-types.js";
 import type {
+  AppendBlockBody,
+  AppendBlockChildren,
   CreateFileUploadBody,
   SendFileUploadBody,
 } from "../utils/notion-types.js";
@@ -165,11 +168,33 @@ function inferContentType(filename: string): string | undefined {
 // upload_file
 // ──────────────────────────────────────────────────────────────────────────
 
+// Notion picks the block type from the media kind, and rejects a file_upload
+// in a block whose type does not match the upload's content_type.
+function blockTypeFor(contentType: string): "image" | "video" | "audio" | "pdf" | "file" {
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+  if (contentType.startsWith("audio/")) return "audio";
+  if (contentType === "application/pdf") return "pdf";
+  return "file";
+}
+
+const AttachToSchema = z.object({
+  block_id: z.string().describe("Page or block to append the uploaded file to."),
+  caption: z.string().optional().describe("Caption for the new block."),
+  position: z
+    .enum(["start", "end"])
+    .optional()
+    .describe("Where to append. Defaults to the end."),
+});
+
 const UploadFileParams = z.object({
   mode: z
     .enum(["single", "multi"])
     .optional()
     .describe("'single' (default) = one create+send call. 'multi' = chunk into 5MB parts then complete."),
+  attach_to: AttachToSchema.optional().describe(
+    "Append the file to a page as a block, in the same call. Without this, upload_file returns a file_upload_id and nothing references it."
+  ),
   filename: z
     .string()
     .optional()
@@ -185,7 +210,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.",
+    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.\n\nPass `attach_to: { block_id, caption?, position? }` to append the file to a page in the same call. The block type follows the content type: image, video, audio, pdf, else file.",
   batchable: false,
   schema: UploadFileParams,
   example: {
@@ -193,7 +218,7 @@ register({
     content_type: "application/pdf",
     source: { type: "base64", data: "JVBERi0xLjQK..." },
   },
-  handler: tryHandler(async ({ mode, filename, content_type, source }) => {
+  handler: tryHandler(async ({ mode, filename, content_type, source, attach_to }) => {
     const effectiveMode = mode ?? "single";
     // A path source carries its own name; fall back to the basename when the
     // caller doesn't pass filename explicitly. base64/url have no name to
@@ -230,6 +255,36 @@ register({
       };
     }
 
+    // Both modes end the same way: slim the upload, and append a block for it
+    // when the caller asked for one.
+    const finish = async (uploaded: { id: string }) => {
+      const data = slimFileUpload(uploaded as Parameters<typeof slimFileUpload>[0]);
+      if (!attach_to) return { ok: true as const, data };
+      const kind = blockTypeFor(effectiveType);
+      const block = {
+        object: "block",
+        type: kind,
+        [kind]: {
+          type: "file_upload",
+          file_upload: { id: uploaded.id },
+          ...(attach_to.caption
+            ? { caption: [{ type: "text", text: { content: attach_to.caption } }] }
+            : {}),
+        },
+      };
+      const appended = await notion.blocks.children.append(
+        asSdk<AppendBlockBody>({
+          block_id: attach_to.block_id,
+          children: asSdk<AppendBlockChildren>([block]),
+          ...(attach_to.position ? { position: { type: attach_to.position } } : {}),
+        })
+      );
+      return {
+        ok: true as const,
+        data: { ...data, block_id: appended.results[0]?.id, block_type: kind },
+      };
+    };
+
     if (effectiveMode === "single") {
       const createBody: CreateFileUploadBody = {
         mode: "single_part",
@@ -245,7 +300,7 @@ register({
         },
       };
       const sent = await notion.fileUploads.send(sendBody);
-      return { ok: true, data: slimFileUpload(sent) };
+      return finish(sent);
     }
 
     const parts = splitIntoParts(bytes);
@@ -283,7 +338,7 @@ register({
     const completed = await notion.fileUploads.complete({
       file_upload_id: created.id,
     });
-    return { ok: true, data: slimFileUpload(completed) };
+    return finish(completed);
   }),
 });
 

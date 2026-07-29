@@ -57,6 +57,11 @@ const notionStub = {
     retrieve: vi.fn<(args: FileUploadIdArg) => Promise<FileUploadShape>>(),
     list: vi.fn<(args: ListArgs) => Promise<ListShape>>(),
   },
+  blocks: {
+    children: {
+      append: vi.fn<(args: any) => Promise<{ results: { id: string }[] }>>(),
+    },
+  },
 };
 
 vi.mock("../src/services/notion.js", () => ({
@@ -72,6 +77,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   for (const fn of Object.values(notionStub.fileUploads)) fn.mockReset();
+  notionStub.blocks.children.append.mockReset();
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -542,5 +548,55 @@ describe("get_file_upload", () => {
         content_length: 1234,
       },
     });
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_file: attach_to
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (attach_to)", () => {
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-att", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-att",
+      status: "uploaded",
+      filename: "a.png",
+      content_type: "image/png",
+    });
+    notionStub.blocks.children.append.mockResolvedValue({ results: [{ id: "blk-1" }] });
+  });
+
+  const source = { type: "base64", data: Buffer.from("x").toString("base64") };
+
+  it("appends nothing when attach_to is absent", async () => {
+    const res = await dispatch("upload_file", { filename: "a.png", source });
+    assertOk(res);
+    expect(notionStub.blocks.children.append).not.toHaveBeenCalled();
+  });
+
+  it("appends an image block and returns its id", async () => {
+    const res = await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: { block_id: "page-1", caption: "from disk" },
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({ block_id: "blk-1", block_type: "image" });
+
+    const body = notionStub.blocks.children.append.mock.calls[0][0];
+    expect(body.block_id).toBe("page-1");
+    expect(body.children[0].image.file_upload).toEqual({ id: "fu-att" });
+    expect(body.children[0].image.caption[0].text.content).toBe("from disk");
+  });
+
+  it("picks the block type from the content type", async () => {
+    await dispatch("upload_file", {
+      filename: "a.pdf",
+      content_type: "application/pdf",
+      source,
+      attach_to: { block_id: "page-1" },
+    });
+    expect(notionStub.blocks.children.append.mock.calls[0][0].children[0].type).toBe("pdf");
   });
 });
