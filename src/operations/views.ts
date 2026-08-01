@@ -15,6 +15,7 @@ import {
   type GetViewQueryResultsBody,
   type DeleteViewQueryBody,
 } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 // Hydration fans out one pages.retrieve / views.retrieve per id. The dispatch
@@ -149,7 +150,7 @@ function compileViewFilter(
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetViewParams = z.object({
-  view_id: z.string().describe("View ID to retrieve."),
+  view_id: notionId().describe("View ID to retrieve."),
   verbose: VERBOSE,
 });
 
@@ -175,8 +176,8 @@ register({
 
 const ListViewsParams = z
   .object({
-    database_id: z.string().optional().describe("List views under this database."),
-    data_source_id: z.string().optional().describe("List views under this data source."),
+    database_id: notionId().optional().describe("List views under this database."),
+    data_source_id: notionId().optional().describe("List views under this data source."),
     start_cursor: z.string().optional(),
     page_size: z.number().min(1).max(100).optional(),
     hydrate: z
@@ -232,7 +233,7 @@ const DEFAULT_ITEM_LIMIT = 1000;
 const MAX_ITEM_LIMIT = 1000;
 
 const QueryViewParams = z.object({
-  view_id: z.string().describe("View ID. Executes the view's stored filters/sorts server-side."),
+  view_id: notionId().describe("View ID. Executes the view's stored filters/sorts server-side."),
   page_size: z.number().min(1).max(MAX_PAGE_SIZE).optional(),
   paginate: z.boolean().optional().describe("Walk all result pages, up to page_limit rows."),
   page_limit: z
@@ -367,7 +368,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const CreateViewParams = z.object({
-  data_source_id: z.string().optional(),
+  data_source_id: notionId().optional(),
   database_id: z
     .string()
     .optional()
@@ -449,7 +450,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdateViewParams = z.object({
-  view_id: z.string(),
+  view_id: notionId(),
   name: z.string().optional(),
   where: WHERE_SCHEMA.optional().describe(
     "Replace the view filter (typed DSL). Mutually exclusive with `filter`."
@@ -495,7 +496,7 @@ register({
 // delete_view
 // ──────────────────────────────────────────────────────────────────────────
 
-const DeleteViewParams = z.object({ view_id: z.string() });
+const DeleteViewParams = z.object({ view_id: notionId() });
 
 register({
   name: "delete_view",
