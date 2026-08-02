@@ -24,14 +24,19 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Ensure npm supports the release-age cooldown
-        # min-release-age in .npmrc is silently ignored by npm < 11.10.0.
-        run: npm install -g npm@latest
-
       - name: Install dependencies
+        # `npm ci` (not `npm install`): install exactly what package-lock.json
+        # says. `npm install` re-resolves and rewrites the lock in place, so CI
+        # was testing a tree that could differ from the reviewed lockfile — and
+        # a Dependabot bump could be silently undone by the resolver before a
+        # single test ran.
+        #
         # --ignore-scripts blocks dependency lifecycle scripts, the primary npm
         # malware vector. Nothing legitimate in our tree needs install scripts.
-        run: npm install --ignore-scripts --no-audit --no-fund
+        #
+        # No npm upgrade step here any more: min-release-age in .npmrc gates
+        # resolution, and `npm ci` does not resolve.
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Audit production dependencies
         # Fail the build on a high/critical advisory in a shipped (runtime) dep.

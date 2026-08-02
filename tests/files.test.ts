@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -600,5 +600,51 @@ describe("upload_file (upload root)", () => {
       source: { type: "path", path: join(outside, "outside.txt") },
     });
     assertOk(res);
+  });
+
+  // A prefix check on the lexical path is not confinement: resolve() never
+  // touches the filesystem, so a symlink sitting inside the root passes the
+  // check and then open() follows it straight out of the root.
+  it("refuses a symlink inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(outside, "outside.txt"), join(root, "escape.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a symlinked directory inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(outside, join(root, "escape-dir"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape-dir/outside.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("still follows a symlink that stays inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(root, "inside.txt"), join(root, "link-inside.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "link-inside.txt" },
+    });
+    assertOk(res);
+  });
+
+  // A path that does not exist cannot be a symlink, so the confinement check
+  // must fall through to a plain ENOENT rather than a resolution error.
+  it("reports a missing in-root file as a normal fs error", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "nope.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).not.toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 });
