@@ -299,7 +299,7 @@ Operation access: 20/44 enabled (allow=read; block=(none))
 | --- | --- | --- |
 | `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
 | `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
-| `databases` | `query_database` | `create_database` `update_database` |
+| `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
 | `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` |
 | `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
 | `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
@@ -308,7 +308,7 @@ Operation access: 20/44 enabled (allow=read; block=(none))
 
 † = also in the `destructive` group.
 
-**Limitations** (control is per-operation, not per-parameter): a few *write* ops can remove content via a parameter — `update_database` / `update_data_source` accept `in_trash`, and `update_page_markdown` can replace a page body. Blocking `destructive` does **not** disable those. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP *prompts* may still mention disabled operations, but execution is rejected.
+**Limitations** (control is per-operation, not per-parameter): a few *write* ops can remove content via a parameter — `update_data_source` accepts `in_trash`, and `update_page_markdown` can replace a page body. Blocking `destructive` does **not** disable those. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP *prompts* may still mention disabled operations, but execution is rejected.
 
 </details>
 
@@ -433,7 +433,7 @@ Returns the JSON Schema + working example for one operation — useful before co
 | --- | --- |
 | **Pages** | `create_page`, `get_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page` (alias: `trash_page`), `restore_page`, `search_pages`, `move_page`, `get_page_markdown`, `update_page_markdown` |
 | **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
-| **Databases** | `create_database`, `query_database`, `update_database` |
+| **Databases** | `create_database`, `query_database`, `update_database`, `delete_database` |
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `list_data_source_templates` |
 | **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |

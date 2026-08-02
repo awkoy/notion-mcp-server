@@ -820,11 +820,11 @@ describe("archive_page / restore_page use in_trash", () => {
   });
 });
 
-describe("update_database in_trash handling", () => {
+describe("delete_database in_trash handling", () => {
   it("forwards in_trash when caller passes in_trash", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", { database_id: "db-1", in_trash: true });
+    await dispatch("delete_database", { database_id: "db-1", in_trash: true });
     const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call.in_trash).toBe(true);
     expect(call).not.toHaveProperty("archived");
@@ -833,7 +833,7 @@ describe("update_database in_trash handling", () => {
   it("forwards in_trash when caller passes legacy archived", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", { database_id: "db-1", archived: true });
+    await dispatch("delete_database", { database_id: "db-1", archived: true });
     const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call.in_trash).toBe(true);
     expect(call).not.toHaveProperty("archived");
@@ -842,7 +842,7 @@ describe("update_database in_trash handling", () => {
   it("prefers in_trash when both are passed", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", {
+    await dispatch("delete_database", {
       database_id: "db-1",
       in_trash: false,
       archived: true,
