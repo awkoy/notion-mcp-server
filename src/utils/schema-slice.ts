@@ -66,6 +66,15 @@ export function sliceJsonSchema(
           }
         }
       }
+      // A record schema (z.record) carries its value schema under
+      // additionalProperties and has no `properties` at all. A page property
+      // map is one, so a path like ["properties","Tags"] ends here otherwise,
+      // and the caller gets the whole property-value union back.
+      const additional = asObject(cur.additionalProperties);
+      if (additional) {
+        cur = additional;
+        continue;
+      }
       return cur;
     }
     if (typeof seg === "number") {
@@ -121,6 +130,16 @@ export function summarizeSchema(
       summarizedProps[k] = summarizeSchema(v, depth - 1, allDefs);
     }
     const out: JsonSchema = { ...resolved, properties: summarizedProps };
+    delete (out as { $defs?: unknown }).$defs;
+    return out;
+  }
+
+  const additional = asObject(resolved.additionalProperties);
+  if (additional) {
+    const out: JsonSchema = {
+      ...resolved,
+      additionalProperties: summarizeSchema(additional, depth - 1, allDefs),
+    };
     delete (out as { $defs?: unknown }).$defs;
     return out;
   }
