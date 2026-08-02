@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **`NOTION_UPLOAD_ROOT` no longer escapable through a symlink.** The confinement check compared lexically resolved paths, and `path.resolve` never touches the filesystem — so a symlink sitting inside the root and pointing outside it passed the prefix check, and `readFile` then followed it and uploaded the outside file. Both sides of the comparison are now resolved with `fs.realpath` before the prefix test, so the check sees where the path actually lands. A symlink that stays inside the root still works; a path that does not exist yet still fails with a plain `ENOENT` rather than a confinement error. Only affects setups that set `NOTION_UPLOAD_ROOT` — behavior with it unset is unchanged.
+
+### Added
+
+- **`NOTION_UPLOAD_ROOT` is documented.** It shipped in 2.12.0 without a README entry; it now appears in the environment-variable table.
+
+### Changed
+
+- **CI installs from the lockfile.** The `Install dependencies` step now runs `npm ci` instead of `npm install`. `npm install` re-resolves the dependency graph and rewrites `package-lock.json` in place, so CI could test a tree that differed from the reviewed lockfile, and a Dependabot pin could be undone by the resolver before a single test ran. The separate `npm install -g npm@latest` step is gone with it: `min-release-age` in `.npmrc` gates resolution, and `npm ci` does not resolve.
+
 ## [2.12.0] — 2026-07-10
 
 ### Added
