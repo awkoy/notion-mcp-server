@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CI installs from the lockfile.** The `Install dependencies` step now runs `npm ci` instead of `npm install`. `npm install` re-resolves the dependency graph and rewrites `package-lock.json` in place, so CI could test a tree that differed from the reviewed lockfile, and a Dependabot pin could be undone by the resolver before a single test ran. The separate `npm install -g npm@latest` step is gone with it: `min-release-age` in `.npmrc` gates resolution, and `npm ci` does not resolve.
+- **Every workflow installs from the lockfile.** `ci.yml`, `publish-npm.yml` and `publish-mcpb.yml` now run `npm ci` instead of `npm install`. `npm install` re-resolves the dependency graph and rewrites `package-lock.json` in place, so CI could test — and the release workflows could build and publish — a tree that differed from the reviewed lockfile, and a Dependabot pin could be undone by the resolver before a single test ran. `publish-npm.yml`'s note that `npm ci` rejected the lockfile over missing Linux-only optional native deps is stale: the committed lock carries them. In `ci.yml` the separate `npm install -g npm@latest` step is gone with it (`min-release-age` in `.npmrc` gates resolution, and `npm ci` does not resolve); `publish-npm.yml` keeps it for Trusted Publishing / OIDC provenance.
 
 ## [2.12.0] — 2026-07-10
 
