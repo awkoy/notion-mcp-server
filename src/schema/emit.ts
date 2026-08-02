@@ -47,6 +47,14 @@ function hoistSharedRefs(root: JsonSchema): JsonSchema {
       usedNames.add(match);
       return { $ref: `#/$defs/${match}` };
     }
+    return walkChildren(obj);
+  }
+
+  // Walk into a node without testing the node itself for a shared-ref match.
+  // A definition body is the one place that must not become a $ref: matching
+  // there emits `$defs.parent = {$ref: "#/$defs/parent"}`, which resolves to
+  // itself and hides the shape it exists to publish.
+  function walkChildren(obj: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) out[k] = walk(v);
     return out;
@@ -56,8 +64,10 @@ function hoistSharedRefs(root: JsonSchema): JsonSchema {
   if (usedNames.size === 0) return walked;
 
   const defs: Record<string, unknown> = walked.$defs ?? {};
+  // usedNames grows if one definition body references another. A for-of over a
+  // Set visits entries added during iteration, so those get bodies too.
   for (const name of usedNames) {
-    if (!(name in defs)) defs[name] = walk(sharedSchemas[name]);
+    if (!(name in defs)) defs[name] = walkChildren(sharedSchemas[name]);
   }
   return { ...walked, $defs: defs };
 }

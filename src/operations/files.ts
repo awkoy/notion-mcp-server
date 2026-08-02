@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
@@ -48,6 +48,31 @@ function expandHome(p: string): string {
   return p;
 }
 
+/**
+ * Confine a path source to NOTION_UPLOAD_ROOT when it is set.
+ *
+ * A path source hands the server a filename and the server reads it, so
+ * whoever writes the tool call can read any file the server user can. Callers
+ * that want the model to upload only from one directory set the root, and a
+ * relative path then resolves inside it.
+ *
+ * Unset means no confinement, which is the behavior before this existed.
+ */
+function resolveUploadPath(p: string): string {
+  const root = process.env.NOTION_UPLOAD_ROOT;
+  if (!root) return expandHome(p);
+
+  const base = resolve(expandHome(root));
+  const target = resolve(base, expandHome(p));
+  const withSep = base.endsWith(sep) ? base : base + sep;
+  if (target !== base && !target.startsWith(withSep)) {
+    throw new Error(
+      `Path is outside NOTION_UPLOAD_ROOT: ${p}. Uploads are confined to ${base}.`
+    );
+  }
+  return target;
+}
+
 // Returns Uint8Array<ArrayBuffer> — the DOM Blob constructor's BlobPart type
 // rejects Uint8Array<ArrayBufferLike> under newer @types/node (it widens to
 // include SharedArrayBuffer). Allocating fresh guarantees the concrete type.
@@ -59,7 +84,7 @@ async function resolveBytes(source: Source): Promise<Uint8Array<ArrayBuffer>> {
     return out;
   }
   if (source.type === "path") {
-    const buf = await readFile(expandHome(source.path));
+    const buf = await readFile(resolveUploadPath(source.path));
     const out = new Uint8Array(buf.byteLength);
     out.set(buf);
     return out;
@@ -200,7 +225,7 @@ register({
     // derive, so filename stays required there.
     const effectiveFilename =
       filename ??
-      (source.type === "path" ? basename(expandHome(source.path)) : undefined);
+      (source.type === "path" ? basename(resolveUploadPath(source.path)) : undefined);
     if (!effectiveFilename) {
       return {
         ok: false,
