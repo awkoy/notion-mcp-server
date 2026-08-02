@@ -12,6 +12,7 @@ import {
   type AppendBlockChildren,
   type UpdateBlockBody,
 } from "../utils/notion-types.js";
+import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -23,7 +24,7 @@ const AppendBlocksParams = z
   .object({
     block_id: z.string().describe("Parent page ID or block ID to append into."),
     markdown: z.string().optional().describe("Content to append, as markdown. Parsed server-side."),
-    children: z.array(z.unknown()).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
+    children: z.array(BLOCK_INPUT_SCHEMA).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
     after: z.string().optional().describe("Append immediately after this block ID (legacy ordering)."),
     position: z.enum(["start", "end"]).optional().describe("Append at start or end. Preferred over `after`."),
     verbose: VERBOSE,
@@ -298,7 +299,7 @@ const MixedOp = z.discriminatedUnion("op", [
     op: z.literal("append"),
     block_id: z.string(),
     markdown: z.string().optional(),
-    children: z.array(z.unknown()).optional(),
+    children: z.array(BLOCK_INPUT_SCHEMA).optional(),
   }),
   z.object({
     op: z.literal("update"),
