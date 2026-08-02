@@ -10,6 +10,8 @@ import type {
   CreateFileUploadBody,
   SendFileUploadBody,
 } from "../utils/notion-types.js";
+import { FILE_REF_PREFIX, blockFileRef, parseFileRef } from "../utils/file-ref.js";
+import type { OperationError } from "./types.js";
 
 // Notion's documented per-part ceiling for multi-part uploads.
 const MAX_PART_BYTES = 5 * 1024 * 1024;
@@ -372,5 +374,147 @@ register({
     const notion = await getClient();
     const response = await notion.fileUploads.retrieve({ file_upload_id });
     return { ok: true, data: slimFileUpload(response, verbose ?? false) };
+  }),
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// get_file_url / get_image
+// ──────────────────────────────────────────────────────────────────────────
+
+// Pull the file url out of whichever media block this is. Notion keys the body
+// by block type, and every media type carries the same {type, file|external}
+// shape underneath.
+function urlFromBlock(block: unknown): string | undefined {
+  const b = block as { type?: string } & Record<string, unknown>;
+  if (!b?.type) return undefined;
+  const body = b[b.type] as
+    | { type?: string; file?: { url?: string }; external?: { url?: string } }
+    | undefined;
+  if (!body) return undefined;
+  return body.file?.url ?? body.external?.url;
+}
+
+async function resolveFileRef(
+  ref: string
+): Promise<{ url: string } | OperationError> {
+  const parsed = parseFileRef(ref);
+  if (!parsed) {
+    return {
+      code: "validation_error",
+      message: `Not a file ref: "${ref}".`,
+      fix: `A ref looks like "${FILE_REF_PREFIX}block/<block-id>" or "${FILE_REF_PREFIX}page/<page-id>/<property>/<index>". Read one from a block or a files property with NOTION_FILE_URLS=ref.`,
+    };
+  }
+  const notion = await getClient();
+
+  if (parsed.kind === "block") {
+    const block = await notion.blocks.retrieve({ block_id: parsed.blockId });
+    const url = urlFromBlock(block);
+    if (!url) {
+      return {
+        code: "not_found",
+        message: `Block ${parsed.blockId} carries no file.`,
+        fix: "Point the ref at an image, video, audio, pdf or file block.",
+      };
+    }
+    return { url };
+  }
+
+  const page = await notion.pages.retrieve({ page_id: parsed.pageId });
+  const props = (page as { properties?: Record<string, unknown> }).properties;
+  const prop = props?.[parsed.property] as
+    | { type?: string; files?: { file?: { url?: string }; external?: { url?: string } }[] }
+    | undefined;
+  const entry = prop?.files?.[parsed.index];
+  const url = entry?.file?.url ?? entry?.external?.url;
+  if (!url) {
+    return {
+      code: "not_found",
+      message: `Page ${parsed.pageId} has no file at ${parsed.property}[${parsed.index}].`,
+      fix: "Re-read the page: a files property changes index when an entry is removed.",
+    };
+  }
+  return { url };
+}
+
+const FileRefParams = z.object({
+  ref: z.string().describe(`A ref emitted under NOTION_FILE_URLS=ref, e.g. "${FILE_REF_PREFIX}block/<block-id>".`),
+});
+
+register({
+  name: "get_file_url",
+  access: "read",
+  domain: "files",
+  description:
+    "Turn a notion-file: ref into a fresh signed URL. Nothing is cached: the ref names its source object, so this re-reads it. The URL expires in about an hour.",
+  batchable: true,
+  schema: FileRefParams,
+  example: { ref: `${FILE_REF_PREFIX}block/<block-id>` },
+  handler: tryHandler(async ({ ref }) => {
+    const resolved = await resolveFileRef(ref);
+    if ("code" in resolved) return { ok: false, error: resolved };
+    return { ok: true, data: { ref, url: resolved.url } };
+  }),
+});
+
+// 5 MB of base64 is roughly 6.7 MB on the wire and far past what a model reads
+// usefully. Refuse rather than blow up the response.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+register({
+  name: "get_image",
+  access: "read",
+  domain: "files",
+  description:
+    "Fetch an image and return it as image content, so the model can see it. Takes a notion-file: ref, a block id, or a URL. Every other operation returns text only.",
+  batchable: false,
+  schema: z.object({
+    ref: z
+      .string()
+      .describe("A notion-file: ref, a block id, or a direct image URL."),
+  }),
+  example: { ref: `${FILE_REF_PREFIX}block/<block-id>` },
+  handler: tryHandler(async ({ ref }) => {
+    let url: string;
+    if (/^https?:\/\//i.test(ref)) {
+      url = ref;
+    } else {
+      const asRef = ref.startsWith(FILE_REF_PREFIX) ? ref : blockFileRef(ref);
+      const resolved = await resolveFileRef(asRef);
+      if ("code" in resolved) return { ok: false, error: resolved };
+      url = resolved.url;
+    }
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "fetch_failed",
+          message: `Could not fetch the image: ${res.status} ${res.statusText}.`,
+          fix: "A signed URL expires in about an hour. Call get_file_url again for a fresh one.",
+        },
+      };
+    }
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      return {
+        ok: false,
+        error: {
+          code: "too_large",
+          message: `Image is ${bytes.length} bytes, over the ${MAX_IMAGE_BYTES} byte limit.`,
+          fix: "Use get_file_url and fetch it outside the tool call.",
+        },
+      };
+    }
+    const mimeType = res.headers.get("content-type")?.split(";")[0] ?? "image/png";
+    // _mcp_content leaves the JSON envelope and becomes MCP content blocks in
+    // the tool layer. Nothing else in this server returns non-text content.
+    return {
+      ok: true,
+      data: {
+        _mcp_content: [{ type: "image", data: bytes.toString("base64"), mimeType }],
+      },
+    };
   }),
 });
