@@ -1,5 +1,7 @@
 # Notion MCP Server — Connect Claude, Cursor & VS Code to Notion
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.awkoy%2Fnotion-mcp-server.svg)](https://mcptoplist.com/server/io.github.awkoy%2Fnotion-mcp-server)
+
 [![npm version](https://img.shields.io/npm/v/notion-mcp-server)](https://www.npmjs.com/package/notion-mcp-server)
 ![NPM Downloads](https://img.shields.io/npm/dw/notion-mcp-server)
 ![License](https://img.shields.io/badge/license-MIT-green)
