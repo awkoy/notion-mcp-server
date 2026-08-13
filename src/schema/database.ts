@@ -315,6 +315,7 @@ export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
 });
 
 // Combined database property schema
+// Allows null for property deletion (Notion API: set property to null to delete it)
 export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
   preprocessJson,
   z
@@ -342,6 +343,7 @@ export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
       UNIQUE_ID_DB_PROPERTY_SCHEMA,
       VERIFICATION_DB_PROPERTY_SCHEMA,
     ])
-    .describe("Union of all possible database property types")
+    .nullable()
+    .describe("Union of all possible database property types. Set to null to delete.")
 );
 
