@@ -1,6 +1,10 @@
 # MCP Catalog submission
 
-Staged files for submitting this server to the [Docker MCP Catalog](https://hub.docker.com/mcp).
+Files for the [Docker MCP Catalog](https://hub.docker.com/mcp) submission.
+
+Status: submitted as [docker/mcp-registry#4227](https://github.com/docker/mcp-registry/pull/4227)
+(slug `notion-mcp-awkoy`), awaiting review. Bump the `commit` in `server.yaml` on that PR when a
+release you want Docker to build from lands.
 
 The `notion` slug in `docker/mcp-registry` is taken by the official Notion MCP server
 (`makenotion/notion-mcp-server`). This submission uses the slug `notion-mcp-awkoy` to
