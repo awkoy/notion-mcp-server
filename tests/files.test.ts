@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   BatchResult,
   OperationError,
@@ -552,51 +555,102 @@ describe("get_file_upload", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// upload_file: attach_to
+// upload_file: NOTION_UPLOAD_ROOT
 // ──────────────────────────────────────────────────────────────────────────
 
-describe("upload_file (attach_to)", () => {
+describe("upload_file (upload root)", () => {
+  const root = mkdtempSync(join(tmpdir(), "notion-root-"));
+  writeFileSync(join(root, "inside.txt"), "in");
+  const outside = mkdtempSync(join(tmpdir(), "notion-out-"));
+  writeFileSync(join(outside, "outside.txt"), "out");
+
   beforeEach(() => {
-    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-att", status: "pending" });
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-root", status: "pending" });
     notionStub.fileUploads.send.mockResolvedValue({
-      id: "fu-att",
+      id: "fu-root",
       status: "uploaded",
-      filename: "a.png",
-      content_type: "image/png",
+      filename: "inside.txt",
     });
-    notionStub.blocks.children.append.mockResolvedValue({ results: [{ id: "blk-1" }] });
   });
 
-  const source = { type: "base64", data: Buffer.from("x").toString("base64") };
+  afterEach(() => {
+    delete process.env.NOTION_UPLOAD_ROOT;
+  });
 
-  it("appends nothing when attach_to is absent", async () => {
-    const res = await dispatch("upload_file", { filename: "a.png", source });
+  it("takes a relative path inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", { source: { type: "path", path: "inside.txt" } });
     assertOk(res);
-    expect(notionStub.blocks.children.append).not.toHaveBeenCalled();
   });
 
-  it("appends an image block and returns its id", async () => {
+  it("refuses a path outside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
     const res = await dispatch("upload_file", {
-      filename: "a.png",
-      source,
-      attach_to: { block_id: "page-1", caption: "from disk" },
+      source: { type: "path", path: join(outside, "outside.txt") },
     });
-    assertOk(res);
-    expect(res.data).toMatchObject({ block_id: "blk-1", block_type: "image" });
-
-    const body = notionStub.blocks.children.append.mock.calls[0][0];
-    expect(body.block_id).toBe("page-1");
-    expect(body.children[0].image.file_upload).toEqual({ id: "fu-att" });
-    expect(body.children[0].image.caption[0].text.content).toBe("from disk");
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
   });
 
-  it("picks the block type from the content type", async () => {
-    await dispatch("upload_file", {
-      filename: "a.pdf",
-      content_type: "application/pdf",
-      source,
-      attach_to: { block_id: "page-1" },
+  it("refuses a traversal out of the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "../../etc/passwd" },
     });
-    expect(notionStub.blocks.children.append.mock.calls[0][0].children[0].type).toBe("pdf");
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+  });
+
+  it("leaves absolute paths alone when no root is set", async () => {
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: join(outside, "outside.txt") },
+    });
+    assertOk(res);
+  });
+
+  // A prefix check on the lexical path is not confinement: resolve() never
+  // touches the filesystem, so a symlink sitting inside the root passes the
+  // check and then open() follows it straight out of the root.
+  it("refuses a symlink inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(outside, "outside.txt"), join(root, "escape.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a symlinked directory inside the root that points outside it", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(outside, join(root, "escape-dir"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "escape-dir/outside.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("still follows a symlink that stays inside the root", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(root, "inside.txt"), join(root, "link-inside.txt"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "link-inside.txt" },
+    });
+    assertOk(res);
+  });
+
+  // A path that does not exist cannot be a symlink, so the confinement check
+  // must fall through to a plain ENOENT rather than a resolution error.
+  it("reports a missing in-root file as a normal fs error", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "nope.txt" },
+    });
+    assertErr(res);
+    expect(res.error.message).not.toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 });

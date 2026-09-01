@@ -34,6 +34,8 @@ import {
   URL_PROPERTY_VALUE_SCHEMA,
   VERIFICATION_PROPERTY_VALUE_SCHEMA,
 } from "../schema/page-properties.js";
+import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
+import { normalizeNotionId, notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -60,7 +62,7 @@ function resolveParent(
 ): z.infer<typeof PARENT_SCHEMA> | undefined {
   if (parent) return parent;
   const envId = process.env.NOTION_PAGE_ID;
-  if (envId) return { type: "page_id", page_id: envId };
+  if (envId) return { type: "page_id", page_id: normalizeNotionId(envId) };
   return undefined;
 }
 
@@ -74,11 +76,11 @@ const CreatePageParams = z
     title: z.string().optional().describe("Shortcut for setting the title property."),
     properties: z.record(z.string(), PROPERTY_VALUE_SCHEMA).optional(),
     markdown: z.string().optional().describe("Page body as markdown. Parsed server-side."),
-    children: z.array(z.unknown()).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
+    children: z.array(BLOCK_INPUT_SCHEMA).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
     template: z
       .object({
         type: z.enum(["default", "none", "template_id"]).describe("`template_id` to apply a specific template, `default` for the data source's default template, `none` for no template."),
-        template_id: z.string().optional().describe("Required when type is 'template_id'. Discover IDs via list_data_source_templates."),
+        template_id: notionId().optional().describe("Required when type is 'template_id'. Discover IDs via list_data_source_templates."),
         timezone: z.string().optional().describe("IANA tz (e.g. 'Asia/Hong_Kong') controlling @now/@today resolution inside the template."),
       })
       .optional()
@@ -167,7 +169,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const SetPageTitleParams = z.object({
-  page_id: z.string(),
+  page_id: notionId(),
   title: z.string(),
   verbose: VERBOSE,
 });
@@ -222,7 +224,7 @@ function wrapTitleShorthand(input: unknown): unknown {
 const SetPagePropertyParams = z.preprocess(
   wrapTitleShorthand,
   z.object({
-    page_id: z.string(),
+    page_id: notionId(),
     name: z.string().describe("Property name (case-sensitive). Use `title` for the title property; you may pass value as a plain string in that case."),
     value: PROPERTY_VALUE_SCHEMA.describe(
       "Property value object matching the property type, e.g. {checkbox: true}, {select: {name: 'Open'}}. For `name: 'title'` a plain string is accepted as a shorthand."
@@ -281,7 +283,7 @@ function wrapTitleShorthandInProperties(input: unknown): unknown {
 const SetPagePropertiesParams = z.preprocess(
   wrapTitleShorthandInProperties,
   z.object({
-    page_id: z.string(),
+    page_id: notionId(),
     properties: z
       .record(z.string(), PROPERTY_VALUE_SCHEMA)
       .describe(
@@ -331,7 +333,7 @@ register({
 // archive_page / restore_page
 // ──────────────────────────────────────────────────────────────────────────
 
-const PageIdParams = z.object({ page_id: z.string(), verbose: VERBOSE });
+const PageIdParams = z.object({ page_id: notionId(), verbose: VERBOSE });
 
 const archivePageHandler = tryHandler(async ({ page_id, verbose }: z.infer<typeof PageIdParams>) => {
   const notion = await getClient();
@@ -458,7 +460,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetPageParams = z.object({
-  page_id: z.string(),
+  page_id: notionId(),
   include_properties: z
     .boolean()
     .optional()
@@ -492,7 +494,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const MovePageParams = z.object({
-  page_id: z.string(),
+  page_id: notionId(),
   parent: PARENT_SCHEMA.describe("New parent (page_id or data_source_id). Same shape as create_page's `parent`."),
   verbose: VERBOSE,
 });
@@ -541,7 +543,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetPageMarkdownParams = z.object({
-  page_id: z.string(),
+  page_id: notionId(),
 });
 
 register({
@@ -564,12 +566,12 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdatePageMarkdownParams = z.object({
-  page_id: z.string(),
+  page_id: notionId(),
   markdown: z.string().describe("Markdown content. Replaces the existing body by default; with insert_content it is inserted instead."),
   insert_content: z
     .object({
       position: z.enum(["start", "end"]).describe("Insert at start or end of the page."),
-      after: z.string().optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
+      after: notionId("block").optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
     })
     .optional(),
   allow_deleting_content: z

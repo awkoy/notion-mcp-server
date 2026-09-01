@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { notionId } from "./id.js";
 
 export const TEMPLATE_MENTION_USER_REQUEST_SCHEMA = z
   .object({
@@ -41,8 +42,7 @@ export const USER_MENTION_REQUEST_SCHEMA = z
     type: z.literal("user").describe("Specifies this is a user mention type"),
     user: z
       .object({
-        id: z
-          .string()
+        id: notionId()
           .describe("The unique ID that identifies this specific user"),
         object: z
           .literal("user")
@@ -58,8 +58,7 @@ export const PAGE_MENTION_REQUEST_SCHEMA = z
     type: z.literal("page").describe("Specifies this is a page mention type"),
     page: z
       .object({
-        id: z
-          .string()
+        id: notionId()
           .describe("The unique ID that identifies this specific page"),
       })
       .describe("Contains the page reference information"),
@@ -73,8 +72,7 @@ export const DATABASE_MENTION_REQUEST_SCHEMA = z
       .describe("Specifies this is a database mention type"),
     database: z
       .object({
-        id: z
-          .string()
+        id: notionId()
           .describe("The unique ID that identifies this specific database"),
       })
       .describe("Contains the database reference information"),
