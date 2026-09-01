@@ -565,7 +565,7 @@ claude mcp add notion -s user \
 <details>
 <summary><b>Technical details: how it's built</b></summary>
 
-- TypeScript + MCP SDK (`^1.29.0`); stdio + Streamable HTTP transports
+- TypeScript + MCP TypeScript SDK v2 (`@modelcontextprotocol/server` + `@modelcontextprotocol/node` 2.0.0); stdio + Streamable HTTP transports
 - Notion SDK `@notionhq/client@^5.22.0`, pinned `Notion-Version: 2026-03-11`
 - Zod 4 payload validation; emits draft-7 JSON Schema with `$defs` deduplication for error envelopes
 - Markdown → Notion blocks via `remark` / `remark-gfm`

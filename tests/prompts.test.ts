@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
 
 // Drive prompts/list and prompts/get through the in-memory transport pair —
 // same pattern as tests/wrapper.test.ts, so we exercise the real MCP wire

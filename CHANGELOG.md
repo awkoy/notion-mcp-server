@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **MCP TypeScript SDK v2.** The server now builds on the split SDK 2.0 packages — `@modelcontextprotocol/server` `2.0.0` (`McpServer`, resources, prompts, the stdio transport) and `@modelcontextprotocol/node` `2.0.0` (`NodeStreamableHTTPServerTransport` for the HTTP transport) — replacing the monolithic `@modelcontextprotocol/sdk` `1.30.0`; the tests drive it through `@modelcontextprotocol/client` `2.0.0`. Nothing changes for clients: the same protocol versions are negotiated (`2024-11-05` through `2025-11-25`; a `2026-07-28` client is still answered with `2025-11-25`), and `serverInfo`, capabilities, the two tools, three resources, four prompts, every HTTP status on `/mcp` and `/health` (sessions, `401`/`403` bearer auth, `403` Host/Origin rebinding checks, `415`, `406`), and every environment variable are identical — verified by replaying the same handshake against both builds. Two details in `tools/list` differ: `inputSchema.$schema` is now JSON Schema 2020-12 (zod 4's native emitter) instead of draft-07, and `execution: { "taskSupport": "forbidden" }` is no longer emitted (absent means the same thing). Tool and prompt argument schemas are wrapped in `z.object()`, since v2 deprecates raw shapes. The production dependency tree shrinks from 167 to 84 packages — `express`, `express-rate-limit`, `ip-address`, `ajv`, `cors`, `jose`, `pkce-challenge` and friends were SDK 1.x transitives and are gone; `hono` stays as a peer of `@modelcontextprotocol/node`, and `@hono/node-server` moves back from `2.0.12` to `1.19.17` because that package pins `^1.19.9` (upstream modelcontextprotocol/typescript-sdk#2548) — `npm audit --omit=dev` stays clean. Node `>=20` and ESM were already required. The transport's `enableDnsRebindingProtection` / `allowedHosts` / `allowedOrigins` options are kept although v2 marks them deprecated: the replacement `hostHeaderValidation()` / `originValidation()` guards match hostnames only, which would change what `MCP_ALLOWED_HOSTS` / `MCP_ALLOWED_ORIGINS` accept.
+
 ## [2.13.0] — 2026-08-02
 
 ### Added
