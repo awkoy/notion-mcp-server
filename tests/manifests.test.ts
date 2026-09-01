@@ -61,4 +61,30 @@ describe("server instructions", () => {
       configureOperationAccess();
     }
   });
+
+  it("say that destructive operations prompt when NOTION_CONFIRM_DESTRUCTIVE is on, and still fit", () => {
+    const prevConfirm = process.env.NOTION_CONFIRM_DESTRUCTIVE;
+    const prevBlock = process.env.NOTION_BLOCKED_OPERATIONS;
+    process.env.NOTION_CONFIRM_DESTRUCTIVE = "true";
+    // Worst case for the byte budget: the restricted-surface line and the
+    // confirmation line both present.
+    process.env.NOTION_BLOCKED_OPERATIONS = "delete_view";
+    configureOperationAccess();
+    try {
+      const text = buildInstructions();
+      expect(text).toContain("ask the user to confirm");
+      expect(text).toContain("confirmation_declined");
+      expect(text).toMatch(/do not retry/i);
+      expect(text).toMatch(/Only \d+ of \d+ operations are enabled here/);
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(2000);
+      expect(text).not.toMatch(/^[ \t]|\n[ \t]+\S/);
+    } finally {
+      if (prevConfirm === undefined) delete process.env.NOTION_CONFIRM_DESTRUCTIVE;
+      else process.env.NOTION_CONFIRM_DESTRUCTIVE = prevConfirm;
+      if (prevBlock === undefined) delete process.env.NOTION_BLOCKED_OPERATIONS;
+      else process.env.NOTION_BLOCKED_OPERATIONS = prevBlock;
+      configureOperationAccess();
+    }
+    expect(buildInstructions()).not.toContain("confirmation_declined");
+  });
 });

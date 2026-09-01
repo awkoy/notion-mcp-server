@@ -21,11 +21,14 @@ import { attachLogServer, log, setProcessLogServer } from "../utils/log.js";
  * workflow. tests/manifests.test.ts keeps it under that limit.
  */
 export function buildInstructions(): string {
-  const { enabled, total, readOnly } = accessSummary();
+  const { enabled, total, readOnly, confirmDestructive } = accessSummary();
   const scope =
     enabled < total
       ? `\n\nOnly ${enabled} of ${total} operations are enabled here${readOnly ? " (read-only mode)" : ""}; the rest return operation_not_allowed. The notion://operations resource lists what works.`
       : "";
+  const confirm = confirmDestructive
+    ? `\n\nDestructive operations ask the user to confirm before running; a confirmation_declined error means the user said no, so do not retry the call — ask what they want instead.`
+    : "";
   return `Notion MCP server. notion_execute(operation, payload) runs one named operation; notion_describe(operation) returns its JSON Schema and a working example; the notion://operations resource lists every operation with a one-line summary.
 
 How to work:
@@ -35,7 +38,7 @@ How to work:
 - A database has one or more data sources. query_database resolves single-source databases itself; to create a page in a database use parent { type: "data_source_id", data_source_id } from search results (data_sources[].id) or list_data_sources.
 - Batchable operations take payload { items: [...], atomic?, concurrency?, idempotency_key? } and run in one call with per-item results.
 - Errors carry code, message and fix plus the slice of the schema you got wrong: correct and retry. Call notion_describe first only for complex shapes (query filters, property definitions, block trees).
-- Archive and delete operations cannot be undone through the API; confirm with the user before running them.` + scope;
+- Archive and delete operations cannot be undone through the API; confirm with the user before running them.` + scope + confirm;
 }
 
 export function createServer(): McpServer {
@@ -70,7 +73,7 @@ export function createServer(): McpServer {
 export function logAccessSummary(): void {
   const s = accessSummary();
   log.info(
-    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block}${s.readOnly ? "; read-only" : ""})`
+    `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block}${s.readOnly ? "; read-only" : ""}${s.confirmDestructive ? "; confirm-destructive" : ""})`
   );
 }
 

@@ -12,6 +12,7 @@ import {
 import { dispatch } from "../dispatch/index.js";
 import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
+import { confirmDestructiveCall } from "./confirm.js";
 import { log } from "../utils/log.js";
 
 // An operation that returns non-text content puts MCP content blocks under
@@ -85,6 +86,11 @@ export function registerAllTools(server: McpServer): void {
       },
     },
     async ({ operation, payload }, ctx): Promise<CallToolResult> => {
+      // With NOTION_CONFIRM_DESTRUCTIVE on, a destructive call first asks the
+      // user through elicitation; a "no" (or a client that cannot ask) comes
+      // back as an error envelope and nothing is dispatched.
+      const denied = await confirmDestructiveCall(server, ctx, operation, payload);
+      if (denied) return errorContent({ ok: false, error: denied });
       const started = performance.now();
       const result = await dispatch(operation, payload);
       const items = "summary" in result ? result.summary.total : undefined;
