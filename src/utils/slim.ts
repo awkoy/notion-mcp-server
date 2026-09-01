@@ -23,6 +23,8 @@ import type {
   UserObjectResponse,
 } from "@notionhq/client";
 
+import { blockFileRef, propertyFileRef, fileRefsEnabled } from "./file-ref.js";
+
 export type PageResponse = PageObjectResponse | PartialPageObjectResponse;
 export type BlockResponse = BlockObjectResponse | PartialBlockObjectResponse;
 export type DatabaseResponse =
@@ -54,8 +56,11 @@ function extractTitle(
 // Flatten a single Notion property to a primitive (or small object) the LLM
 // can read directly. Returns undefined for empty values so the caller can skip
 // them — keeps the response tight for sparsely populated rows.
+type FileRefContext = { pageId: string; property: string };
+
 function flattenProperty(
-  prop: PageObjectResponse["properties"][string]
+  prop: PageObjectResponse["properties"][string],
+  ctx?: FileRefContext
 ): unknown {
   switch (prop.type) {
     case "title":
@@ -79,9 +84,15 @@ function flattenProperty(
       return prop.people.length ? prop.people.map((p) => p.id) : undefined;
     case "files":
       return prop.files.length
-        ? prop.files.map((f) => {
+        ? prop.files.map((f, i) => {
             if (f.type === "external") return { name: f.name, url: f.external.url };
-            return { name: f.name, url: f.file.url };
+            // A Notion-hosted file gets a ref when refs are on. An external
+            // url is already short and stable, so it passes through either way.
+            const url =
+              fileRefsEnabled() && ctx
+                ? propertyFileRef(ctx.pageId, ctx.property, i)
+                : f.file.url;
+            return { name: f.name, url };
           })
         : undefined;
     case "checkbox":
@@ -138,13 +149,14 @@ function flattenProperty(
 }
 
 function flattenProperties(
-  properties: PageObjectResponse["properties"]
+  properties: PageObjectResponse["properties"],
+  pageId: string
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(properties)) {
     // Skip the title prop — already surfaced as `title`.
     if (value.type === "title") continue;
-    const flat = flattenProperty(value);
+    const flat = flattenProperty(value, { pageId, property: name });
     if (flat !== undefined) out[name] = flat;
   }
   return out;
@@ -166,7 +178,7 @@ export function slimPage(
     ...(page.icon ? { icon: page.icon.type } : {}),
   };
   if (!includeProperties) return base;
-  const props = flattenProperties(page.properties);
+  const props = flattenProperties(page.properties, page.id);
   return Object.keys(props).length ? { ...base, properties: props } : base;
 }
 
@@ -190,7 +202,12 @@ export function slimBlock(block: BlockResponse, verbose = false) {
   }
   if (block.type === "image") {
     const img = block.image;
-    const url = img.type === "external" ? img.external.url : img.file.url;
+    const url =
+      img.type === "external"
+        ? img.external.url
+        : fileRefsEnabled()
+          ? blockFileRef(block.id)
+          : img.file.url;
     return { ...base, image: url };
   }
   return base;

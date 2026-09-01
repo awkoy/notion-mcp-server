@@ -89,13 +89,36 @@ register({
   }),
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// update_data_source / delete_data_source
+// ──────────────────────────────────────────────────────────────────────────
+
 const UpdateDataSourceParams = z.object({
   data_source_id: z.string(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
   properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
   icon: z.unknown().optional(),
-  archived: z.boolean().optional().describe("Deprecated alias for in_trash (removed on the 2026-03-11 surface). Routed to in_trash."),
-  in_trash: z.boolean().optional(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Not accepted here — trashing is destructive and lives on delete_data_source (in_trash:false restores). Rejected here so the split is explicit."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash`; not accepted here either. Call delete_data_source instead."),
+  verbose: VERBOSE,
+});
+
+const DeleteDataSourceParams = z.object({
+  data_source_id: z.string(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Default true. Pass false to restore a data source from trash."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash` (removed on the 2026-03-11 surface). Routed to `in_trash`."),
   verbose: VERBOSE,
 });
 
@@ -103,28 +126,68 @@ register({
   name: "update_data_source",
   access: "write",
   domain: "data_sources",
-  description: "Update a data source's schema (properties, title, icon). For database-level metadata use update_database.",
+  description: "Update a data source's schema (properties, title, icon). For database-level metadata use update_database. To trash or restore a data source use delete_data_source.",
   batchable: true,
   schema: UpdateDataSourceParams,
   example: {
     data_source_id: "<data-source-id>",
     properties: {
-      Status: { type: "status", status: { options: [] } },
+      // The API cannot create `status` property schemas; use select/multi_select.
+      Priority: {
+        type: "select",
+        select: { options: [{ name: "High", color: "red" }, { name: "Low", color: "gray" }] },
+      },
     },
   },
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
+    // Kept in the schema (rather than dropped) so a stale caller gets an error
+    // pointing at delete_data_source instead of a silent no-op: z.object strips
+    // unknown keys, so an absent field would make `{ in_trash: true }` succeed
+    // with the data source untouched.
+    if (in_trash !== undefined || archived !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "trash_moved",
+          message: "in_trash / archived are no longer accepted on update_data_source — trashing is a destructive operation and lives on delete_data_source.",
+          fix: "Call delete_data_source with the same data_source_id. It trashes by default; pass in_trash:false to restore.",
+        },
+      };
+    }
     const notion = await getClient();
-    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
-    // into `in_trash` so we never send a field the API rejects.
-    const trash = in_trash ?? archived;
     const body = {
       data_source_id,
       ...(title !== undefined ? { title } : {}),
       ...(properties !== undefined ? { properties } : {}),
       ...(icon !== undefined ? { icon } : {}),
-      ...(trash !== undefined ? { in_trash: trash } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
+    return { ok: true, data: slimDataSource(response, verbose ?? false) };
+  }),
+});
+
+register({
+  name: "delete_data_source",
+  access: "write",
+  domain: "data_sources",
+  destructive: true,
+  description: "Move a data source to trash, with every page in it. Reversible: pass in_trash:false to restore. To trash the whole database use delete_database.",
+  batchable: true,
+  schema: DeleteDataSourceParams,
+  example: { data_source_id: "<data-source-id>" },
+  exampleBatch: {
+    items: [{ data_source_id: "<data-source-id-1>" }, { data_source_id: "<data-source-id-2>" }],
+  },
+  handler: tryHandler(async ({ data_source_id, in_trash, archived, verbose }) => {
+    const notion = await getClient();
+    // `archived` was removed on the 2026-03-11 surface; route the legacy alias
+    // into `in_trash` so we never send a field the API rejects.
+    const response = await notion.dataSources.update(
+      asSdk<UpdateDataSourceBody>({
+        data_source_id,
+        in_trash: in_trash ?? archived ?? true,
+      })
+    );
     return { ok: true, data: slimDataSource(response, verbose ?? false) };
   }),
 });

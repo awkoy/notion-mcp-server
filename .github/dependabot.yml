@@ -22,8 +22,14 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Docker base image — bumps the pinned node:22-alpine digest in a reviewed PR.
+  # Docker base image — bumps the pinned node:24-alpine digest in a reviewed PR.
+  # Major bumps are ignored on purpose: odd Node majors (25, 27, ...) are
+  # 6-month non-LTS lines, so the next move is 24 -> 26 by hand once 26 enters
+  # LTS (October 2026). Digest refreshes within 24-alpine still flow through.
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

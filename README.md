@@ -103,8 +103,9 @@ Your AI calls `notion_execute` and replies with a live page link.
 - *"Rewrite that spec page: fix the headings and add a code sample."* — full markdown round-trip (`get_page_markdown` → edit → `update_page_markdown`)
 - *"Comment on yesterday's meeting notes with a one-paragraph summary."*
 - *"Upload this diagram to the design page."* — single- and multi-part file uploads
+- *"Look at the screenshot on that bug report and tell me what's wrong."* — `get_image` hands the model the picture itself
 
-Full capability list in [Features](#-features-what-this-notion-mcp-server-does); the complete operation catalog (43 ops) is in the [Operations menu](#operations-menu-43-ops-plus-one-alias).
+Full capability list in [Features](#-features-what-this-notion-mcp-server-does); the complete operation catalog (47 ops) is in the [Operations menu](#operations-menu-47-ops-plus-one-alias).
 
 ## 🧭 Which Notion MCP should you use?
 
@@ -124,7 +125,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 | Capability | Official Notion MCP (open source) | **This server** |
 | --- | --- | --- |
 | **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **2 tools**, 422 tokens — [97% less schema at connection](./benchmarks) |
-| **Operations covered** | ~24 endpoints | **43 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
+| **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
 | **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
@@ -141,7 +142,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 **Real-world impact:**
 
 - **Renaming 50 pages** — one `notion_execute` call with `{ items: [...], concurrency: 10 }` instead of 50 separate tool calls through the agent's reasoning loop: roughly an order of magnitude faster, and the prompt-token savings are the bigger win.
-- **Tool list in context** — 2 schema blobs per conversation instead of ~24, no matter which of the 43 operations get called.
+- **Tool list in context** — 2 schema blobs per conversation instead of ~24, no matter which of the 47 operations get called.
 - **Reading a 100-row database** — flattened rows are typically **5–10× fewer tokens** than the raw `properties` bag, with no information loss.
 
 </details>
@@ -248,7 +249,8 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
 | `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
 | `NOTION_BLOCKED_OPERATIONS` | — | — | Comma-separated blocklist (same vocabulary); wins over the allowlist |
-| `NOTION_UPLOAD_ROOT` | — | — | Confine `upload_file`'s `path` source to one directory. Unset, a `path` source can read any file the server process can — set this if a model composes the path. Relative paths resolve inside it; symlinks are resolved before the check, so they can't point out |
+| `NOTION_UPLOAD_ROOT` | — | — | Confine `upload_file`'s `path` source to one directory. Unset, a `path` source can read any file the server process can — set this if a model composes the path. Relative paths resolve inside it; symlinks are resolved before the check, so they can't point out — see [Files](#files) |
+| `NOTION_FILE_URLS` | — | `full` | `ref` replaces Notion's signed file URLs (~1,650 chars, valid for an hour) in slim responses with short `notion-file:` refs that `get_file_url` / `get_image` resolve on demand — see [Files](#files) |
 | `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Route Notion API traffic through an HTTP(S) proxy (standard env vars, lowercase also accepted) |
 | `NOTION_DAILY_LOG_PAGE_ID` | — | — | Only used by the daily-log MCP prompt |
 
@@ -290,7 +292,7 @@ Mix presets and individual ops:
 On startup the server logs one line to stderr summarizing what resolved — check it first if the config doesn't behave as expected:
 
 ```text
-Operation access: 20/44 enabled (allow=read; block=(none))
+Operation access: 22/48 enabled (allow=read; block=(none))
 ```
 
 <details>
@@ -300,18 +302,38 @@ Operation access: 20/44 enabled (allow=read; block=(none))
 | --- | --- | --- |
 | `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
 | `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
-| `databases` | `query_database` | `create_database` `update_database` |
-| `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` |
+| `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
+| `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |
 | `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
 | `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
 | `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
-| `files` | `list_file_uploads` `get_file_upload` | `upload_file` |
+| `files` | `list_file_uploads` `get_file_upload` `get_file_url` `get_image` | `upload_file` |
 
 † = also in the `destructive` group.
 
-**Limitations** (control is per-operation, not per-parameter): a few *write* ops can remove content via a parameter — `update_database` / `update_data_source` accept `in_trash`, and `update_page_markdown` can replace a page body. Blocking `destructive` does **not** disable those. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP *prompts* may still mention disabled operations, but execution is rejected.
+**Limitations** (control is per-operation, not per-parameter): `update_page_markdown` is a *write* op that can replace a page body, and blocking `destructive` does **not** disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP *prompts* may still mention disabled operations, but execution is rejected.
 
 </details>
+
+### Files
+
+**Uploads.** `upload_file` takes its bytes as `base64`, a public `url`, or a local `path` the server reads directly. A `path` source can read any file the server process can, so when a model composes the path set `NOTION_UPLOAD_ROOT` to confine it: relative paths resolve inside the root, and symlinks are resolved before the check so they cannot point out of it.
+
+**File URLs.** Notion mints a fresh signed S3 URL for every hosted file on every read — about 1,650 characters (~500 tokens), valid for an hour, different each time, and easy for a small model to mangle. `NOTION_FILE_URLS=ref` replaces them in the slim responses (`get_page`, `search_pages`, `query_database`, `query_view`, `get_block`, `get_block_children`, …) with short, stable refs:
+
+| Ref | Names |
+| --- | --- |
+| `notion-file:block/<block-id>` | The file in an image block |
+| `notion-file:page/<page-id>/<property>/<index>` | One entry of a page's `files` property (property name URL-encoded) |
+
+Two read operations turn a ref back into content. Both re-read the object through the Notion API, so a ref stays valid for as long as the file does:
+
+| Operation | Payload | Returns |
+| --- | --- | --- |
+| `get_file_url` | `{ ref }` | `{ ref, url }` — a fresh signed URL, good for about an hour |
+| `get_image` | `{ ref }` (a ref, or a bare image-block id) | The image itself as MCP image content, so the model can look at it. Only `image/*` responses up to 5 MB; anything else is a tool error |
+
+`get_image` fetches only the URL Notion returned for a Notion-hosted file, never a URL supplied by the caller — so it cannot be steered at a LAN, a cloud metadata endpoint, or an exfil host. External URLs (linked images, `external` files) are short and stable already: they pass through untouched in either mode, and `get_image` returns them as text rather than fetching them. `get_page_markdown` is Notion's own rendered markdown and is not rewritten. The default, `full`, leaves every response as before.
 
 ## 🌐 Remote / HTTP transport
 
@@ -370,13 +392,14 @@ docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -p 3000:3000 ghcr.
 - **Typed `where` filter shorthand** — `query_database` takes `{Status: {equals: "Done"}, AND: [...]}` and compiles it to Notion filter JSON (raw `filter` still accepted for edge cases).
 - **Slim responses + flattened rows** — noisy fields dropped by default, `query_database` rows flattened to name → primitive maps, compact JSON wire format (~30% smaller). `verbose: true` opts out per call.
 - **File uploads** — single-part and multi-part (5 MB chunks) transparently; MIME inferred from filename.
+- **Short file refs + image reads** — `NOTION_FILE_URLS=ref` swaps Notion's ~500-token signed file URLs for `notion-file:` refs; `get_file_url` mints a fresh URL and `get_image` returns the picture as MCP image content. See [Files](#files).
 - **Opt-in auto-pagination** — `paginate: true` on `search_pages` / `list_comments` / `query_database` walks `next_cursor` for you (default cap ≈ 1000 items).
 - **HTTP(S) proxy support** — standard `HTTPS_PROXY` / `HTTP_PROXY` env vars for corporate networks.
 - **Access control** — `NOTION_READ_ONLY` one-switch read-only mode plus per-operation allow/block lists.
 
 ## 📚 MCP tools (`notion_execute` & `notion_describe`)
 
-The server exposes exactly **two** MCP tools — your client loads two schemas regardless of which of the 43 operations gets called.
+The server exposes exactly **two** MCP tools — your client loads two schemas regardless of which of the 47 operations gets called.
 
 ### `notion_execute`
 
@@ -428,18 +451,18 @@ Returns the JSON Schema + working example for one operation — useful before co
 { "operation": "query_database" }
 ```
 
-### Operations menu (43 ops, plus one alias)
+### Operations menu (47 ops, plus one alias)
 
 | Area | Operations |
 | --- | --- |
 | **Pages** | `create_page`, `get_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page` (alias: `trash_page`), `restore_page`, `search_pages`, `move_page`, `get_page_markdown`, `update_page_markdown` |
 | **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
-| **Databases** | `create_database`, `query_database`, `update_database` |
-| **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `list_data_source_templates` |
+| **Databases** | `create_database`, `query_database`, `update_database`, `delete_database` |
+| **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `delete_data_source`, `list_data_source_templates` |
 | **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
 | **Users** | `list_users`, `get_user`, `get_bot_user`, `get_self` |
-| **Files** | `upload_file`, `list_file_uploads`, `get_file_upload` |
+| **Files** | `upload_file`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
 
 The authoritative list (with batchability) is served as an MCP resource at `notion://operations`.
 
@@ -480,7 +503,7 @@ See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/to
 
 ### What's the difference between this and Notion's official MCP?
 
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless. Their **open-source** server is soft-deprecated and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 43 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
+Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless. Their **open-source** server is soft-deprecated and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
 
 ### Can I use it with Cursor, VS Code, ChatGPT, or Cline?
 
