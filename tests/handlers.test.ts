@@ -66,7 +66,7 @@ describe("query_database", () => {
   it("auto-resolves a single-source database via databases.retrieve", async () => {
     notionStub.databases.retrieve.mockImplementation(async (args) => {
       calls.push({ method: "databases.retrieve", args });
-      return { object: "database", id: "db-1", data_sources: [{ id: "ds-only", name: "S" }] };
+      return { object: "database", title: [], id: "db-1", data_sources: [{ id: "ds-only", name: "S" }] };
     });
     notionStub.dataSources.query.mockImplementation(async (args) => {
       calls.push({ method: "dataSources.query", args });
@@ -85,7 +85,7 @@ describe("query_database", () => {
 
   it("returns multi_source_database envelope with available IDs in fix", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-2",
       data_sources: [{ id: "ds-a", name: "A" }, { id: "ds-b", name: "B" }],
     });
@@ -283,7 +283,7 @@ describe("query_database", () => {
 describe("list_data_sources", () => {
   it("returns slim summary by default", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-1",
       data_sources: [
         { id: "ds-1", name: "Source A" },
@@ -306,7 +306,7 @@ describe("list_data_sources", () => {
 
   it("returns the raw data_sources field when verbose=true", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-1",
       data_sources: [{ id: "ds-1", name: "A", extra: "raw" }],
     });
