@@ -1,0 +1,25 @@
+{
+  "name": "notion-mcp-server",
+  "version": "2.13.0",
+  "description": "Token-auth Notion MCP server: pages, databases, blocks, comments, files and templates behind two context-efficient tools, with batched writes and markdown round-trip.",
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "notion-mcp-server@latest"]
+    }
+  },
+  "settings": [
+    {
+      "name": "Notion token",
+      "description": "Personal Access Token (ntn_...) or Internal Integration Secret. Create one at https://app.notion.com/developers/tokens",
+      "envVar": "NOTION_TOKEN",
+      "sensitive": true
+    },
+    {
+      "name": "Default parent page ID (optional)",
+      "description": "Used by create_page / create_database when no parent is given. Leave empty to always pass a parent explicitly.",
+      "envVar": "NOTION_PAGE_ID",
+      "sensitive": false
+    }
+  ]
+}

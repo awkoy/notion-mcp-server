@@ -4,7 +4,6 @@
 ![NPM Downloads](https://img.shields.io/npm/dw/notion-mcp-server)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Model Context Protocol](https://img.shields.io/badge/MCP-Streamable_HTTP_+_stdio-purple)
-[![notion-mcp-server on Smithery](https://smithery.ai/badge/@awkoy/notion-mcp-server)](https://smithery.ai/server/@awkoy/notion-mcp-server)
 ![Stars](https://img.shields.io/github/stars/awkoy/notion-mcp-server)
 
 Give your AI full read/write access to Notion with **one token and one paste**. This is an agent-first **Notion MCP server**: your AI client (Claude Code, Claude Desktop, Cursor, VS Code, Cline, Zed — anything that speaks MCP) can create pages, query databases, append blocks, apply templates, comment, and upload files in natural language.
@@ -58,6 +57,14 @@ Click the badge (then replace `YOUR_NOTION_TOKEN` in the generated entry), or ad
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Notion_MCP-0098FF?logo=githubcopilot)](https://insiders.vscode.dev/redirect/mcp/install?name=notion&inputs=%5B%7B%22id%22%3A%22notion_token%22%2C%22type%22%3A%22promptString%22%2C%22description%22%3A%22Notion%20Personal%20Access%20Token%20(ntn_...)%22%2C%22password%22%3Atrue%7D%5D&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22notion-mcp-server%22%5D%2C%22env%22%3A%7B%22NOTION_TOKEN%22%3A%22%24%7Binput%3Anotion_token%7D%22%7D%7D)
 
 VS Code prompts for the token on install and stores it as a secret input.
+
+### Gemini CLI
+
+```bash
+gemini extensions install https://github.com/awkoy/notion-mcp-server
+```
+
+The repo ships a `gemini-extension.json`, so Gemini CLI installs it as an extension: it asks for your Notion token once (kept in your system keychain) and starts the server with `npx`.
 
 ### Claude Desktop
 
@@ -244,7 +251,7 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | Env var | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `NOTION_TOKEN` | ✅ | — | PAT (`ntn_…`, recommended) or Internal Integration secret (`secret_…` / `ntn_…`) |
-| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; ID = last 32 chars) |
+| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; the whole URL or the bare 32-char id both work) |
 | `NOTION_RATE_LIMIT` | — | `3` | Requests/second for the shared limiter (Notion's documented per-integration limit) |
 | `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
 | `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
@@ -413,6 +420,8 @@ Run any operation: `{ operation, payload }`, where payload is a single object or
 }
 ```
 
+Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accepts a Notion URL — paste what **Share → Copy link** gives you and the server extracts the id. A block link's `#fragment` is used for `block_id` fields and a database link's `?v=` for `view_id` fields.
+
 ```jsonc
 // batch
 {
@@ -437,6 +446,17 @@ Run any operation: `{ operation, payload }`, where payload is a single object or
     "parent": { "type": "page_id", "page_id": "<parent>" },
     "title": "Notes",
     "markdown": "# Heading\n\n- [ ] todo\n- [x] done\n\n```ts\nconst x = 1;\n```"
+  }
+}
+```
+
+```jsonc
+// upload a file and place it on a page in one call
+{
+  "operation": "upload_file",
+  "payload": {
+    "source": { "type": "path", "path": "~/Desktop/chart.png" },
+    "attach_to": { "block_id": "<page-or-block-id>", "caption": "Q3 revenue" }
   }
 }
 ```
@@ -516,6 +536,10 @@ The token lives in your MCP client's local config and is only sent to `api.notio
 ### Does it work with self-hosted or local-only LLMs?
 
 Yes — anything that speaks MCP stdio (or Streamable HTTP) works. The server doesn't care what's on the other side of the protocol.
+
+## 🔒 Privacy
+
+The server runs on your machine or your own host and talks only to `api.notion.com`, over HTTPS, with the token you configure. There is no telemetry, no analytics, and no server of ours in the path: nothing you read or write in Notion goes anywhere else. The token stays where your MCP client keeps it (its config file, or a keychain / secret store for clients that have one). With `HTTPS_PROXY` set, traffic goes through your proxy instead. `get_image` fetches only the signed URLs Notion returns for files it hosts, never a URL supplied by the model, and `upload_file` reads a local file only when asked to, inside `NOTION_UPLOAD_ROOT` when that is set. Notion's own handling of your data is covered by [Notion's privacy policy](https://www.notion.com/privacy).
 
 ## 🛠 Development
 

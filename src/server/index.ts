@@ -13,6 +13,30 @@ import { accessSummary } from "../operations/access.js";
  * it populates the global operation registry that the tools read from; this factory
  * only wires the server's tools/resources/prompts and never re-registers operations.
  */
+/**
+ * Shown to the model by every client at connect time. Claude Code and Cursor
+ * load only the tool names plus this text until a tool is actually needed,
+ * and Claude Code truncates it at 2 KB, so this is the one place to teach the
+ * workflow. tests/manifests.test.ts keeps it under that limit.
+ */
+export function buildInstructions(): string {
+  const { enabled, total, readOnly } = accessSummary();
+  const scope =
+    enabled < total
+      ? `\n\nOnly ${enabled} of ${total} operations are enabled here${readOnly ? " (read-only mode)" : ""}; the rest return operation_not_allowed. The notion://operations resource lists what works.`
+      : "";
+  return `Notion MCP server. notion_execute(operation, payload) runs one named operation; notion_describe(operation) returns its JSON Schema and a working example; the notion://operations resource lists every operation with a one-line summary.
+
+How to work:
+- Find things with search_pages (title search across pages and databases) or query_database. Results are slimmed to id, title, url and a few fields. Every id field also accepts a Notion URL, so paste links as-is.
+- Read a page with get_page_markdown for prose, or get_page with include_properties:true for a database row's fields.
+- Write prose as markdown: create_page and append_blocks take a \`markdown\` field (GFM: headings, lists, checkboxes, tables, code). Use raw \`children\` blocks only for what markdown cannot express.
+- A database has one or more data sources. query_database resolves single-source databases itself; to create a page in a database use parent { type: "data_source_id", data_source_id } from search results (data_sources[].id) or list_data_sources.
+- Batchable operations take payload { items: [...], atomic?, concurrency?, idempotency_key? } and run in one call with per-item results.
+- Errors carry code, message and fix plus the slice of the schema you got wrong: correct and retry. Call notion_describe first only for complex shapes (query filters, property definitions, block trees).
+- Archive and delete operations cannot be undone through the API; confirm with the user before running them.` + scope;
+}
+
 export function createServer(): McpServer {
   const server = new McpServer(
     {
@@ -27,10 +51,7 @@ export function createServer(): McpServer {
         prompts: {},
         resources: {},
       },
-      instructions: `
-      MCP server for Notion.
-      It is used to create, update and delete Notion entities.
-    `,
+      instructions: buildInstructions(),
     }
   );
 

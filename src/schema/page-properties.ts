@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { notionId } from "./id.js";
 import {
   RICH_TEXT_ITEM_REQUEST_SCHEMA,
   TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA,
@@ -59,7 +60,7 @@ export const PEOPLE_PROPERTY_VALUE_SCHEMA = z.object({
   people: z.array(
     z.object({
       object: z.literal("user"),
-      id: z.string(),
+      id: notionId(),
     })
   ),
 });
@@ -71,7 +72,7 @@ export const PHONE_NUMBER_PROPERTY_VALUE_SCHEMA = z.object({
 export const RELATION_PROPERTY_VALUE_SCHEMA = z.object({
   relation: z.array(
     z.object({
-      id: z.string(),
+      id: notionId(),
     })
   ),
 });
