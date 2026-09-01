@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Live end-to-end smoke test.** `npm run e2e` (`scripts/e2e.mjs`) starts the built server over stdio and drives it against a real workspace with the token in `.env`: the MCP handshake, the three resources and four prompts, `notion_describe` for every operation, a malformed call to check that the error carries the schema and an example, a Notion URL passed as an id, and every read operation; `--write` adds every write operation inside one page created under `NOTION_PAGE_ID` (markdown round-trip, batch mode, a database with data source and views, `null` deleting a property, comments, `upload_file` with `attach_to` followed by `get_file_url` and `get_image` under `NOTION_FILE_URLS=ref`, move/archive/trash/restore, delete and restore of the database and data source) and trashes that page at the end (`--keep` leaves it). The unit tests all run against a mocked Notion client, so until now nothing exercised the real API end to end; the 2.14.0 build passed this run with 76/76 checks and 48/48 operations. Not part of CI.
+
 ## [2.14.0] — 2026-09-01
 
 ### Added
