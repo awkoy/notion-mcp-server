@@ -4,7 +4,7 @@ import { ICON_SCHEMA } from "./icon.js";
 import { RICH_TEXT_ITEM_REQUEST_SCHEMA } from "./rich-text.js";
 import { preprocessJson } from "./preprocess.js";
 import { LANGUAGE_SCHEMA } from "./lang.js";
-import { FILE_SCHEMA } from "./file.js";
+import { EXTERNAL_FILE_SCHEMA, FILE_UPLOAD_SCHEMA } from "./file.js";
 
 export const BASE_BLOCK_REQUEST_SCHEMA = z.object({
   type: z.string().describe("Type of block"),
@@ -142,16 +142,20 @@ export const DIVIDER_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
   divider: z.object({}).describe("Divider block content"),
 });
 
+const IMAGE_CAPTION = {
+  caption: z
+    .array(RICH_TEXT_ITEM_REQUEST_SCHEMA)
+    .optional()
+    .describe("Image caption"),
+};
+
 export const IMAGE_BLOCK_REQUEST_SCHEMA = BASE_BLOCK_REQUEST_SCHEMA.extend({
   type: z.literal("image").describe("Image block type"),
   image: z
-    .object({
-      ...FILE_SCHEMA.shape,
-      caption: z
-        .array(RICH_TEXT_ITEM_REQUEST_SCHEMA)
-        .optional()
-        .describe("Image caption"),
-    })
+    .discriminatedUnion("type", [
+      EXTERNAL_FILE_SCHEMA.extend(IMAGE_CAPTION),
+      FILE_UPLOAD_SCHEMA.extend(IMAGE_CAPTION),
+    ])
     .describe("Image block content"),
 });
 

@@ -97,7 +97,20 @@ register({
 const UpdateDataSourceParams = z.object({
   data_source_id: notionId(),
   title: z.array(z.unknown()).optional().describe("Rich text array for the data source title."),
-  properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA).optional(),
+  // dataSources.update is the one endpoint where a property may be null: that
+  // deletes the property. create_database's initial_data_source has no such
+  // form, so the nullable lives here rather than on DATABASE_PROPERTY_SCHEMA.
+  properties: z
+    .record(
+      z.string(),
+      DATABASE_PROPERTY_SCHEMA.nullable().describe(
+        "A property definition, or null to delete the property."
+      )
+    )
+    .optional()
+    .describe(
+      "Map of property name → definition. Set a property to null to delete it from the data source, together with its values on every page."
+    ),
   icon: z.unknown().optional(),
   in_trash: z
     .boolean()

@@ -314,7 +314,10 @@ export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
   description: z.string().optional(),
 });
 
-// Combined database property schema
+// Combined database property schema. This is a property *definition* only:
+// the null-deletes-the-property form Notion takes on dataSources.update is
+// added at update_data_source, because create_database (initial_data_source)
+// has no such form and update_database no longer carries properties at all.
 export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
   preprocessJson,
   z
