@@ -1,7 +1,6 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, McpServer } from "@modelcontextprotocol/server";
+import { ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readNotionResource } from "./resources.js";
 import { getOperation } from "../operations/index.js";
 import {
@@ -39,7 +38,7 @@ function errorContent(value: unknown): CallToolResult {
   return { isError: true, content: [{ type: "text", text }] };
 }
 
-const EXECUTE_INPUT = {
+const EXECUTE_INPUT = z.object({
   operation: z
     .string()
     .describe(
@@ -50,11 +49,11 @@ const EXECUTE_INPUT = {
     .describe(
       "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch."
     ),
-};
+});
 
-const DESCRIBE_INPUT = {
+const DESCRIBE_INPUT = z.object({
   operation: z.string().describe("Operation name to describe."),
-};
+});
 
 const EXECUTE_DESCRIPTION = `Execute a Notion operation by name.
 

@@ -14,8 +14,8 @@ vi.mock("../src/services/notion.js", () => ({ getClient: async () => notionStub 
 import { initOperations } from "../src/operations/index.js";
 import { startHttp, type HttpHandle } from "../src/server/http.js";
 import { parseHttpConfig } from "../src/config/http.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 const ACCEPT = "application/json, text/event-stream";
 const INIT_BODY = JSON.stringify({

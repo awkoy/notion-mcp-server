@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
 import type { HttpConfig } from "../config/http.js";
 import { CONFIG } from "../config/index.js";
 import { createServer, logAccessSummary, verifyNotionAuth } from "./index.js";
@@ -106,7 +106,7 @@ function defaultAllowedOrigins(port: number): string[] {
 
 export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
   // One transport per session; the connected server instance lives behind it.
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const transports: Record<string, NodeStreamableHTTPServerTransport> = {};
 
   const httpServer = http.createServer((req, res) => {
     void handle(req, res).catch(async (err) => {
@@ -176,7 +176,7 @@ export async function startHttp(config: HttpConfig): Promise<HttpHandle> {
       let transport = sessionId ? transports[sessionId] : undefined;
       if (!transport) {
         if (!sessionId && isInitializeRequest(body)) {
-          transport = new StreamableHTTPServerTransport({
+          transport = new NodeStreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (id) => {
               transports[id] = transport!;

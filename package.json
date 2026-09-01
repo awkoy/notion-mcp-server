@@ -42,7 +42,8 @@
     "build"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@notionhq/client": "^5.22.0",
     "https-proxy-agent": "9.1.0",
     "node-fetch": "3.3.2",
@@ -52,6 +53,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/mdast": "^4.0.4",
     "@types/node": "^26.0.0",
     "shx": "^0.4.0",
