@@ -244,7 +244,7 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | Env var | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `NOTION_TOKEN` | ✅ | — | PAT (`ntn_…`, recommended) or Internal Integration secret (`secret_…` / `ntn_…`) |
-| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; ID = last 32 chars) |
+| `NOTION_PAGE_ID` | — | — | Default parent for `create_page` / `create_database` when no `parent` is passed (page → Share → Copy link; the whole URL or the bare 32-char id both work) |
 | `NOTION_RATE_LIMIT` | — | `3` | Requests/second for the shared limiter (Notion's documented per-integration limit) |
 | `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
 | `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
@@ -412,6 +412,8 @@ Run any operation: `{ operation, payload }`, where payload is a single object or
   "payload": { "page_id": "<page-id>", "title": "Q3 plan" }
 }
 ```
+
+Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accepts a Notion URL — paste what **Share → Copy link** gives you and the server extracts the id. A block link's `#fragment` is used for `block_id` fields and a database link's `?v=` for `view_id` fields.
 
 ```jsonc
 // batch

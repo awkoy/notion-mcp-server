@@ -13,6 +13,7 @@ import {
   type UpdateBlockBody,
 } from "../utils/notion-types.js";
 import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
+import { notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -22,10 +23,10 @@ const VERBOSE = z.boolean().optional();
 
 const AppendBlocksParams = z
   .object({
-    block_id: z.string().describe("Parent page ID or block ID to append into."),
+    block_id: notionId("block").describe("Parent page ID or block ID to append into."),
     markdown: z.string().optional().describe("Content to append, as markdown. Parsed server-side."),
     children: z.array(BLOCK_INPUT_SCHEMA).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
-    after: z.string().optional().describe("Append immediately after this block ID (legacy ordering)."),
+    after: notionId("block").optional().describe("Append immediately after this block ID (legacy ordering)."),
     position: z.enum(["start", "end"]).optional().describe("Append at start or end. Preferred over `after`."),
     verbose: VERBOSE,
   })
@@ -109,7 +110,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetBlockParams = z.object({
-  block_id: z.string().describe("Block ID to retrieve."),
+  block_id: notionId("block").describe("Block ID to retrieve."),
   verbose: VERBOSE,
 });
 
@@ -136,7 +137,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetBlockChildrenParams = z.object({
-  block_id: z.string().describe("Page ID or block ID. For a page, returns its top-level blocks."),
+  block_id: notionId("block").describe("Page ID or block ID. For a page, returns its top-level blocks."),
   start_cursor: z.string().optional(),
   page_size: z.number().min(1).max(100).optional(),
   verbose: VERBOSE,
@@ -206,7 +207,7 @@ function inferDataType(input: unknown): unknown {
 
 const UpdateBlockParams = z
   .object({
-    block_id: z.string(),
+    block_id: notionId("block"),
     markdown: z
       .string()
       .optional()
@@ -271,7 +272,7 @@ register({
 // delete_block
 // ──────────────────────────────────────────────────────────────────────────
 
-const DeleteBlockParams = z.object({ block_id: z.string(), verbose: VERBOSE });
+const DeleteBlockParams = z.object({ block_id: notionId("block"), verbose: VERBOSE });
 
 register({
   name: "delete_block",
@@ -297,19 +298,19 @@ register({
 const MixedOp = z.discriminatedUnion("op", [
   z.object({
     op: z.literal("append"),
-    block_id: z.string(),
+    block_id: notionId("block"),
     markdown: z.string().optional(),
     children: z.array(BLOCK_INPUT_SCHEMA).optional(),
   }),
   z.object({
     op: z.literal("update"),
-    block_id: z.string(),
+    block_id: notionId("block"),
     markdown: z.string().optional(),
     data: z.preprocess(inferDataType, TEXT_BLOCK_REQUEST_SCHEMA).optional(),
   }),
   z.object({
     op: z.literal("delete"),
-    block_id: z.string(),
+    block_id: notionId("block"),
   }),
 ]);
 
