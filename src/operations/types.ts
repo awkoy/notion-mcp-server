@@ -22,9 +22,11 @@ export type OperationName =
   | "create_database"
   | "query_database"
   | "update_database"
+  | "delete_database"
   | "list_data_sources"
   | "get_data_source"
   | "update_data_source"
+  | "delete_data_source"
   | "list_data_source_templates"
   | "list_views"
   | "get_view"
@@ -44,7 +46,9 @@ export type OperationName =
   | "get_self"
   | "upload_file"
   | "list_file_uploads"
-  | "get_file_upload";
+  | "get_file_upload"
+  | "get_file_url"
+  | "get_image";
 
 export type OperationAccess = "read" | "write";
 
