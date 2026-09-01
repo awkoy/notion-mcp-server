@@ -12,6 +12,7 @@
     "watch": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "node --env-file=.env scripts/e2e.mjs",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js -e NOTION_TOKEN=your_notion_token -e NOTION_PAGE_ID=your_notion_page_id"
   },
   "homepage": "https://github.com/awkoy/notion-mcp-server",

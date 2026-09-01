@@ -4,6 +4,7 @@ import { CONFIG } from "../config/index.js";
 import { getClient } from "../services/notion.js";
 import { registerAllTools } from "../tools/index.js";
 import { accessSummary } from "../operations/access.js";
+import { attachLogServer, log, setProcessLogServer } from "../utils/log.js";
 
 /**
  * Build a fresh, fully-registered MCP server instance.
@@ -53,11 +54,17 @@ export function createServer(): McpServer {
         tools: {},
         prompts: {},
         resources: {},
+        // Log lines reach the client as notifications/message; utils/log.ts says
+        // what goes where and how logging/setLevel is honoured.
+        logging: {},
       },
       instructions: buildInstructions(),
     }
   );
 
+  // Own logging/setLevel for this server so a per-request line is filtered by
+  // the level *this* client set (one server per HTTP session).
+  attachLogServer(server);
   registerAllTools(server);
   return server;
 }
@@ -65,7 +72,7 @@ export function createServer(): McpServer {
 /** Log the operation access summary once at startup (not per session). */
 export function logAccessSummary(): void {
   const s = accessSummary();
-  console.error(
+  log.info(
     `Operation access: ${s.enabled}/${s.total} enabled (allow=${s.allow}; block=${s.block}${s.readOnly ? "; read-only" : ""}${s.confirmDestructive ? "; confirm-destructive" : ""})`
   );
 }
@@ -76,28 +83,30 @@ export function verifyNotionAuth(): void {
     .then((c) => c.users.me({}))
     .then((me) => {
       const who = "name" in me && me.name ? me.name : me.id;
-      console.error(`Notion auth OK — connected as ${who} (NOTION_TOKEN)`);
+      log.info(`Notion auth OK — connected as ${who} (NOTION_TOKEN)`);
     })
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Notion auth check failed (server still running): ${msg}`);
+      log.error(`Notion auth check failed (server still running): ${msg}`);
     });
 }
 
 export async function startStdio(): Promise<void> {
   try {
     const server = createServer();
+    // stdio runs one server per process, so the process-level lines (banner,
+    // access summary, auth probe) belong to this client. The HTTP transport
+    // never does this: one server per session, and a process line has no
+    // single session to go to.
+    setProcessLogServer(server);
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error(
-      `${CONFIG.serverName} v${CONFIG.serverVersion} running on stdio`
-    );
+    log.info(`${CONFIG.serverName} v${CONFIG.serverVersion} running on stdio`);
     logAccessSummary();
     verifyNotionAuth();
   } catch (error) {
-    console.error(
-      "Server initialization error:",
-      error instanceof Error ? error.message : String(error)
+    log.error(
+      `Server initialization error: ${error instanceof Error ? error.message : String(error)}`
     );
     process.exit(1);
   }

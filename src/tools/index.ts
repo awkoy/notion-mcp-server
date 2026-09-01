@@ -13,6 +13,7 @@ import { dispatch } from "../dispatch/index.js";
 import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
 import { confirmDestructiveCall } from "./confirm.js";
+import { log } from "../utils/log.js";
 
 // An operation that returns non-text content puts MCP content blocks under
 // `data._mcp_content`, and they leave the JSON envelope here. get_image is the
@@ -90,11 +91,28 @@ export function registerAllTools(server: McpServer): void {
       // back as an error envelope and nothing is dispatched.
       const denied = await confirmDestructiveCall(server, ctx, operation, payload);
       if (denied) return errorContent({ ok: false, error: denied });
+      const started = performance.now();
       const result = await dispatch(operation, payload);
+      const items = "summary" in result ? result.summary.total : undefined;
+      const ms = Math.round(performance.now() - started);
+      // One line per call for a client at `debug` (and for stderr): what ran,
+      // whether it succeeded, how long — never the payload or any page content.
+      // Not ctx.mcpReq.log: that forwards debug lines to a client that never set
+      // a level; the level filter lives in utils/log.ts.
+      log.debug(
+        `notion_execute ${operation}${items === undefined ? "" : ` batch=${items}`} ${result.ok ? "ok" : "error"} ${ms}ms`,
+        {
+          operation,
+          batch: items !== undefined,
+          ...(items === undefined ? {} : { items }),
+          ms,
+          ok: result.ok,
+        },
+        { server, ctx }
+      );
       // Batch results (with per-item results) always go back as structured data —
       // a partial success is a normal outcome of the tool, not a tool error.
-      const isBatch = typeof result === "object" && result !== null && "summary" in result;
-      if (isBatch || result.ok) return jsonContent(result);
+      if (items !== undefined || result.ok) return jsonContent(result);
       return errorContent(result);
     }
   );
