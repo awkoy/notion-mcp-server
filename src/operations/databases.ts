@@ -336,10 +336,12 @@ const UpdateDatabaseParams = z.object({
   title: z.string().optional(),
   title_rich: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
   description: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
+  // Nullable so a `{ Name: null }` delete attempt reaches the properties_moved
+  // redirect below instead of dying in validation with no pointer.
   properties: z
-    .record(z.string(), DATABASE_PROPERTY_SCHEMA)
+    .record(z.string(), DATABASE_PROPERTY_SCHEMA.nullable())
     .optional()
-    .describe("Deprecated on the 2025-09-03 surface — properties live on the data source. Call update_data_source instead. Rejected here so the migration is explicit."),
+    .describe("Deprecated on the 2025-09-03 surface — properties live on the data source. Call update_data_source instead (there, null deletes a property). Rejected here so the migration is explicit."),
   is_inline: z.boolean().optional(),
   is_locked: z.boolean().optional(),
   in_trash: z
