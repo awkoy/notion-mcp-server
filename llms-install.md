@@ -40,6 +40,8 @@ All optional — set only if the user asks:
 
 - **`NOTION_PAGE_ID`** — a default parent page ID used by `create_page` / `create_database` when no parent is passed. Omit to always pass a parent explicitly.
 - **`NOTION_ALLOWED_OPERATIONS` / `NOTION_BLOCKED_OPERATIONS`** — comma-separated allow/block lists (group presets like `read` / `destructive`, or exact operation names) to restrict what the server can do. E.g. `"NOTION_ALLOWED_OPERATIONS": "read"` for a read-only setup, or `"NOTION_BLOCKED_OPERATIONS": "destructive"` to keep writes but forbid deletes. Blocklist wins. See the README's "Restricting operations" section.
+- **`NOTION_UPLOAD_ROOT`** — a directory that `upload_file`'s `path` source is confined to (relative paths resolve inside it; symlinks are resolved before the check). Unset, a `path` source can read any file the server process can — set it when a model composes the path.
+- **`NOTION_FILE_URLS`** — `ref` replaces Notion's signed file URLs (~500 tokens each, valid for an hour) in responses with short `notion-file:` refs that `get_file_url` (fresh URL) and `get_image` (the picture as image content) resolve on demand. Default `full` keeps the URLs. See the README's "Files" section.
 
 ## Docker alternative
 
