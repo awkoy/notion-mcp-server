@@ -412,22 +412,36 @@ register({
 // get_file_url / get_image
 // ──────────────────────────────────────────────────────────────────────────
 
-// Pull the file url out of whichever media block this is. Notion keys the body
+// A file url and where it came from. `hosted` means Notion minted the url (a
+// signed S3 link) for a file it stores. An external url is whatever a
+// workspace member — or a model, via append_blocks — typed in, so the server
+// hands it back as text but never fetches it.
+type ResolvedFile = { url: string; hosted: boolean };
+
+type FileBody = {
+  type?: string;
+  file?: { url?: string };
+  external?: { url?: string };
+};
+
+function fileFrom(body: FileBody | undefined): ResolvedFile | undefined {
+  if (body?.file?.url) return { url: body.file.url, hosted: true };
+  if (body?.external?.url) return { url: body.external.url, hosted: false };
+  return undefined;
+}
+
+// Pull the file out of whichever media block this is. Notion keys the body
 // by block type, and every media type carries the same {type, file|external}
 // shape underneath.
-function urlFromBlock(block: unknown): string | undefined {
+function fileFromBlock(block: unknown): ResolvedFile | undefined {
   const b = block as { type?: string } & Record<string, unknown>;
   if (!b?.type) return undefined;
-  const body = b[b.type] as
-    | { type?: string; file?: { url?: string }; external?: { url?: string } }
-    | undefined;
-  if (!body) return undefined;
-  return body.file?.url ?? body.external?.url;
+  return fileFrom(b[b.type] as FileBody | undefined);
 }
 
 async function resolveFileRef(
   ref: string
-): Promise<{ url: string } | OperationError> {
+): Promise<ResolvedFile | OperationError> {
   const parsed = parseFileRef(ref);
   if (!parsed) {
     return {
@@ -440,32 +454,31 @@ async function resolveFileRef(
 
   if (parsed.kind === "block") {
     const block = await notion.blocks.retrieve({ block_id: parsed.blockId });
-    const url = urlFromBlock(block);
-    if (!url) {
+    const file = fileFromBlock(block);
+    if (!file) {
       return {
         code: "not_found",
         message: `Block ${parsed.blockId} carries no file.`,
         fix: "Point the ref at an image, video, audio, pdf or file block.",
       };
     }
-    return { url };
+    return file;
   }
 
   const page = await notion.pages.retrieve({ page_id: parsed.pageId });
   const props = (page as { properties?: Record<string, unknown> }).properties;
   const prop = props?.[parsed.property] as
-    | { type?: string; files?: { file?: { url?: string }; external?: { url?: string } }[] }
+    | { type?: string; files?: FileBody[] }
     | undefined;
-  const entry = prop?.files?.[parsed.index];
-  const url = entry?.file?.url ?? entry?.external?.url;
-  if (!url) {
+  const file = fileFrom(prop?.files?.[parsed.index]);
+  if (!file) {
     return {
       code: "not_found",
       message: `Page ${parsed.pageId} has no file at ${parsed.property}[${parsed.index}].`,
       fix: "Re-read the page: a files property changes index when an entry is removed.",
     };
   }
-  return { url };
+  return file;
 }
 
 const FileRefParams = z.object({
@@ -492,53 +505,142 @@ register({
 // usefully. Refuse rather than blow up the response.
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+// The media type alone, lowercased, parameters such as charset dropped. Only
+// image/* is returned as image content: a model handed an HTML error page
+// labelled image/png has no way to tell.
+function imageMimeType(contentType: string | null): string | undefined {
+  const type = contentType?.split(";")[0].trim().toLowerCase();
+  return type && type.startsWith("image/") ? type : undefined;
+}
+
+// Read the body in chunks with a running total and stop the moment it passes
+// the cap. arrayBuffer() would hold the whole response in memory before the
+// size could be checked, and a chunked response carries no content-length.
+async function readCapped(
+  body: ReadableStream<Uint8Array> | null,
+  max: number
+): Promise<Buffer | undefined> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+const tooLarge = (size: string): OperationError => ({
+  code: "too_large",
+  message: `Image is ${size}, over the ${MAX_IMAGE_BYTES} byte limit.`,
+  fix: "Use get_file_url and fetch it outside the tool call.",
+});
+
+// A scheme followed by "//" is a URL, not a ref or an id. Checked before
+// anything is resolved so a caller-supplied URL never reaches fetch.
+const URL_LIKE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 register({
   name: "get_image",
   access: "read",
   domain: "files",
   description:
-    "Fetch an image and return it as image content, so the model can see it. Takes a notion-file: ref, a block id, or a URL. Every other operation returns text only.",
+    "Fetch a Notion-hosted image and return it as image content, so the model can see it. Takes a notion-file: ref or a block id — never a URL: the server fetches only the signed URL Notion returns for that object. Refuses non-image files and images over 5 MB. Every other operation returns text only.",
   batchable: false,
   schema: z.object({
     ref: z
       .string()
-      .describe("A notion-file: ref, a block id, or a direct image URL."),
+      .describe("A notion-file: ref or a block id. Not a URL."),
   }),
   example: { ref: `${FILE_REF_PREFIX}block/<block-id>` },
   handler: tryHandler(async ({ ref }) => {
-    let url: string;
-    if (/^https?:\/\//i.test(ref)) {
-      url = ref;
-    } else {
-      const asRef = ref.startsWith(FILE_REF_PREFIX) ? ref : blockFileRef(ref);
-      const resolved = await resolveFileRef(asRef);
-      if ("code" in resolved) return { ok: false, error: resolved };
-      url = resolved.url;
+    // The server must never GET a URL the caller chose. From a local stdio
+    // server that would reach the user's LAN and 169.254.169.254; from a
+    // hosted one, the VPC. It is also an exfil channel out of a process that
+    // otherwise only talks to api.notion.com. So the only URL fetched here is
+    // one Notion returned, in this same call, for a file Notion hosts.
+    if (URL_LIKE.test(ref)) {
+      return {
+        ok: false,
+        error: {
+          code: "validation_error",
+          message: "get_image does not fetch URLs.",
+          fix: `Pass a "${FILE_REF_PREFIX}" ref or the id of an image block. To read a URL you already have, fetch it outside the tool call.`,
+        },
+      };
+    }
+    const asRef = ref.startsWith(FILE_REF_PREFIX) ? ref : blockFileRef(ref);
+    const resolved = await resolveFileRef(asRef);
+    if ("code" in resolved) return { ok: false, error: resolved };
+    if (!resolved.hosted) {
+      return {
+        ok: false,
+        error: {
+          code: "external_file",
+          message: `${asRef} points at an external URL, which the server does not fetch.`,
+          fix: `The URL is ${resolved.url}. Fetch it outside the tool call.`,
+        },
+      };
+    }
+    let url: URL | undefined;
+    try {
+      url = new URL(resolved.url);
+    } catch {
+      url = undefined;
+    }
+    if (url?.protocol !== "https:") {
+      return {
+        ok: false,
+        error: {
+          code: "unexpected_url",
+          message: `Notion returned a non-https URL for ${asRef}; not fetching it.`,
+          fix: "Use get_file_url and fetch it outside the tool call.",
+        },
+      };
     }
 
     const res = await fetch(url);
     if (!res.ok) {
+      await res.body?.cancel();
       return {
         ok: false,
         error: {
           code: "fetch_failed",
           message: `Could not fetch the image: ${res.status} ${res.statusText}.`,
-          fix: "A signed URL expires in about an hour. Call get_file_url again for a fresh one.",
+          fix: "A signed URL expires in about an hour. Call get_image again for a fresh read.",
         },
       };
     }
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length > MAX_IMAGE_BYTES) {
+    const mimeType = imageMimeType(res.headers.get("content-type"));
+    if (!mimeType) {
+      await res.body?.cancel();
       return {
         ok: false,
         error: {
-          code: "too_large",
-          message: `Image is ${bytes.length} bytes, over the ${MAX_IMAGE_BYTES} byte limit.`,
-          fix: "Use get_file_url and fetch it outside the tool call.",
+          code: "not_an_image",
+          message: `${asRef} is not an image: the response is ${res.headers.get("content-type") ?? "of unknown type"}.`,
+          fix: "get_image only returns image/* content. For any other file, use get_file_url and fetch it outside the tool call.",
         },
       };
     }
-    const mimeType = res.headers.get("content-type")?.split(";")[0] ?? "image/png";
+    // content-length catches most oversized responses before a byte of body
+    // is read; the capped read below covers a missing or wrong header.
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
+      await res.body?.cancel();
+      return { ok: false, error: tooLarge(`${declared} bytes`) };
+    }
+    const bytes = await readCapped(res.body, MAX_IMAGE_BYTES);
+    if (!bytes) {
+      return { ok: false, error: tooLarge(`over ${MAX_IMAGE_BYTES} bytes`) };
+    }
     // _mcp_content leaves the JSON envelope and becomes MCP content blocks in
     // the tool layer. Nothing else in this server returns non-text content.
     return {
