@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -23,24 +23,30 @@ jobs:
           node-version: "24" # ships with npm >= 11.5 (required for Trusted Publishing)
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm supports the release-age cooldown
-        # min-release-age in .npmrc is silently ignored by npm < 11.10.0. setup-node
-        # may ship an older npm, which would let `npm install` below pull a
-        # freshly-published (possibly poisoned) version that a dev machine running
-        # current npm would refuse. Upgrade so the cooldown is actually enforced.
+      - name: Ensure npm is current
+        # Kept (unlike in ci.yml) because publishing has its own reason to be on
+        # a current npm: Trusted Publishing / OIDC provenance. node-version 24 is
+        # already meant to satisfy that floor; this guarantees it. A broken
+        # release costs far more than the 15s.
         run: npm install -g npm@latest
 
       - name: Install dependencies
+        # `npm ci` (not `npm install`): the published tarball must be built and
+        # tested against exactly the reviewed lockfile. `npm install` re-resolves
+        # the graph and rewrites the lock in place, so what we shipped was built
+        # from a tree nobody reviewed.
+        #
+        # The previous comment here said npm 11+ strict mode rejected the
+        # lockfile for missing Linux-only optional native deps. That is no longer
+        # true — the committed lock carries them (@rolldown/binding-linux-*,
+        # lightningcss-linux-*, @emnapi/core), and `npm ci` resolves it on
+        # ubuntu-latest in CI.
+        #
         # --ignore-scripts blocks dependency lifecycle scripts (pre/post-install),
         # the primary npm malware vector (Shai-Hulud, TrapDoor). Our runtime deps
         # have no native build step, so nothing legitimate needs them here; our own
         # build runs explicitly via `npm publish` -> `prepare` below.
-        #
-        # 'npm install' (not 'npm ci') because npm 11+ strict mode rejects the
-        # macOS-generated lockfile for missing Linux-only optional native deps
-        # (e.g. @emnapi/core via @rolldown/binding-wasm32-wasi). Lockfile is still
-        # respected — just non-strictly — and the .npmrc cooldown gates resolution.
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
