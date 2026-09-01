@@ -342,6 +342,14 @@ const UpdateDatabaseParams = z.object({
     .describe("Deprecated on the 2025-09-03 surface — properties live on the data source. Call update_data_source instead. Rejected here so the migration is explicit."),
   is_inline: z.boolean().optional(),
   is_locked: z.boolean().optional(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Not accepted here — trashing is destructive and lives on delete_database (in_trash:false restores). Rejected here so the split is explicit."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash`; not accepted here either. Call delete_database instead."),
   icon: ICON_SCHEMA.nullable().optional(),
   cover: FILE_SCHEMA.nullable().optional(),
   verbose: VERBOSE,
@@ -376,6 +384,20 @@ register({
           code: "properties_moved",
           message: "Property definitions are no longer accepted on update_database in the 2025-09-03 surface.",
           fix: "Call list_data_sources to resolve the data_source_id, then update_data_source with the same properties map.",
+        },
+      };
+    }
+    // Kept in the schema (rather than dropped) so a stale caller gets an error
+    // pointing at delete_database instead of a silent no-op: z.object strips
+    // unknown keys, so an absent field would make `{ in_trash: true }` succeed
+    // with the database untouched.
+    if (params.in_trash !== undefined || params.archived !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "trash_moved",
+          message: "in_trash / archived are no longer accepted on update_database — trashing is a destructive operation and lives on delete_database.",
+          fix: "Call delete_database with the same database_id. It trashes by default; pass in_trash:false to restore.",
         },
       };
     }

@@ -22,21 +22,49 @@ beforeEach(() => {
 });
 
 describe("update_database", () => {
-  it("has no trash field in its schema", () => {
+  it("keeps in_trash / archived in its schema so a stale call is rejected, not stripped", () => {
+    // z.object strips unknown keys: if the fields were simply dropped,
+    // `{ in_trash: true }` would come back ok with the database untouched.
     const schema = emitJsonSchema(getOperation("update_database")!.schema);
-    const props = schema.properties as Record<string, unknown>;
-    expect(props.in_trash).toBeUndefined();
-    expect(props.archived).toBeUndefined();
+    const props = schema.properties as Record<string, { description?: string }>;
+    expect(props.in_trash).toBeDefined();
+    expect(props.in_trash.description).toContain("delete_database");
+    expect(props.archived).toBeDefined();
+    expect(props.archived.description).toContain("delete_database");
   });
 
-  it("never sends in_trash, even when one is smuggled into the payload", async () => {
-    await dispatch("update_database", {
+  it("rejects in_trash with a pointer at delete_database instead of a silent no-op", async () => {
+    const res = await dispatch("update_database", {
       database_id: "db-1",
       title: "Renamed",
       in_trash: true,
     });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    const err = (res as { error: { code: string; fix: string } }).error;
+    expect(err.code).toBe("trash_moved");
+    expect(err.fix).toContain("delete_database");
+    expect(notionStub.databases.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects the restore direction (in_trash:false) the same way", async () => {
+    const res = await dispatch("update_database", { database_id: "db-1", in_trash: false });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect((res as { error: { code: string } }).error.code).toBe("trash_moved");
+    expect(notionStub.databases.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects the deprecated archived alias the same way", async () => {
+    const res = await dispatch("update_database", { database_id: "db-1", archived: true });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect((res as { error: { code: string; fix: string } }).error.code).toBe("trash_moved");
+    expect(notionStub.databases.update).not.toHaveBeenCalled();
+  });
+
+  it("still forwards metadata-only updates", async () => {
+    await dispatch("update_database", { database_id: "db-1", title: "Renamed" });
     const body = notionStub.databases.update.mock.calls[0][0];
     expect(body).not.toHaveProperty("in_trash");
+    expect(body).not.toHaveProperty("archived");
     expect(body.title).toBeDefined();
   });
 });
