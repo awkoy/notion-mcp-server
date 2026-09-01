@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { notionId } from "../schema/id.js";
+import { notionId } from "./id.js";
 
 export const PARENT_SCHEMA = z.preprocess(
   (val) => (typeof val === "string" ? JSON.parse(val) : val),
@@ -22,7 +22,7 @@ export const PARENT_SCHEMA = z.preprocess(
     }),
     z.object({
       type: z.literal("block_id").describe("Parent type for nested block"),
-      block_id: notionId(),
+      block_id: notionId("block"),
     }),
   ])
 );

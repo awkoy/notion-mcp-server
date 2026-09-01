@@ -51,7 +51,9 @@ Two ways to call:
 
 If the payload is malformed, the error response includes the full schema + a working example so you can correct and retry in one round-trip. Call notion_describe(operation) ahead of time only for complex shapes (query_database filters, batch_mixed_blocks).
 
-Most responses are slimmed by default. Pass verbose:true inside payload (single) or per-item (batch) to get the raw Notion SDK response.`;
+Most responses are slimmed by default. Pass verbose:true inside payload (single) or per-item (batch) to get the raw Notion SDK response.
+
+Every id field (page_id, block_id, database_id, view_id, …) also accepts a Notion URL, as copied from Share → Copy link. A block link's #fragment is used for block_id fields and a database link's ?v= for view_id fields.`;
 
 const DESCRIBE_DESCRIPTION = `Return the JSON Schema and a working example for one operation. Use this BEFORE notion_execute when the payload shape is non-trivial (query filters, structured block trees, database property definitions). For simple ops, just call notion_execute — its errors carry the schema.`;
 

@@ -150,7 +150,7 @@ function compileViewFilter(
 // ──────────────────────────────────────────────────────────────────────────
 
 const GetViewParams = z.object({
-  view_id: notionId().describe("View ID to retrieve."),
+  view_id: notionId("view").describe("View ID to retrieve."),
   verbose: VERBOSE,
 });
 
@@ -233,7 +233,7 @@ const DEFAULT_ITEM_LIMIT = 1000;
 const MAX_ITEM_LIMIT = 1000;
 
 const QueryViewParams = z.object({
-  view_id: notionId().describe("View ID. Executes the view's stored filters/sorts server-side."),
+  view_id: notionId("view").describe("View ID. Executes the view's stored filters/sorts server-side."),
   page_size: z.number().min(1).max(MAX_PAGE_SIZE).optional(),
   paginate: z.boolean().optional().describe("Walk all result pages, up to page_limit rows."),
   page_limit: z
@@ -369,8 +369,7 @@ register({
 
 const CreateViewParams = z.object({
   data_source_id: notionId().optional(),
-  database_id: z
-    .string()
+  database_id: notionId()
     .optional()
     .describe("Single-source databases are auto-resolved; multi-source require data_source_id."),
   name: z.string().describe("View name."),
@@ -450,7 +449,7 @@ register({
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdateViewParams = z.object({
-  view_id: notionId(),
+  view_id: notionId("view"),
   name: z.string().optional(),
   where: WHERE_SCHEMA.optional().describe(
     "Replace the view filter (typed DSL). Mutually exclusive with `filter`."
@@ -496,7 +495,7 @@ register({
 // delete_view
 // ──────────────────────────────────────────────────────────────────────────
 
-const DeleteViewParams = z.object({ view_id: notionId() });
+const DeleteViewParams = z.object({ view_id: notionId("view") });
 
 register({
   name: "delete_view",

@@ -18,7 +18,7 @@ import {
   type QueryDataSourceBody,
   type UpdateDatabaseBody,
 } from "../utils/notion-types.js";
-import { notionId } from "../schema/id.js";
+import { normalizeNotionId, notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -51,7 +51,7 @@ const CreateDatabaseParams = z.object({
 function resolveParent(parent: z.infer<typeof PARENT_SCHEMA> | undefined) {
   if (parent) return parent;
   const envId = process.env.NOTION_PAGE_ID;
-  if (envId) return { type: "page_id" as const, page_id: envId };
+  if (envId) return { type: "page_id" as const, page_id: normalizeNotionId(envId) };
   return undefined;
 }
 
@@ -122,14 +122,12 @@ register({
 
 const QueryDatabaseParams = z
   .object({
-    database_id: z
-      .string()
+    database_id: notionId()
       .optional()
       .describe(
         "Database ID. If the database has exactly one data source, we resolve it automatically. For multi-source databases, pass data_source_id instead."
       ),
-    data_source_id: z
-      .string()
+    data_source_id: notionId()
       .optional()
       .describe(
         "Data source ID. Use for multi-source databases or when you've already resolved the source via list_data_sources."

@@ -19,7 +19,7 @@ function plainTextRich(text: string) {
 // ──────────────────────────────────────────────────────────────────────────
 
 const ListCommentsParams = z.object({
-  block_id: notionId().describe("Page or block ID to list comments from."),
+  block_id: notionId("block").describe("Page or block ID to list comments from."),
   start_cursor: z.string().optional(),
   page_size: z.number().min(1).max(100).optional(),
   paginate: z

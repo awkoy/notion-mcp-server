@@ -35,7 +35,7 @@ import {
   VERIFICATION_PROPERTY_VALUE_SCHEMA,
 } from "../schema/page-properties.js";
 import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
-import { notionId } from "../schema/id.js";
+import { normalizeNotionId, notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -62,7 +62,7 @@ function resolveParent(
 ): z.infer<typeof PARENT_SCHEMA> | undefined {
   if (parent) return parent;
   const envId = process.env.NOTION_PAGE_ID;
-  if (envId) return { type: "page_id", page_id: envId };
+  if (envId) return { type: "page_id", page_id: normalizeNotionId(envId) };
   return undefined;
 }
 
@@ -571,7 +571,7 @@ const UpdatePageMarkdownParams = z.object({
   insert_content: z
     .object({
       position: z.enum(["start", "end"]).describe("Insert at start or end of the page."),
-      after: z.string().optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
+      after: notionId("block").optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
     })
     .optional(),
   allow_deleting_content: z
