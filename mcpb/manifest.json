@@ -4,7 +4,7 @@
   "display_name": "Notion MCP Server",
   "version": "0.0.0",
   "description": "Connect Claude to Notion: create pages, query databases, append blocks, comment, and upload files.",
-  "long_description": "Token-auth Notion MCP server. 45 operations behind 2 context-efficient tools: pages, databases, blocks, comments, users, files, and templates — with batched mutations, automatic retry on rate limits, and full markdown round-trip. Paste a Notion Personal Access Token (create one at https://app.notion.com/developers/tokens) and everything you can see in Notion, Claude can work with.",
+  "long_description": "Token-auth Notion MCP server. 47 operations behind 2 context-efficient tools: pages, databases, blocks, comments, users, files, and templates — with batched mutations, automatic retry on rate limits, and full markdown round-trip. Paste a Notion Personal Access Token (create one at https://app.notion.com/developers/tokens) and everything you can see in Notion, Claude can work with.",
   "author": {
     "name": "Yaroslav Boiko",
     "email": "y.boikodeveloper@gmail.com",

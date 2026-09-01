@@ -14,7 +14,20 @@ import { dispatch } from "../dispatch/index.js";
 import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
 
+// An operation that returns non-text content puts MCP content blocks under
+// `data._mcp_content`, and they leave the JSON envelope here. get_image is the
+// only one today: a model cannot see an image it receives as a URL string.
+function mcpContentOf(value: unknown): CallToolResult["content"] | undefined {
+  const data = (value as { ok?: boolean; data?: unknown })?.data;
+  const blocks = (data as { _mcp_content?: unknown })?._mcp_content;
+  return Array.isArray(blocks) && blocks.length
+    ? (blocks as CallToolResult["content"])
+    : undefined;
+}
+
 function jsonContent(value: unknown): CallToolResult {
+  const content = mcpContentOf(value);
+  if (content) return { content };
   // Compact JSON keeps the wire response small. Agents parse JSON either way,
   // and the ~30% bloat from indentation isn't worth paying for in every reply.
   const text = typeof value === "string" ? value : JSON.stringify(value);
