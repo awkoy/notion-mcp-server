@@ -16,6 +16,7 @@
   },
   "homepage": "https://github.com/awkoy/notion-mcp-server",
   "documentation": "https://github.com/awkoy/notion-mcp-server#readme",
+  "privacy_policies": ["https://github.com/awkoy/notion-mcp-server#-privacy"],
   "license": "MIT",
   "keywords": ["notion", "notion-api", "productivity", "pages", "databases", "markdown"],
   "server": {
