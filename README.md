@@ -576,6 +576,20 @@ claude mcp add notion -s user \
 
 </details>
 
+### End-to-end smoke test
+
+`npm test` runs against a mocked Notion client. `scripts/e2e.mjs` drives the built server over stdio against a real workspace — every read operation, the resources and prompts, `notion_describe` for every operation, and (with `--write`) every write operation inside one throwaway page:
+
+```bash
+npm run build
+printf 'NOTION_TOKEN=ntn_...\nNOTION_PAGE_ID=<page the token can write under>\n' > .env   # gitignored
+npm run e2e                      # read-only pass
+npm run e2e -- --write           # full pass; creates one page under NOTION_PAGE_ID and trashes it at the end
+npm run e2e -- --write --keep    # keep the test page for inspection
+```
+
+It prints a PASS/FAIL table per check and lists any operation the run did not reach, and exits non-zero on a failure. It is not part of CI.
+
 ## 🤝 Contributing
 
 PRs welcome. Fork → branch → commit → push → PR. Run `npm test` before submitting.
