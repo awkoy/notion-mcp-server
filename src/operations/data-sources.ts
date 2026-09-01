@@ -132,7 +132,11 @@ register({
   example: {
     data_source_id: "<data-source-id>",
     properties: {
-      Status: { type: "status", status: { options: [] } },
+      // The API cannot create `status` property schemas; use select/multi_select.
+      Priority: {
+        type: "select",
+        select: { options: [{ name: "High", color: "red" }, { name: "Low", color: "gray" }] },
+      },
     },
   },
   handler: tryHandler(async ({ data_source_id, title, properties, icon, archived, in_trash, verbose }) => {
