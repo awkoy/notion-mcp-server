@@ -562,6 +562,8 @@ claude mcp add notion -s user \
   -- node "$(pwd)/build/index.js"
 ```
 
+Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. The server honours `logging/setLevel`; the default is `info`. At `debug` you also get one line per `notion_execute` call (operation, batch size, duration, ok or error — never the payload or page content).
+
 <details>
 <summary><b>Technical details: how it's built</b></summary>
 
