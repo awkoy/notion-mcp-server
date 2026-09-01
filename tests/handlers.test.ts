@@ -66,7 +66,7 @@ describe("query_database", () => {
   it("auto-resolves a single-source database via databases.retrieve", async () => {
     notionStub.databases.retrieve.mockImplementation(async (args) => {
       calls.push({ method: "databases.retrieve", args });
-      return { object: "database", id: "db-1", data_sources: [{ id: "ds-only", name: "S" }] };
+      return { object: "database", title: [], id: "db-1", data_sources: [{ id: "ds-only", name: "S" }] };
     });
     notionStub.dataSources.query.mockImplementation(async (args) => {
       calls.push({ method: "dataSources.query", args });
@@ -85,7 +85,7 @@ describe("query_database", () => {
 
   it("returns multi_source_database envelope with available IDs in fix", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-2",
       data_sources: [{ id: "ds-a", name: "A" }, { id: "ds-b", name: "B" }],
     });
@@ -283,7 +283,7 @@ describe("query_database", () => {
 describe("list_data_sources", () => {
   it("returns slim summary by default", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-1",
       data_sources: [
         { id: "ds-1", name: "Source A" },
@@ -306,7 +306,7 @@ describe("list_data_sources", () => {
 
   it("returns the raw data_sources field when verbose=true", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-1",
       data_sources: [{ id: "ds-1", name: "A", extra: "raw" }],
     });
@@ -357,20 +357,65 @@ describe("get_data_source", () => {
 });
 
 describe("update_data_source", () => {
-  it("routes legacy archived to in_trash (2026-03-11 surface) and forwards only provided fields", async () => {
+  it("forwards only provided fields", async () => {
     notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
 
     const res = await dispatch("update_data_source", {
       data_source_id: "ds-1",
-      archived: true,
+      icon: { type: "emoji", emoji: "📚" },
     });
     expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.update).toHaveBeenCalledWith({
+      data_source_id: "ds-1",
+      icon: { type: "emoji", emoji: "📚" },
+    });
+  });
+
+  it("rejects the trash fields with a self-healing envelope pointing to delete_data_source", async () => {
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      archived: true,
+    });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    const err = (res as { error: { code: string; fix: string } }).error;
+    expect(err.code).toBe("trash_moved");
+    expect(err.fix).toContain("delete_data_source");
+    expect(notionStub.dataSources.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("delete_data_source in_trash handling", () => {
+  it("forwards in_trash when caller passes in_trash", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
+
+    await dispatch("delete_data_source", { data_source_id: "ds-1", in_trash: true });
+    const call = notionStub.dataSources.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.in_trash).toBe(true);
+    expect(call).not.toHaveProperty("archived");
+  });
+
+  it("routes legacy archived to in_trash (2026-03-11 surface)", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
+
+    await dispatch("delete_data_source", { data_source_id: "ds-1", archived: true });
     expect(notionStub.dataSources.update).toHaveBeenCalledWith({
       data_source_id: "ds-1",
       in_trash: true,
     });
     const call = notionStub.dataSources.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call).not.toHaveProperty("archived");
+  });
+
+  it("prefers in_trash when both are passed", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
+
+    await dispatch("delete_data_source", {
+      data_source_id: "ds-1",
+      in_trash: false,
+      archived: true,
+    });
+    const call = notionStub.dataSources.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.in_trash).toBe(false);
   });
 });
 
@@ -820,11 +865,11 @@ describe("archive_page / restore_page use in_trash", () => {
   });
 });
 
-describe("update_database in_trash handling", () => {
+describe("delete_database in_trash handling", () => {
   it("forwards in_trash when caller passes in_trash", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", { database_id: "db-1", in_trash: true });
+    await dispatch("delete_database", { database_id: "db-1", in_trash: true });
     const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call.in_trash).toBe(true);
     expect(call).not.toHaveProperty("archived");
@@ -833,7 +878,7 @@ describe("update_database in_trash handling", () => {
   it("forwards in_trash when caller passes legacy archived", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", { database_id: "db-1", archived: true });
+    await dispatch("delete_database", { database_id: "db-1", archived: true });
     const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call.in_trash).toBe(true);
     expect(call).not.toHaveProperty("archived");
@@ -842,7 +887,7 @@ describe("update_database in_trash handling", () => {
   it("prefers in_trash when both are passed", async () => {
     notionStub.databases.update.mockResolvedValue({ id: "db-1", title: [], properties: {} });
 
-    await dispatch("update_database", {
+    await dispatch("delete_database", {
       database_id: "db-1",
       in_trash: false,
       archived: true,

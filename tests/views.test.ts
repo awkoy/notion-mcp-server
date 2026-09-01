@@ -279,7 +279,7 @@ describe("create_view", () => {
 
   it("resolves a single-source database_id", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
-      object: "database",
+      object: "database", title: [],
       id: "db-1",
       data_sources: [{ id: "ds-only", name: "S" }],
     });

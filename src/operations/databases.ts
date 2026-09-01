@@ -327,7 +327,7 @@ function hoistParent(rows: readonly RowWithParent[]): {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// update_database
+// update_database / delete_database
 // ──────────────────────────────────────────────────────────────────────────
 
 const UpdateDatabaseParams = z.object({
@@ -341,10 +341,26 @@ const UpdateDatabaseParams = z.object({
     .describe("Deprecated on the 2025-09-03 surface — properties live on the data source. Call update_data_source instead. Rejected here so the migration is explicit."),
   is_inline: z.boolean().optional(),
   is_locked: z.boolean().optional(),
-  in_trash: z.boolean().optional(),
-  archived: z.boolean().optional().describe("Deprecated alias for `in_trash`. Use `in_trash` on the 2025-09-03 surface."),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Not accepted here — trashing is destructive and lives on delete_database (in_trash:false restores). Rejected here so the split is explicit."),
+  archived: z
+    .boolean()
+    .optional()
+    .describe("Deprecated alias for `in_trash`; not accepted here either. Call delete_database instead."),
   icon: ICON_SCHEMA.nullable().optional(),
   cover: FILE_SCHEMA.nullable().optional(),
+  verbose: VERBOSE,
+});
+
+const DeleteDatabaseParams = z.object({
+  database_id: z.string(),
+  in_trash: z
+    .boolean()
+    .optional()
+    .describe("Default true. Pass false to restore a database from trash."),
+  archived: z.boolean().optional().describe("Deprecated alias for `in_trash`. Use `in_trash` on the 2025-09-03 surface."),
   verbose: VERBOSE,
 });
 
@@ -352,7 +368,7 @@ register({
   name: "update_database",
   access: "write",
   domain: "databases",
-  description: "Update database-level metadata (title, description, icon, cover, is_inline, is_locked, in_trash). For schema/property changes, use update_data_source.",
+  description: "Update database-level metadata (title, description, icon, cover, is_inline, is_locked). To trash or restore a database use delete_database.",
   batchable: true,
   schema: UpdateDatabaseParams,
   example: {
@@ -370,12 +386,25 @@ register({
         },
       };
     }
+    // Kept in the schema (rather than dropped) so a stale caller gets an error
+    // pointing at delete_database instead of a silent no-op: z.object strips
+    // unknown keys, so an absent field would make `{ in_trash: true }` succeed
+    // with the database untouched.
+    if (params.in_trash !== undefined || params.archived !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: "trash_moved",
+          message: "in_trash / archived are no longer accepted on update_database — trashing is a destructive operation and lives on delete_database.",
+          fix: "Call delete_database with the same database_id. It trashes by default; pass in_trash:false to restore.",
+        },
+      };
+    }
     const titleRich = params.title_rich
       ? params.title_rich
       : params.title !== undefined
         ? [{ type: "text" as const, text: { content: params.title } }]
         : undefined;
-    const inTrash = params.in_trash ?? params.archived;
     const notion = await getClient();
     const body = {
       database_id: params.database_id,
@@ -383,11 +412,34 @@ register({
       ...(params.description ? { description: params.description } : {}),
       ...(params.is_inline !== undefined ? { is_inline: params.is_inline } : {}),
       ...(params.is_locked !== undefined ? { is_locked: params.is_locked } : {}),
-      ...(inTrash !== undefined ? { in_trash: inTrash } : {}),
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),
     };
     const response = await notion.databases.update(asSdk<UpdateDatabaseBody>(body));
+    return { ok: true, data: slimDatabase(response, params.verbose ?? false) };
+  }),
+});
+
+register({
+  name: "delete_database",
+  access: "write",
+  domain: "databases",
+  destructive: true,
+  description: "Move a database to trash, with every page in it. Reversible: pass in_trash:false to restore.",
+  batchable: true,
+  schema: DeleteDatabaseParams,
+  example: { database_id: "<database-id>" },
+  exampleBatch: {
+    items: [{ database_id: "<database-id-1>" }, { database_id: "<database-id-2>" }],
+  },
+  handler: tryHandler(async (params) => {
+    const notion = await getClient();
+    const response = await notion.databases.update(
+      asSdk<UpdateDatabaseBody>({
+        database_id: params.database_id,
+        in_trash: params.in_trash ?? params.archived ?? true,
+      })
+    );
     return { ok: true, data: slimDatabase(response, params.verbose ?? false) };
   }),
 });
