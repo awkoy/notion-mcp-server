@@ -654,3 +654,173 @@ describe("upload_file (upload root)", () => {
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_file: attach_to
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (attach_to)", () => {
+  const PAGE_BARE = "3ab5030fc6e5801eb170cd93167dd607";
+  const PAGE = "3ab5030f-c6e5-801e-b170-cd93167dd607";
+  const BLOCK_BARE = "1f2e3d4c5b6a79880011223344556677";
+  const BLOCK = "1f2e3d4c-5b6a-7988-0011-223344556677";
+  const source = { type: "base64", data: Buffer.from("x").toString("base64") };
+
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-att", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-att",
+      status: "uploaded",
+      filename: "a.png",
+      content_type: "image/png",
+    });
+    notionStub.fileUploads.complete.mockResolvedValue({ id: "fu-att", status: "uploaded" });
+    notionStub.blocks.children.append.mockResolvedValue({ results: [{ id: "blk-1" }] });
+  });
+
+  it("appends nothing when attach_to is absent", async () => {
+    const res = await dispatch("upload_file", { filename: "a.png", source });
+    assertOk(res);
+    expect(res.data).toMatchObject({ file_upload_id: "fu-att" });
+    expect(res.data).not.toHaveProperty("block_id");
+    expect(notionStub.blocks.children.append).not.toHaveBeenCalled();
+  });
+
+  it("appends an image block with a caption and returns both ids", async () => {
+    const res = await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: { block_id: PAGE_BARE, caption: "from disk" },
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({
+      file_upload_id: "fu-att",
+      block_id: "blk-1",
+      block_type: "image",
+    });
+
+    expect(notionStub.blocks.children.append).toHaveBeenCalledTimes(1);
+    const body = notionStub.blocks.children.append.mock.calls[0][0];
+    expect(body.block_id).toBe(PAGE);
+    expect(body.position).toBeUndefined();
+    expect(body.children).toEqual([
+      {
+        object: "block",
+        type: "image",
+        image: {
+          type: "file_upload",
+          file_upload: { id: "fu-att" },
+          caption: [{ type: "text", text: { content: "from disk" } }],
+        },
+      },
+    ]);
+  });
+
+  it("omits the caption when none is given", async () => {
+    await dispatch("upload_file", { filename: "a.png", source, attach_to: { block_id: PAGE } });
+    const block = notionStub.blocks.children.append.mock.calls[0][0].children[0];
+    expect(block.image).not.toHaveProperty("caption");
+  });
+
+  it.each([
+    ["chart.svg", "image/svg+xml", "image"],
+    ["photo.webp", "image/webp", "image"],
+    ["icon.ico", "image/vnd.microsoft.icon", "image"],
+    ["clip.mp4", "video/mp4", "video"],
+    ["clip.mov", "video/quicktime", "video"],
+    ["clip.webm", "video/webm", "video"],
+    ["song.mp3", "audio/mpeg", "audio"],
+    ["song.m4a", "audio/mp4", "audio"],
+    ["report.pdf", "application/pdf", "pdf"],
+    ["notes.txt", "text/plain", "file"],
+    ["data.csv", "text/csv", "file"],
+    [
+      "deck.pptx",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "file",
+    ],
+  ])("%s (%s) becomes a %s block", async (filename, content_type, kind) => {
+    const res = await dispatch("upload_file", {
+      filename,
+      content_type,
+      source,
+      attach_to: { block_id: PAGE },
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({ block_type: kind });
+    const block = notionStub.blocks.children.append.mock.calls[0][0].children[0];
+    expect(block.type).toBe(kind);
+    expect(block[kind]).toMatchObject({ type: "file_upload", file_upload: { id: "fu-att" } });
+  });
+
+  it("infers the block type from the filename when content_type is omitted", async () => {
+    await dispatch("upload_file", { filename: "clip.mp4", source, attach_to: { block_id: PAGE } });
+    expect(notionStub.blocks.children.append.mock.calls[0][0].children[0].type).toBe("video");
+  });
+
+  it("takes a Notion link for block_id and a block link for after", async () => {
+    const res = await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: {
+        block_id: `https://www.notion.so/Page-${PAGE_BARE}?pvs=4`,
+        after: `https://www.notion.so/Page-${PAGE_BARE}#${BLOCK_BARE}`,
+      },
+    });
+    assertOk(res);
+    const body = notionStub.blocks.children.append.mock.calls[0][0];
+    expect(body.block_id).toBe(PAGE);
+    expect(body.position).toEqual({ type: "after_block", after_block: { id: BLOCK } });
+  });
+
+  it("passes position through like append_blocks", async () => {
+    await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: { block_id: PAGE, position: "start" },
+    });
+    expect(notionStub.blocks.children.append.mock.calls[0][0].position).toEqual({ type: "start" });
+  });
+
+  it("rejects after together with position before uploading anything", async () => {
+    const res = await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: { block_id: PAGE, position: "end", after: BLOCK },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(JSON.stringify(res.error)).toContain("at most one of `after` or `position`");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("attaches after a multi-part upload too", async () => {
+    const res = await dispatch("upload_file", {
+      mode: "multi",
+      filename: "a.png",
+      source,
+      attach_to: { block_id: PAGE },
+    });
+    assertOk(res);
+    expect(notionStub.fileUploads.complete).toHaveBeenCalledTimes(1);
+    expect(res.data).toMatchObject({ file_upload_id: "fu-att", block_id: "blk-1" });
+    const block = notionStub.blocks.children.append.mock.calls[0][0].children[0];
+    expect(block.image.file_upload).toEqual({ id: "fu-att" });
+  });
+
+  it("keeps the file_upload_id in the error when the append fails", async () => {
+    notionStub.blocks.children.append.mockRejectedValue(new Error("Could not find block"));
+    const res = await dispatch("upload_file", {
+      filename: "a.png",
+      source,
+      attach_to: { block_id: PAGE },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("attach_failed");
+    expect(res.error.message).toContain("fu-att");
+    expect(res.error.message).toContain("Could not find block");
+    expect(res.error.fix).toContain("append_blocks");
+    expect(res.error.fix).toContain("fu-att");
+    expect(res.error.fix).toContain('"image"');
+  });
+});

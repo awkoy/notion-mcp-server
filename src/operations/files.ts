@@ -13,6 +13,8 @@ import type {
   CreateFileUploadBody,
   SendFileUploadBody,
 } from "../utils/notion-types.js";
+import { notionId } from "../schema/id.js";
+import type { OperationResult } from "./types.js";
 
 // Notion's documented per-part ceiling for multi-part uploads.
 const MAX_PART_BYTES = 5 * 1024 * 1024;
@@ -223,23 +225,33 @@ function inferContentType(filename: string): string | undefined {
 // ──────────────────────────────────────────────────────────────────────────
 
 // Notion picks the block type from the media kind, and rejects a file_upload
-// in a block whose type does not match the upload's content_type.
-function blockTypeFor(contentType: string): "image" | "video" | "audio" | "pdf" | "file" {
-  if (contentType.startsWith("image/")) return "image";
-  if (contentType.startsWith("video/")) return "video";
-  if (contentType.startsWith("audio/")) return "audio";
-  if (contentType === "application/pdf") return "pdf";
+// in a block whose type does not match the upload's content_type ("You can't
+// use a video in an image block"). Its supported-types table groups formats
+// by the same MIME families, so the prefix is the rule: image/* covers svg,
+// webp, avif and ico as well as png/jpeg; video/* covers webm, mkv and 3gp;
+// audio/* covers flac, opus and weba.
+type MediaBlockType = "image" | "video" | "audio" | "pdf" | "file";
+
+function blockTypeFor(contentType: string): MediaBlockType {
+  const type = contentType.toLowerCase();
+  if (type.startsWith("image/")) return "image";
+  if (type.startsWith("video/")) return "video";
+  if (type.startsWith("audio/")) return "audio";
+  if (type === "application/pdf") return "pdf";
   return "file";
 }
 
-const AttachToSchema = z.object({
-  block_id: z.string().describe("Page or block to append the uploaded file to."),
-  caption: z.string().optional().describe("Caption for the new block."),
-  position: z
-    .enum(["start", "end"])
-    .optional()
-    .describe("Where to append. Defaults to the end."),
-});
+// Same placement fields as append_blocks, so a caller who knows one knows both.
+const AttachToSchema = z
+  .object({
+    block_id: notionId("block").describe("Page or block to append the uploaded file to."),
+    caption: z.string().optional().describe("Caption for the new block, as plain text."),
+    after: notionId("block").optional().describe("Append immediately after this block ID (legacy ordering)."),
+    position: z.enum(["start", "end"]).optional().describe("Append at start or end. Preferred over `after`."),
+  })
+  .refine((v) => !(v.after && v.position), {
+    message: "Pass at most one of `after` or `position`.",
+  });
 
 const UploadFileParams = z.object({
   mode: z
@@ -264,7 +276,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.\n\nPass `attach_to: { block_id, caption?, position? }` to append the file to a page in the same call. The block type follows the content type: image, video, audio, pdf, else file.",
+    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.\n\nPass `attach_to` to place the file on a page in the same call — without it the result is a file_upload_id that nothing references yet.\n  • `attach_to: { block_id: \"<page-or-block-id>\", caption?: \"...\", position?: \"start\"|\"end\", after?: \"<block-id>\" }` — same placement fields as append_blocks.\n  • The block type follows the content type: image/* → image, video/* → video, audio/* → audio, application/pdf → pdf, anything else → file.\n  • The result then carries `block_id` and `block_type` next to `file_upload_id`. If the append fails after the upload, the error names the file_upload_id so it can be placed with append_blocks instead of re-uploaded.\n\nExample: `{ source: { type: \"path\", path: \"~/Desktop/chart.png\" }, attach_to: { block_id: \"<page-id>\", caption: \"Q3 revenue\" } }`",
   batchable: false,
   schema: UploadFileParams,
   example: {
@@ -313,9 +325,11 @@ register({
 
     // Both modes end the same way: slim the upload, and append a block for it
     // when the caller asked for one.
-    const finish = async (uploaded: { id: string }) => {
-      const data = slimFileUpload(uploaded as Parameters<typeof slimFileUpload>[0]);
-      if (!attach_to) return { ok: true as const, data };
+    const finish = async (
+      uploaded: Parameters<typeof slimFileUpload>[0]
+    ): Promise<OperationResult> => {
+      const data = slimFileUpload(uploaded);
+      if (!attach_to) return { ok: true, data };
       const kind = blockTypeFor(effectiveType);
       const block = {
         object: "block",
@@ -328,17 +342,40 @@ register({
             : {}),
         },
       };
-      const appended = await notion.blocks.children.append(
-        asSdk<AppendBlockBody>({
-          block_id: attach_to.block_id,
-          children: asSdk<AppendBlockChildren>([block]),
-          ...(attach_to.position ? { position: { type: attach_to.position } } : {}),
-        })
-      );
-      return {
-        ok: true as const,
-        data: { ...data, block_id: appended.results[0]?.id, block_type: kind },
-      };
+      // Same placement rule as append_blocks.
+      const position = attach_to.position
+        ? { type: attach_to.position }
+        : attach_to.after
+          ? { type: "after_block" as const, after_block: { id: attach_to.after } }
+          : undefined;
+      try {
+        const appended = await notion.blocks.children.append(
+          asSdk<AppendBlockBody>({
+            block_id: attach_to.block_id,
+            children: asSdk<AppendBlockChildren>([block]),
+            ...(position ? { position } : {}),
+          })
+        );
+        // Notion returns just the new block for end/after, but the full child
+        // set for position "start" — the new block comes first either way.
+        return {
+          ok: true,
+          data: { ...data, block_id: appended.results[0]?.id, block_type: kind },
+        };
+      } catch (err) {
+        // The upload itself succeeded and its id is still usable. A thrown
+        // error would hide that, and the caller would upload the same bytes
+        // again to get an id it already has.
+        const reason = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          error: {
+            code: "attach_failed",
+            message: `Uploaded as file_upload_id ${uploaded.id}, but appending a ${kind} block to ${attach_to.block_id} failed: ${reason}`,
+            fix: `The upload is done — do not re-upload. Place it with append_blocks: { block_id: "${attach_to.block_id}", children: [{ type: "${kind}", ${kind}: { type: "file_upload", file_upload: { id: "${uploaded.id}" } } }] }`,
+          },
+        };
+      }
     };
 
     if (effectiveMode === "single") {
