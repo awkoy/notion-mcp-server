@@ -1,4 +1,5 @@
 import { listOperations } from "./registry.js";
+import { log } from "../utils/log.js";
 import type {
   OperationAccess,
   OperationDef,
@@ -128,10 +129,10 @@ function compute(): ResolveResult {
     parseReadOnly(process.env[READ_ONLY_ENV_VAR])
   );
   for (const w of result.warnings) {
-    console.error(`[operation-access] ${w}`);
+    log.warning(`[operation-access] ${w}`);
   }
   if (result.failedClosed) {
-    console.error(
+    log.error(
       `[operation-access] ${ALLOWED_ENV_VAR} resolved to zero enabled operations — ALL operations are disabled. Check for unknown tokens, or an allowlist fully cancelled by ${BLOCKED_ENV_VAR}.`
     );
   }

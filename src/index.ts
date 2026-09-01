@@ -2,6 +2,7 @@
 import { initOperations } from "./operations/index.js";
 import { parseHttpConfig } from "./config/http.js";
 import { startStdio } from "./server/index.js";
+import { log } from "./utils/log.js";
 
 async function main() {
   try {
@@ -18,18 +19,16 @@ async function main() {
       await startStdio();
     }
   } catch (error) {
-    console.error(
-      "Unhandled server error:",
-      error instanceof Error ? error.message : String(error)
+    log.error(
+      `Unhandled server error: ${error instanceof Error ? error.message : String(error)}`
     );
     process.exit(1);
   }
 }
 
 main().catch((error: unknown) => {
-  console.error(
-    "Unhandled server error:",
-    error instanceof Error ? error.message : String(error)
+  log.error(
+    `Unhandled server error: ${error instanceof Error ? error.message : String(error)}`
   );
   process.exit(1);
 });
