@@ -40,11 +40,11 @@ export type CommentResponse =
 
 export type SearchItemResponse = PageResponse | DatabaseResponse | DataSourceResponse;
 
-function extractRichText(rich: readonly RichTextItemResponse[]): string {
+export function extractRichText(rich: readonly RichTextItemResponse[]): string {
   return rich.map((r) => r.plain_text).join("");
 }
 
-function extractTitle(
+export function extractTitle(
   properties: PageObjectResponse["properties"]
 ): string | undefined {
   for (const value of Object.values(properties)) {
@@ -213,7 +213,7 @@ export function slimBlock(block: BlockResponse, verbose = false) {
   return base;
 }
 
-function extractBlockText(block: BlockObjectResponse): string | undefined {
+export function extractBlockText(block: BlockObjectResponse): string | undefined {
   // Many block subtypes expose a `rich_text` array under their type key.
   // Read it via a structural narrow so we don't have to enumerate every variant.
   const inner = (block as unknown as Record<string, unknown>)[block.type];

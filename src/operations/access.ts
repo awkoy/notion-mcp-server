@@ -10,11 +10,21 @@ import type {
 export const ALLOWED_ENV_VAR = "NOTION_ALLOWED_OPERATIONS";
 export const BLOCKED_ENV_VAR = "NOTION_BLOCKED_OPERATIONS";
 export const READ_ONLY_ENV_VAR = "NOTION_READ_ONLY";
+export const CONFIRM_DESTRUCTIVE_ENV_VAR = "NOTION_CONFIRM_DESTRUCTIVE";
 
 /** Interpret common truthy strings ("true", "1", "yes", "on") as enabling read-only mode. */
 export function parseReadOnly(raw: string | undefined): boolean {
   if (!raw) return false;
   return ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * Whether destructive operations must be confirmed by the user (via MCP
+ * elicitation) before they run. Read on every call rather than memoized: the
+ * parse is trivial and tests toggle the variable between calls.
+ */
+export function confirmDestructiveEnabled(): boolean {
+  return parseReadOnly(process.env[CONFIRM_DESTRUCTIVE_ENV_VAR]);
 }
 
 /** Minimal shape the resolver needs — decoupled from the full OperationDef for testability. */
@@ -170,6 +180,7 @@ export function accessSummary(): {
   allow: string;
   block: string;
   readOnly: boolean;
+  confirmDestructive: boolean;
 } {
   return {
     enabled: get().enabled.size,
@@ -177,6 +188,7 @@ export function accessSummary(): {
     allow: process.env[ALLOWED_ENV_VAR]?.trim() || "(all)",
     block: process.env[BLOCKED_ENV_VAR]?.trim() || "(none)",
     readOnly: parseReadOnly(process.env[READ_ONLY_ENV_VAR]),
+    confirmDestructive: confirmDestructiveEnabled(),
   };
 }
 

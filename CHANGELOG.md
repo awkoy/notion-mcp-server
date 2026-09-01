@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`NOTION_CONFIRM_DESTRUCTIVE`: the user confirms a destructive operation before it runs.** Blocking the `destructive` group is all-or-nothing, and the server instructions could only ask the model to check with the user before trashing something. With `NOTION_CONFIRM_DESTRUCTIVE=true` (or `1`; default off), `notion_execute` asks the human itself, through MCP elicitation, before dispatching any operation the registry marks `destructive: true` — `archive_page`/`trash_page`, `delete_block`, `batch_mixed_blocks`, `delete_database`, `delete_data_source`, `delete_view`, `delete_comment`. The prompt is a yes/no form that names the operation and its target: the page, database, data source or block title when one retrieve (bounded to 5 s, any failure swallowed) can fetch it, otherwise the id, and for a batch how many items. Read operations, non-destructive writes, restores (`delete_database`/`delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry never prompt, and the access checks still run first, so a blocked operation returns `operation_not_allowed` without asking. Decline, cancel or answer no and the call returns `confirmation_declined` with a `fix` saying not to retry; the server instructions repeat that while the flag is on. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run. Documented in the README's env-var table and Restricting operations section and in `llms-install.md`.
+
 ## [2.14.0] — 2026-09-01
 
 ### Added
