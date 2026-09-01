@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { Readable } from "node:stream";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import type { OperationError, OperationResult } from "../src/operations/types.js";
 import { blockFileRef, propertyFileRef } from "../src/utils/file-ref.js";
 
@@ -7,9 +9,16 @@ const notionStub = {
   pages: { retrieve: vi.fn() },
 };
 
-vi.mock("../src/services/notion.js", () => ({
+// Only getClient is replaced: proxyAwareFetch stays real, so these tests cover
+// the proxy-agent wiring, and node-fetch underneath it is the stub.
+vi.mock("../src/services/notion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/services/notion.js")>()),
   getClient: async () => notionStub,
 }));
+
+// vi.mock is hoisted above the imports, so the stub it hands out must be too.
+const { fetchStub } = vi.hoisted(() => ({ fetchStub: vi.fn() }));
+vi.mock("node-fetch", () => ({ default: fetchStub }));
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
@@ -28,10 +37,11 @@ function imageBlock(image: Record<string, unknown>) {
   return { object: "block", id: BLOCK, type: "image", has_children: false, image };
 }
 
-// A fetch Response whose body is a real stream, so the handler's chunked read
-// and cancel paths run for real. `pulls` counts chunks the handler asked for
-// (highWaterMark 0 stops the stream pre-fetching one on its own); `cancelled`
-// flips when the handler abandons the body.
+// A node-fetch style Response whose body is a real Node Readable, so the
+// handler's chunked read and destroy paths run for real. `pulls` counts chunks
+// the handler asked for (highWaterMark 0 stops the stream pre-fetching one on
+// its own); `cancelled` flips when the handler destroys the body before it
+// has ended — a stream that was read to the end is not "cancelled".
 function fakeResponse(opts: {
   status?: number;
   headers?: Record<string, string>;
@@ -41,22 +51,21 @@ function fakeResponse(opts: {
   const status = opts.status ?? 200;
   const probe = { pulls: 0, cancelled: false };
   let i = 0;
-  const body = new ReadableStream<Uint8Array>(
-    {
-      pull(controller) {
-        if (i >= chunks.length) {
-          controller.close();
-          return;
-        }
-        probe.pulls += 1;
-        controller.enqueue(chunks[i++]);
-      },
-      cancel() {
-        probe.cancelled = true;
-      },
+  const body = new Readable({
+    highWaterMark: 0,
+    read() {
+      if (i >= chunks.length) {
+        this.push(null);
+        return;
+      }
+      probe.pulls += 1;
+      this.push(Buffer.from(chunks[i++]));
     },
-    { highWaterMark: 0 }
-  );
+    destroy(error, callback) {
+      if (!this.readableEnded) probe.cancelled = true;
+      callback(error);
+    },
+  });
   const res = {
     ok: status >= 200 && status < 300,
     status,
@@ -67,7 +76,28 @@ function fakeResponse(opts: {
   return { res, probe };
 }
 
-const fetchStub = vi.fn();
+const PROXY_VARS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] as const;
+type ProxyVar = (typeof PROXY_VARS)[number];
+
+// Run fn with the proxy variables set to exactly `vars` (every other one
+// unset, whatever the developer's shell has), and put the environment back
+// afterwards whether or not fn threw.
+async function withProxyEnv(
+  vars: Partial<Record<ProxyVar, string>>,
+  fn: () => Promise<void>
+): Promise<void> {
+  const saved = new Map(PROXY_VARS.map((k) => [k, process.env[k]] as const));
+  const apply = (k: ProxyVar, v: string | undefined) => {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  };
+  try {
+    for (const k of PROXY_VARS) apply(k, vars[k]);
+    await fn();
+  } finally {
+    for (const k of PROXY_VARS) apply(k, saved.get(k));
+  }
+}
 
 beforeAll(async () => {
   await initOperations();
@@ -77,11 +107,6 @@ beforeEach(() => {
   notionStub.blocks.retrieve.mockReset();
   notionStub.pages.retrieve.mockReset();
   fetchStub.mockReset();
-  vi.stubGlobal("fetch", fetchStub);
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
 });
 
 async function getImage(ref: string) {
@@ -233,7 +258,7 @@ describe("get_image", () => {
     notionStub.blocks.retrieve.mockResolvedValue(
       imageBlock({ type: "file", file: { url: SIGNED } })
     );
-    const { res } = fakeResponse({
+    const { res, probe } = fakeResponse({
       headers: { "content-type": "image/png" },
       chunks: [PNG.subarray(0, 3), PNG.subarray(3)],
     });
@@ -244,6 +269,8 @@ describe("get_image", () => {
     expect(result.ok).toBe(true);
     const [content] = (result as { ok: true; data: ImageData }).data._mcp_content;
     expect(Buffer.from(content.data, "base64")).toEqual(PNG);
+    expect(probe.pulls).toBe(2);
+    expect(probe.cancelled).toBe(false);
   });
 
   it("reports an expired signed URL as fetch_failed", async () => {
@@ -273,6 +300,60 @@ describe("get_image", () => {
 
     expect(errorOf(await getImage(BLOCK)).code).toBe("not_found");
     expect(fetchStub).not.toHaveBeenCalled();
+  });
+});
+
+describe("get_image behind a proxy", () => {
+  it("hands node-fetch an agent for the proxy in HTTPS_PROXY", async () => {
+    await withProxyEnv({ HTTPS_PROXY: "http://proxy.local:3128" }, async () => {
+      notionStub.blocks.retrieve.mockResolvedValue(
+        imageBlock({ type: "file", file: { url: SIGNED } })
+      );
+      fetchStub.mockResolvedValue(fakeResponse({}).res);
+
+      const result = await getImage(blockFileRef(BLOCK));
+
+      expect(result.ok).toBe(true);
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+      expect(String(fetchStub.mock.calls[0][0])).toBe(SIGNED);
+      const init = fetchStub.mock.calls[0][1] as { agent?: HttpsProxyAgent<string> };
+      expect(init.agent).toBeInstanceOf(HttpsProxyAgent);
+      expect(init.agent?.proxy.href).toBe("http://proxy.local:3128/");
+    });
+  });
+
+  it("reuses one agent per proxy URL across calls", async () => {
+    await withProxyEnv({ https_proxy: "http://proxy.local:3128" }, async () => {
+      notionStub.blocks.retrieve.mockResolvedValue(
+        imageBlock({ type: "file", file: { url: SIGNED } })
+      );
+      fetchStub.mockResolvedValue(fakeResponse({}).res);
+      await getImage(blockFileRef(BLOCK));
+      fetchStub.mockResolvedValue(fakeResponse({}).res);
+      await getImage(blockFileRef(BLOCK));
+
+      const [first, second] = fetchStub.mock.calls.map(
+        (call) => (call[1] as { agent?: unknown }).agent
+      );
+      expect(first).toBeInstanceOf(HttpsProxyAgent);
+      expect(second).toBe(first);
+    });
+  });
+
+  it("passes no agent when no proxy variable is set", async () => {
+    await withProxyEnv({}, async () => {
+      notionStub.blocks.retrieve.mockResolvedValue(
+        imageBlock({ type: "file", file: { url: SIGNED } })
+      );
+      fetchStub.mockResolvedValue(fakeResponse({}).res);
+
+      const result = await getImage(blockFileRef(BLOCK));
+
+      expect(result.ok).toBe(true);
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+      const init = fetchStub.mock.calls[0][1] as { agent?: unknown } | undefined;
+      expect(init?.agent).toBeUndefined();
+    });
   });
 });
 
