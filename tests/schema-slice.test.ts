@@ -78,3 +78,35 @@ describe("validation_error envelope size", () => {
     expect(text.length).toBeLessThan(2048);
   });
 });
+
+describe("record schemas", () => {
+  const MAP_SCHEMA = {
+    type: "object",
+    properties: {
+      properties: {
+        type: "object",
+        additionalProperties: {
+          anyOf: [
+            { type: "object", properties: { checkbox: { type: "boolean" } }, required: ["checkbox"] },
+            { type: "object", properties: { number: { type: "number" } }, required: ["number"] },
+          ],
+        },
+      },
+    },
+  } as any;
+
+  it("slices through additionalProperties to the value schema", () => {
+    const sliced = sliceJsonSchema(MAP_SCHEMA, ["properties", "Tags"]) as any;
+    expect(sliced.anyOf).toHaveLength(2);
+    expect(sliced.additionalProperties).toBeUndefined();
+  });
+
+  it("summarizes a union nested under additionalProperties", () => {
+    const summarized = summarizeSchema(
+      (MAP_SCHEMA.properties as any).properties
+    ) as any;
+    const branches = summarized.additionalProperties.anyOf;
+    expect(branches).toHaveLength(2);
+    for (const b of branches) expect(JSON.stringify(b).length).toBeLessThan(60);
+  });
+});
