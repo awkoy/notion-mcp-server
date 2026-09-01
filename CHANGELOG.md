@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-08-02
+
+### Added
+
+- **Block children are validated structurally.** Every Notion block is `{ "type": "<name>", "<name>": { ... } }`, and a `children` array that omitted the body key was previously passed straight to the API, which rejected it with a generic error. `append_blocks`, `update_block` and `create_page` now check the shape locally and reply with the specific missing key — `Block has no "paragraph" body. A block is { "type": "paragraph", "paragraph": { ... } }.` The check uses `Object.hasOwn`, so a `type` naming an inherited property (`"toString"`) is still rejected. Runtime validation only; the emitted JSON Schema is unchanged. (Thanks @gauravmm — PR #49.)
+- **`NOTION_UPLOAD_ROOT`.** Confines `upload_file`'s `path` source to one directory. Unset (the default) nothing changes — a `path` source can read any file the server process can, which is worth thinking about when a model composes the path. Set it, and relative paths resolve inside it and anything landing outside is refused. Symlinks are resolved with `fs.realpath` on both sides before the check, so a link sitting inside the root cannot point out of it; a link that stays inside still works, and a missing file still fails with a plain `ENOENT`. Documented in the environment-variable table in the README. (Thanks @gauravmm — PR #51; symlink resolution and docs in PR #61.)
+
+### Fixed
+
+- **`$defs` bodies in `notion_describe` had no shape.** The `$defs` hoisting walked each definition body through the same rewriter it used for references, so every body matched itself and was replaced by a `$ref` to itself — `$defs.rich_text_item` was literally `{"$ref": "#/$defs/rich_text_item"}`. Any client resolving those refs looped back to the same node and never saw the shape it was meant to publish. Affected 15 definitions across 7 operations: `create_page`, `create_database`, `update_database`, `update_block`, `set_page_property`, `set_page_properties`, `batch_mixed_blocks`. (Thanks @gauravmm — PR #44.)
+
+### Changed
+
+- **`@hono/node-server` `1.19.14 → 2.0.12`.** A real runtime dependency in HTTP transport mode — the SDK's `StreamableHTTPServerTransport`, which `src/server/http.ts` imports, pulls `getRequestListener` from it. Clears `GHSA-frvp-7c67-39w9` (path traversal in `serve-static` on Windows); `npm audit --omit=dev` now reports zero vulnerabilities. Neither v2 breaking change affects this package: the Node floor moved to `>=20`, which `engines` already declared, and the removed `@hono/node-server/vercel` adapter is imported nowhere. The public API is unchanged. (PR #63.)
+- **Every workflow installs from the lockfile.** `ci.yml`, `publish-npm.yml` and `publish-mcpb.yml` now run `npm ci` instead of `npm install`. `npm install` re-resolves the dependency graph and rewrites `package-lock.json` in place, so CI could test — and the release workflows could build and publish — a tree that differed from the reviewed lockfile, and a Dependabot pin could be undone by the resolver before a single test ran. `publish-npm.yml`'s note that `npm ci` rejected the lockfile over missing Linux-only optional native deps is stale: the committed lock carries them. In `ci.yml` the separate `npm install -g npm@latest` step is gone with it (`min-release-age` in `.npmrc` gates resolution, and `npm ci` does not resolve); `publish-npm.yml` keeps it for Trusted Publishing / OIDC provenance. (PRs #61, #62.)
+- **Runtime dependency bumps:** `@modelcontextprotocol/sdk` `1.29.0 → 1.30.0` (#58), `@notionhq/client` `5.22.0 → 5.23.2` (#42), `hono` `4.12.25 → 4.12.33` (#59), `body-parser` `2.2.2 → 2.3.0` (#56), `fast-uri` `3.1.2 → 3.1.5` (#57).
+- **Dev toolchain bumps:** `vitest` `4.1.9 → 4.1.10`, `vite` `8.0.16 → 8.1.3`, `rolldown` `1.0.3 → 1.1.4`, `postcss` `8.5.15 → 8.5.25` (#40, #60), `@types/node` `26.0.1 → 26.1.1` (#40, #42). The `postcss` bump closes the only high-severity advisory that was open. No runtime impact.
+- **CI action bumps:** `actions/setup-node` `v6.4.0 → v7.0.0` (#39), `actions/checkout` `v7.0.0 → v7.0.1` and `docker/login-action` `v4.4.0 → v4.6.0` (#52). All pinned by commit SHA.
+
 ## [2.12.0] — 2026-07-10
 
 ### Added
