@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { ElicitRequest, ElicitResult } from "@modelcontextprotocol/client";
 
-// NOTION_CONFIRM_DESTRUCTIVE end to end: a destructive notion_execute call
+// NOTION_CONFIRM_DESTRUCTIVE end to end: a destructive notion_write call
 // must reach the client as an elicitation/create request, and only an
 // explicit yes lets it dispatch. Same in-memory transport pair as
 // tests/wrapper.test.ts, with the client side answering the prompt.
@@ -23,7 +23,7 @@ vi.mock("../src/services/notion.js", () => ({
 // Imports must come after vi.mock() — these load operations that pull the
 // stubbed `getClient`.
 import { createServer } from "../src/server/index.js";
-import { initOperations } from "../src/operations/index.js";
+import { initOperations, getOperation } from "../src/operations/index.js";
 import { configureOperationAccess } from "../src/operations/access.js";
 
 const FLAG = "NOTION_CONFIRM_DESTRUCTIVE";
@@ -127,7 +127,8 @@ function readJson(result: { content: Array<{ type: string; text?: string }> }): 
 type Envelope = { ok: boolean; error?: { code: string; message: string; fix?: string } };
 
 async function execute(c: Client, operation: string, payload: Record<string, unknown>) {
-  const result = await c.callTool({ name: "notion_execute", arguments: { operation, payload } });
+  const name = getOperation(operation)?.access === "read" ? "notion_read" : "notion_write";
+  const result = await c.callTool({ name, arguments: { operation, payload } });
   return { result, body: readJson(result as Parameters<typeof readJson>[0]) as Envelope };
 }
 

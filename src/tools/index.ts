@@ -1,8 +1,9 @@
-import type { CallToolResult, McpServer } from "@modelcontextprotocol/server";
+import type { CallToolResult, McpServer, ServerContext } from "@modelcontextprotocol/server";
 import { ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { readNotionResource } from "./resources.js";
 import { getOperation } from "../operations/index.js";
+import type { OperationAccess } from "../operations/types.js";
 import {
   isOperationAllowed,
   operationNotAllowedError,
@@ -40,89 +41,178 @@ function errorContent(value: unknown): CallToolResult {
   return { isError: true, content: [{ type: "text", text }] };
 }
 
-const EXECUTE_INPUT = z.object({
-  operation: z
-    .string()
-    .describe(
-      "Operation name. See notion_describe for the schema of any operation, or read the notion://operations resource for the full menu. Common ops: set_page_title, append_blocks, get_page, search_pages, query_database."
-    ),
-  payload: z
-    .record(z.string(), z.unknown())
-    .describe(
-      "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch."
-    ),
-});
+/** The MCP tool that runs an operation of the given access class. */
+export const TOOL_BY_ACCESS: Record<OperationAccess, string> = {
+  read: "notion_read",
+  write: "notion_write",
+};
 
-const DESCRIBE_INPUT = z.object({
-  operation: z.string().describe("Operation name to describe."),
-});
+const PAYLOAD_FIELD = z
+  .record(z.string(), z.unknown())
+  .describe(
+    "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch."
+  );
 
-const EXECUTE_DESCRIPTION = `Execute a Notion operation by name.
+// The error a client sees when it names an operation the enum does not carry.
+// The SDK reports a schema mismatch as an InvalidParams JSON-RPC error whose
+// text is zod's message, so the message must say what to do instead: the
+// most common mistake is sending a write op to notion_read (or vice versa).
+function operationIssue(
+  input: unknown,
+  tool: string,
+  access: OperationAccess,
+  valid: readonly string[]
+): string {
+  const name = typeof input === "string" ? input : JSON.stringify(input);
+  const def = typeof input === "string" ? getOperation(input) : undefined;
+  if (def && !isOperationAllowed(def.name)) {
+    return `"${name}" is disabled by this server's configuration (operation_not_allowed).`;
+  }
+  if (def && def.access !== access) {
+    return `"${name}" is a ${def.access} operation: call ${TOOL_BY_ACCESS[def.access]} instead of ${tool}.`;
+  }
+  return `Unknown operation "${name}". ${tool} accepts: ${valid.join(", ")}.`;
+}
+
+// `operation` is an enum of exactly the operations this tool runs on this
+// server, so the tool list doubles as the menu and a client cannot even send
+// a name that is not enabled here. Custom error text keeps that mistake a
+// one-round-trip fix.
+function operationField(
+  tool: string,
+  access: OperationAccess,
+  names: string[],
+  description: string
+) {
+  return z
+    .enum(names, { error: (issue) => operationIssue(issue.input, tool, access, names) })
+    .describe(description);
+}
+
+const READ_DESCRIPTION = `Run one Notion read operation by name. Nothing is modified.
+
+Call: { operation, payload } — payload carries that operation's fields. Common: search_pages { query }, get_page { page_id }, get_page_markdown { page_id }, query_database { database_id, where? }, get_block_children { block_id }.
+
+Responses are slimmed; pass verbose:true in payload for the raw Notion object. Every id field (page_id, block_id, database_id, view_id, …) also accepts a Notion URL, as copied from Share → Copy link. A block link's #fragment is used for block_id fields and a database link's ?v= for view_id fields.
+
+If the payload is malformed, the error response includes the schema + a working example so you can correct and retry in one round-trip. Call notion_describe(operation) ahead of time only for complex shapes (query_database filters).`;
+
+const WRITE_DESCRIPTION = `Run one Notion write operation by name. Archive, trash and delete operations remove content — confirm with the user before running them.
 
 Two ways to call:
   • Single: { operation: "set_page_title", payload: { page_id, title } }
   • Batch:  { operation: "set_page_title", payload: { items: [{page_id, title}, ...], atomic?: false, idempotency_key?: "...", concurrency?: 3 } }
+create_page, append_blocks, update_block and update_page_markdown also take a markdown string.
 
-If the payload is malformed, the error response includes the full schema + a working example so you can correct and retry in one round-trip. Call notion_describe(operation) ahead of time only for complex shapes (query_database filters, batch_mixed_blocks).
+Responses are slimmed; pass verbose:true inside payload (single) or per item (batch) for the raw Notion object. Every id field (page_id, block_id, database_id, view_id, …) also accepts a Notion URL, as copied from Share → Copy link.
 
-Most responses are slimmed by default. Pass verbose:true inside payload (single) or per-item (batch) to get the raw Notion SDK response.
+If the payload is malformed, the error response includes the schema + a working example so you can correct and retry in one round-trip. Call notion_describe(operation) ahead of time only for complex shapes (block trees, database property definitions, batch_mixed_blocks).`;
 
-Every id field (page_id, block_id, database_id, view_id, …) also accepts a Notion URL, as copied from Share → Copy link. A block link's #fragment is used for block_id fields and a database link's ?v= for view_id fields.`;
+const DESCRIBE_DESCRIPTION = `Return the JSON Schema and a working example for one operation, plus which tool runs it (notion_read or notion_write). Use this BEFORE calling the operation when the payload shape is non-trivial (query filters, structured block trees, database property definitions). For simple ops, just call it — errors carry the schema.`;
 
-const DESCRIBE_DESCRIPTION = `Return the JSON Schema and a working example for one operation. Use this BEFORE notion_execute when the payload shape is non-trivial (query filters, structured block trees, database property definitions). For simple ops, just call notion_execute — its errors carry the schema.`;
+/**
+ * Shared body of notion_read and notion_write: optional confirmation, dispatch,
+ * one log line, and the ok / error envelope.
+ */
+async function runOperation(
+  server: McpServer,
+  ctx: ServerContext,
+  tool: string,
+  operation: string,
+  payload: Record<string, unknown>
+): Promise<CallToolResult> {
+  // With NOTION_CONFIRM_DESTRUCTIVE on, a destructive call first asks the
+  // user through elicitation; a "no" (or a client that cannot ask) comes
+  // back as an error envelope and nothing is dispatched.
+  const denied = await confirmDestructiveCall(server, ctx, operation, payload);
+  if (denied) return errorContent({ ok: false, error: denied });
+  const started = performance.now();
+  const result = await dispatch(operation, payload);
+  const items = "summary" in result ? result.summary.total : undefined;
+  const ms = Math.round(performance.now() - started);
+  // One line per call for a client at `debug` (and for stderr): what ran,
+  // whether it succeeded, how long — never the payload or any page content.
+  // Not ctx.mcpReq.log: that forwards debug lines to a client that never set
+  // a level; the level filter lives in utils/log.ts.
+  log.debug(
+    `${tool} ${operation}${items === undefined ? "" : ` batch=${items}`} ${result.ok ? "ok" : "error"} ${ms}ms`,
+    {
+      tool,
+      operation,
+      batch: items !== undefined,
+      ...(items === undefined ? {} : { items }),
+      ms,
+      ok: result.ok,
+    },
+    { server, ctx }
+  );
+  // Batch results (with per-item results) always go back as structured data —
+  // a partial success is a normal outcome of the tool, not a tool error.
+  if (items !== undefined || result.ok) return jsonContent(result);
+  return errorContent(result);
+}
+
+function registerOperationTool(server: McpServer, access: OperationAccess): void {
+  const names = enabledOperations()
+    .filter((def) => def.access === access)
+    .map((def) => def.name);
+  // A tool with nothing to run is not advertised at all: under NOTION_READ_ONLY
+  // (or an allow-list without writes) the client sees no notion_write, so it
+  // has nothing to ask permission for and nothing to describe.
+  if (names.length === 0) return;
+  const tool = TOOL_BY_ACCESS[access];
+  const read = access === "read";
+  server.registerTool(
+    tool,
+    {
+      title: read ? "Notion Read" : "Notion Write",
+      description: read ? READ_DESCRIPTION : WRITE_DESCRIPTION,
+      inputSchema: z.object({
+        operation: operationField(
+          tool,
+          access,
+          names,
+          `The ${access} operation to run. This list is the complete menu of ${access} operations enabled on this server; notion_describe(operation) returns any operation's full schema.`
+        ),
+        payload: PAYLOAD_FIELD,
+      }),
+      annotations: read
+        ? {
+            title: "Notion Read",
+            readOnlyHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          }
+        : {
+            title: "Notion Write",
+            readOnlyHint: false,
+            destructiveHint: true,
+            openWorldHint: true,
+          },
+    },
+    ({ operation, payload }, ctx) => runOperation(server, ctx, tool, operation, payload)
+  );
+}
 
 export function registerAllTools(server: McpServer): void {
-  server.registerTool(
-    "notion_execute",
-    {
-      title: "Notion Execute",
-      description: EXECUTE_DESCRIPTION,
-      inputSchema: EXECUTE_INPUT,
-      annotations: {
-        title: "Notion Execute",
-        readOnlyHint: false,
-        destructiveHint: true,
-        openWorldHint: true,
-      },
-    },
-    async ({ operation, payload }, ctx): Promise<CallToolResult> => {
-      // With NOTION_CONFIRM_DESTRUCTIVE on, a destructive call first asks the
-      // user through elicitation; a "no" (or a client that cannot ask) comes
-      // back as an error envelope and nothing is dispatched.
-      const denied = await confirmDestructiveCall(server, ctx, operation, payload);
-      if (denied) return errorContent({ ok: false, error: denied });
-      const started = performance.now();
-      const result = await dispatch(operation, payload);
-      const items = "summary" in result ? result.summary.total : undefined;
-      const ms = Math.round(performance.now() - started);
-      // One line per call for a client at `debug` (and for stderr): what ran,
-      // whether it succeeded, how long — never the payload or any page content.
-      // Not ctx.mcpReq.log: that forwards debug lines to a client that never set
-      // a level; the level filter lives in utils/log.ts.
-      log.debug(
-        `notion_execute ${operation}${items === undefined ? "" : ` batch=${items}`} ${result.ok ? "ok" : "error"} ${ms}ms`,
-        {
-          operation,
-          batch: items !== undefined,
-          ...(items === undefined ? {} : { items }),
-          ms,
-          ok: result.ok,
-        },
-        { server, ctx }
-      );
-      // Batch results (with per-item results) always go back as structured data —
-      // a partial success is a normal outcome of the tool, not a tool error.
-      if (items !== undefined || result.ok) return jsonContent(result);
-      return errorContent(result);
-    }
-  );
+  registerOperationTool(server, "read");
+  registerOperationTool(server, "write");
 
+  // notion_describe takes a plain string: the read and write enums above are
+  // already the menu, and repeating all of them here would cost every session
+  // another ~1 KB of tool list for nothing (an unknown name lists them anyway).
+  if (enabledOperationNames().length === 0) return;
   server.registerTool(
     "notion_describe",
     {
       title: "Notion Describe",
       description: DESCRIBE_DESCRIPTION,
-      inputSchema: DESCRIBE_INPUT,
+      inputSchema: z.object({
+        operation: z
+          .string()
+          .describe("Operation name to describe, as listed by notion_read / notion_write."),
+      }),
       annotations: {
         title: "Notion Describe",
         readOnlyHint: true,
@@ -147,6 +237,7 @@ export function registerAllTools(server: McpServer): void {
       }
       return jsonContent({
         name: def.name,
+        tool: TOOL_BY_ACCESS[def.access],
         description: def.description,
         batchable: def.batchable,
         schema: emitJsonSchema(def.schema),
@@ -223,13 +314,15 @@ function renderOperationsIndex(): string {
   const lines = [
     "# Notion MCP — Operations",
     "",
-    "Call `notion_execute({operation, payload})` with one of these. Use `notion_describe({operation})` for the full schema.",
+    "Call `notion_read({operation, payload})` for a read operation and `notion_write({operation, payload})` for a write operation — the Tool column says which. Use `notion_describe({operation})` for the full schema.",
     "",
-    "| Operation | Batchable | Description |",
-    "| --- | --- | --- |",
+    "| Operation | Tool | Batchable | Description |",
+    "| --- | --- | --- | --- |",
   ];
   for (const def of enabledOperations()) {
-    lines.push(`| \`${def.name}\` | ${def.batchable ? "yes" : "no"} | ${def.description} |`);
+    lines.push(
+      `| \`${def.name}\` | ${TOOL_BY_ACCESS[def.access]} | ${def.batchable ? "yes" : "no"} | ${def.description} |`
+    );
   }
   // Document the WHERE DSL when any operation that accepts it is enabled.
   // query_database, create_view, and update_view all take the same `where`.

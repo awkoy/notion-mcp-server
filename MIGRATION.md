@@ -1,3 +1,33 @@
+# Upgrading from v2 → v3
+
+v3 changes one thing: the tool surface. `notion_execute` is gone. `notion_read` runs the read operations and `notion_write` the write operations, and each tool's `operation` field is an enum of the operations enabled on the server. Payloads, responses, `notion_describe`, the resources, the prompts and every environment variable are unchanged.
+
+## Why
+
+- **Permissions are granted per tool.** Claude Code rules are `mcp__<server>__<tool>`, Cursor allowlists tool names, and no client reads the `readOnlyHint` annotation. With one tool you could only approve or prompt for all of Notion at once; now reads can be approved once while writes still ask.
+- **The menu ships with the tool list.** The `operation` enum tells the model what exists without a resource read, lets a client validate a call before sending it, and makes a disabled operation impossible to name.
+
+## What to change
+
+| v2 | v3 |
+| --- | --- |
+| `notion_execute({ operation: "get_page", payload })` | `notion_read({ operation: "get_page", payload })` |
+| `notion_execute({ operation: "create_page", payload })` | `notion_write({ operation: "create_page", payload })` |
+| `notion_describe({ operation })` | unchanged; the result gains `tool: "notion_read" \| "notion_write"` |
+| `notion://operations` table | gained a `Tool` column |
+
+Read operations are `get_*`, `list_*`, `search_pages`, `query_database` and `query_view`; everything else is a write. A name sent to the wrong tool fails validation with a message naming the right tool, so a model that guesses wrong recovers in one round-trip.
+
+Permission rules in your client that named `notion_execute` need the new names, for example in Claude Code:
+
+```json
+{ "permissions": { "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"] } }
+```
+
+Under `NOTION_READ_ONLY=true` (or an allowlist with no write operation) `notion_write` is not advertised at all, so a client that lists tools sees only `notion_read` and `notion_describe`.
+
+Nothing else moves: environment variables, `NOTION_CONFIRM_DESTRUCTIVE`, the batch envelope, Notion URLs as ids, the error envelopes and the `debug` log line all behave as in v2.14 (the log line now starts with the tool name).
+
 # Upgrading from v2.3 → v2.4
 
 v2.4 is a focused fix-up of the rough edges discovered while live-testing v2.3 against real Notion workspaces as an LLM caller. The tool surface (`notion_execute`, `notion_describe`) is unchanged. One breaking field rename, several "less typing, fewer round-trips" wins, and dramatically smaller validation envelopes.

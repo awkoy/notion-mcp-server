@@ -11,7 +11,7 @@ Give your AI full read/write access to Notion with **one token and one paste**. 
 Three reasons it exists when Notion ships its own MCP:
 
 - **Built for agents, not humans-in-the-loop.** Notion's hosted MCP is OAuth-only — it cannot run headless. This server authenticates with a token, so it works in **CI, cron jobs, background agents, and self-hosted deployments** where nobody can click "Authorize".
-- **97% smaller tool footprint at connection.** Two MCP tools (**422 tokens**) instead of one schema per endpoint — the official open-source server loads **17,163 tokens** of tool schemas before you do anything. Operation schemas load on demand via `notion_describe`, so even a typical multi-operation task stays 85–95% lighter. [Measured, reproducible →](./benchmarks)
+- **94% smaller tool footprint at connection.** Three MCP tools (**1,005 tokens**, the operation menus included) instead of one schema per endpoint — the official open-source server loads **17,163 tokens** of tool schemas before you do anything. Operation schemas load on demand via `notion_describe`, so even a typical multi-operation task stays 75–90% lighter. [Measured, reproducible →](./benchmarks)
 - **The operational stuff is built in.** Batched mutations with atomic rollback, idempotency keys, automatic retry on rate limits, slim token-efficient responses, full markdown round-trip, and self-healing validation errors that let the model fix its own bad payloads in one turn.
 
 <a href="https://glama.ai/mcp/servers/zrh07hteaa">
@@ -100,7 +100,7 @@ The `-i` flag is required (stdio transport). The image is OCI-compliant — Podm
 
 > *"Use Notion to make a page called 'Hello from my agent' and add a checklist of three things to try today."*
 
-Your AI calls `notion_execute` and replies with a live page link.
+Your AI calls `notion_write` and replies with a live page link.
 
 ## 💡 What your AI can do with it
 
@@ -131,7 +131,7 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 
 | Capability | Official Notion MCP (open source) | **This server** |
 | --- | --- | --- |
-| **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **2 tools**, 422 tokens — [97% less schema at connection](./benchmarks) |
+| **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **3 tools**, 1,005 tokens — [94% less schema at connection](./benchmarks) |
 | **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
@@ -148,8 +148,8 @@ If you just want to chat with your Notion in claude.ai's web UI, use Notion's ho
 
 **Real-world impact:**
 
-- **Renaming 50 pages** — one `notion_execute` call with `{ items: [...], concurrency: 10 }` instead of 50 separate tool calls through the agent's reasoning loop: roughly an order of magnitude faster, and the prompt-token savings are the bigger win.
-- **Tool list in context** — 2 schema blobs per conversation instead of ~24, no matter which of the 47 operations get called.
+- **Renaming 50 pages** — one `notion_write` call with `{ items: [...], concurrency: 10 }` instead of 50 separate tool calls through the agent's reasoning loop: roughly an order of magnitude faster, and the prompt-token savings are the bigger win.
+- **Tool list in context** — 3 schema blobs per conversation instead of ~24, no matter which of the 47 operations get called; the operation menu ships inside them as enums, so the model never has to read a resource to learn what exists.
 - **Reading a 100-row database** — flattened rows are typically **5–10× fewer tokens** than the raw `properties` bag, with no information loss.
 
 </details>
@@ -207,7 +207,7 @@ A Personal Access Token (PAT) is like a key that lets the AI act as **you** insi
 
 ### Step 3 — Check and try
 
-Type **`/`** in a new chat — you should see `notion_execute` and `notion_describe` in the list. Then ask:
+Type **`/`** in a new chat — you should see `notion_read`, `notion_write` and `notion_describe` in the list. Then ask:
 
 > *"Use Notion to make a new page called 'Hello from Claude' and add a checklist of three things I want to try today."*
 
@@ -264,7 +264,7 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 
 HTTP-transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`, `MCP_AUTH_TOKEN`, …) are covered in [Remote / HTTP transport](#-remote--http-transport).
 
-> **Upgrading from v1.x?** Your env vars all still work unchanged. The only break is the tool surface (v1's five tools became `notion_execute` + `notion_describe`); modern clients rediscover tools automatically. Details: [MIGRATION.md](./MIGRATION.md).
+> **Upgrading from v1.x or v2.x?** Your env vars all still work unchanged. The only break is the tool surface (v1's five tools, then v2's `notion_execute`, became `notion_read` + `notion_write`; `notion_describe` is unchanged); modern clients rediscover tools automatically. Details: [MIGRATION.md](./MIGRATION.md).
 
 ### Restricting operations
 
@@ -295,7 +295,7 @@ Mix presets and individual ops:
 { "env": { "NOTION_ALLOWED_OPERATIONS": "read,append_blocks,add_page_comment" } }
 ```
 
-**Rules:** case-insensitive; unknown tokens ignored with a warning; blocklist wins; an allowlist that resolves to zero operations disables **everything** (fail-closed). Disabled operations disappear from `notion_describe` and the `notion://operations` menu, and `notion_execute` rejects them with `operation_not_allowed`.
+**Rules:** case-insensitive; unknown tokens ignored with a warning; blocklist wins; an allowlist that resolves to zero operations disables **everything** (fail-closed). Disabled operations disappear from the tools' `operation` enums, from `notion_describe` and from the `notion://operations` menu, so a call naming one fails validation before it runs; when no write operation is enabled (`NOTION_READ_ONLY`, or an allowlist of reads) `notion_write` is not advertised at all.
 
 On startup the server logs one line to stderr summarizing what resolved — check it first if the config doesn't behave as expected:
 
@@ -303,7 +303,7 @@ On startup the server logs one line to stderr summarizing what resolved — chec
 Operation access: 22/48 enabled (allow=read; block=(none))
 ```
 
-**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_execute` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation): a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
+**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation): a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
 
 <details>
 <summary><b>Per-operation reference & limitations</b></summary>
@@ -423,7 +423,7 @@ services:
 
 ## 🌟 Features: what this Notion MCP server does
 
-- **Two-tool surface** — `notion_execute` (do it) + `notion_describe` (learn the shape). The whole API is one schema deep.
+- **Three-tool surface** — `notion_read` (look), `notion_write` (change), `notion_describe` (learn the shape). Each tool's `operation` is an enum of what it runs, so the tool list is the menu and your client can auto-approve reads while writes still ask.
 - **Universal batch envelope** — every mutating op accepts `{ items: [...], atomic?, idempotency_key?, concurrency? }` with per-item validation and results.
 - **Atomic batches with best-effort rollback** — `atomic: true` aborts on first failure and archives anything created earlier in the batch.
 - **Idempotency keys** — same `(operation, idempotency_key)` returns the cached result for 5 minutes. Safe to retry on flaky networks.
@@ -440,13 +440,43 @@ services:
 - **HTTP(S) proxy support** — standard `HTTPS_PROXY` / `HTTP_PROXY` env vars for corporate networks.
 - **Access control** — `NOTION_READ_ONLY` one-switch read-only mode plus per-operation allow/block lists.
 
-## 📚 MCP tools (`notion_execute` & `notion_describe`)
+## 📚 MCP tools (`notion_read`, `notion_write` & `notion_describe`)
 
-The server exposes exactly **two** MCP tools — your client loads two schemas regardless of which of the 47 operations gets called.
+The server exposes exactly **three** MCP tools — your client loads three schemas regardless of which of the 47 operations gets called. `notion_read` runs the read operations and `notion_write` the write operations; each tool's `operation` field is an enum of exactly the operations enabled on this server, so the menu ships with the tool list, a client can validate a call before sending it, and a name sent to the wrong tool fails in one round-trip with a message naming the right one.
 
-### `notion_execute`
+### Per-tool permissions
 
-Run any operation: `{ operation, payload }`, where payload is a single object or `{ items: [...] }` for batch mode.
+MCP clients grant permissions by tool name, so the split lets you approve reads once and keep writes behind a prompt. In Claude Code (`~/.claude/settings.json` or the project's `.claude/settings.json`, with `notion` being whatever you named the server):
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"]
+  }
+}
+```
+
+Cursor's MCP settings offer the same per-tool allowlist. `notion_read` is annotated `readOnlyHint: true` and `notion_write` `destructiveHint: true`, for clients that read annotations.
+
+### `notion_read`
+
+`{ operation, payload }` for any read operation — search, page and block reads, database queries, users, comments, files.
+
+```jsonc
+{ "operation": "search_pages", "payload": { "query": "Q3 plan" } }
+```
+
+```jsonc
+// a page as markdown, addressed by the link Notion copies
+{
+  "operation": "get_page_markdown",
+  "payload": { "page_id": "https://www.notion.so/Q3-plan-1f3c1a2b3c4d5e6f7a8b9c0d1e2f3a4b" }
+}
+```
+
+### `notion_write`
+
+`{ operation, payload }` for any write operation, where payload is a single object or `{ items: [...] }` for batch mode.
 
 ```jsonc
 // single call
@@ -501,13 +531,15 @@ If a payload doesn't validate, the error response includes the operation's full 
 
 ### `notion_describe`
 
-Returns the JSON Schema + working example for one operation — useful before complex calls (filter expressions, mixed block batches, database property definitions).
+Returns the JSON Schema + working example for one operation, plus `tool` (which of the two runs it) — useful before complex calls (filter expressions, mixed block batches, database property definitions).
 
 ```jsonc
 { "operation": "query_database" }
 ```
 
 ### Operations menu (47 ops, plus one alias)
+
+Read operations (`get_*`, `list_*`, `search_pages`, `query_database`, `query_view`) go through `notion_read`; everything else through `notion_write`. The `notion://operations` resource lists the tool next to each operation.
 
 | Area | Operations |
 | --- | --- |
@@ -551,7 +583,7 @@ Still stuck? [GitHub Issues](https://github.com/awkoy/notion-mcp-server/issues) 
 
 ### What is the Notion MCP server and how does it work?
 
-A Model Context Protocol server that connects AI assistants — Claude, Cursor, VS Code Copilot, Cline, Zed, Continue, anything that speaks MCP — to your Notion workspace. It runs locally (or in Docker, or as an HTTP endpoint) and exposes two MCP tools the AI calls to read and write Notion. You authenticate once with a Notion token; everything else is natural language.
+A Model Context Protocol server that connects AI assistants — Claude, Cursor, VS Code Copilot, Cline, Zed, Continue, anything that speaks MCP — to your Notion workspace. It runs locally (or in Docker, or as an HTTP endpoint) and exposes three MCP tools the AI calls to read, write and inspect Notion operations. You authenticate once with a Notion token; everything else is natural language.
 
 ### How do I connect Claude to Notion using MCP?
 
@@ -598,7 +630,7 @@ claude mcp add notion -s user \
   -- node "$(pwd)/build/index.js"
 ```
 
-Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. The server honours `logging/setLevel`; the default is `info`. At `debug` you also get one line per `notion_execute` call (operation, batch size, duration, ok or error — never the payload or page content).
+Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. The server honours `logging/setLevel`; the default is `info`. At `debug` you also get one line per `notion_read` / `notion_write` call (operation, batch size, duration, ok or error — never the payload or page content).
 
 <details>
 <summary><b>Technical details: how it's built</b></summary>
