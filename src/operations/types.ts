@@ -26,6 +26,7 @@ export type OperationName =
   | "list_data_sources"
   | "get_data_source"
   | "update_data_source"
+  | "delete_data_source"
   | "list_data_source_templates"
   | "list_views"
   | "get_view"

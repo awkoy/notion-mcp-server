@@ -6,9 +6,9 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (45 total: 43 ops + trash_page + get_self aliases)", () => {
+  it("registers every name in the OperationName union (46 total: 44 ops + trash_page + get_self aliases)", () => {
     const names = operationNames();
-    expect(names.length).toBe(45);
+    expect(names.length).toBe(46);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
   });
@@ -32,6 +32,7 @@ describe("operations registry", () => {
     expect(getOperation("list_data_sources")).toBeDefined();
     expect(getOperation("get_data_source")).toBeDefined();
     expect(getOperation("update_data_source")).toBeDefined();
+    expect(getOperation("delete_data_source")).toBeDefined();
   });
 
   it("includes move_page", () => {
