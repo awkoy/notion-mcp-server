@@ -68,14 +68,14 @@ describe("MCP wrapper: listPrompts", () => {
 });
 
 describe("MCP wrapper: getPrompt happy paths", () => {
-  it("create_task templates the title into a notion_execute / create_page instruction", async () => {
+  it("create_task templates the title into a notion_write / create_page instruction", async () => {
     const result = await client.getPrompt({
       name: "create_task",
       arguments: { title: "Ship the prompts feature" },
     });
     const text = firstUserText(result);
     expect(text).toContain("Ship the prompts feature");
-    expect(text).toContain("notion_execute");
+    expect(text).toContain("notion_write");
     expect(text).toContain("create_page");
   });
 
@@ -150,10 +150,11 @@ describe("MCP wrapper: getPrompt validation", () => {
 });
 
 describe("MCP wrapper: tools and resources unaffected by adding prompts", () => {
-  it("still advertises notion_execute and notion_describe", async () => {
+  it("still advertises notion_read, notion_write and notion_describe", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    expect(names).toContain("notion_execute");
+    expect(names).toContain("notion_read");
+    expect(names).toContain("notion_write");
     expect(names).toContain("notion_describe");
   });
 

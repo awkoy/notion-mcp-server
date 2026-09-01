@@ -65,7 +65,7 @@ async function connect(): Promise<Session> {
 
 function archive(client: Client, payload: Record<string, unknown>) {
   return client.callTool({
-    name: "notion_execute",
+    name: "notion_write",
     arguments: { operation: "archive_page", payload },
   });
 }
@@ -129,7 +129,7 @@ describe("per-call debug line", () => {
     expect(entry).toBeDefined();
     expect(entry.logger).toBe("notion-mcp-server");
     expect(entry.data).toMatchObject({
-      message: expect.stringContaining("notion_execute archive_page ok"),
+      message: expect.stringContaining("notion_write archive_page ok"),
       operation: "archive_page",
       batch: false,
       ok: true,

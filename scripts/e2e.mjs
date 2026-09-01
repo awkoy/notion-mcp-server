@@ -42,11 +42,16 @@ const find = (o, key) => {
 };
 function record(op, ok, ms, note) { results.push({ op, ok, ms, note: String(note ?? "").replace(/\s+/g, " ").slice(0, 220) }); }
 
+// notion_read runs read operations, notion_write write operations; the
+// notion://operations table (read below) says which is which.
+const toolByOp = new Map();
+const toolFor = (op) => toolByOp.get(op) ?? "notion_write";
+
 async function exec(op, payload, label = op) {
   exercised.add(op);
   const t0 = Date.now();
   let res;
-  try { res = await client.callTool({ name: "notion_execute", arguments: { operation: op, payload } }); }
+  try { res = await client.callTool({ name: toolFor(op), arguments: { operation: op, payload } }); }
   catch (e) { record(label, false, Date.now() - t0, "transport: " + e.message); return null; }
   const text = res.content?.find((c) => c.type === "text")?.text;
   const image = res.content?.find((c) => c.type === "image");
@@ -60,7 +65,7 @@ async function exec(op, payload, label = op) {
 async function expectError(op, payload, label) {
   exercised.add(op);
   const t0 = Date.now();
-  const res = await client.callTool({ name: "notion_execute", arguments: { operation: op, payload } });
+  const res = await client.callTool({ name: toolFor(op), arguments: { operation: op, payload } });
   const text = res.content?.find((c) => c.type === "text")?.text ?? "";
   let parsed = null; try { parsed = JSON.parse(text); } catch {}
   const hasSchema = /schema/i.test(text) && /example/i.test(text);
@@ -72,12 +77,12 @@ const tools = await client.listTools();
 const resources = await client.listResources();
 const templates = await client.listResourceTemplates();
 const prompts = await client.listPrompts();
-record("mcp: tools/resources/templates/prompts", tools.tools.length === 2 && resources.resources.length === 1 && templates.resourceTemplates.length === 2 && prompts.prompts.length === 4, 0,
+record("mcp: tools/resources/templates/prompts", tools.tools.length === 3 && resources.resources.length === 1 && templates.resourceTemplates.length === 2 && prompts.prompts.length === 4, 0,
   `${tools.tools.map((t) => t.name).join(",")} | ${resources.resources.length} res, ${templates.resourceTemplates.length} templates, ${prompts.prompts.length} prompts`);
 const opsIndex = await client.readResource({ uri: "notion://operations" });
 const opsText = opsIndex.contents[0]?.text ?? "";
-const allOps = [...opsText.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]);
-record("resource notion://operations", allOps.length > 0, 0, `${allOps.length} operations listed`);
+const allOps = [...opsText.matchAll(/^\| `(\w+)` \| (notion_\w+) \|/gm)].map((m) => (toolByOp.set(m[1], m[2]), m[1]));
+record("resource notion://operations", allOps.length > 0, 0, `${allOps.length} operations listed (${[...toolByOp.values()].filter((t) => t === "notion_read").length} read)`);
 for (const p of prompts.prompts) {
   const args = Object.fromEntries((p.arguments ?? []).filter((a) => a.required).map((a) => [a.name, ROOT ?? "test"]));
   try { const g = await client.getPrompt({ name: p.name, arguments: args }); record(`prompt ${p.name}`, g.messages.length > 0, 0, `${g.messages.length} messages`); }

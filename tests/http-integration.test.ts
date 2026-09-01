@@ -57,14 +57,16 @@ afterAll(async () => {
 });
 
 describe("Streamable HTTP transport (no auth)", () => {
-  it("completes the MCP handshake and lists notion_execute + notion_describe", async () => {
+  it("completes the MCP handshake and lists notion_read, notion_write and notion_describe", async () => {
     const client = new Client({ name: "http-it", version: "0.0.0" });
     await client.connect(
       new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${noAuth.port}/mcp`))
     );
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    expect(names).toContain("notion_execute");
+    expect(names).toContain("notion_read");
+    expect(names).toContain("notion_write");
+    expect(names).not.toContain("notion_execute");
     expect(names).toContain("notion_describe");
     await client.close();
   });

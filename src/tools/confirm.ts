@@ -12,7 +12,7 @@ import { extractBlockText, extractRichText, extractTitle } from "../utils/slim.j
 
 // Opt-in confirmation of destructive operations (NOTION_CONFIRM_DESTRUCTIVE).
 //
-// Before notion_execute dispatches an operation the registry marks
+// Before notion_write dispatches an operation the registry marks
 // `destructive: true`, the server asks the human through MCP elicitation and
 // only proceeds on an explicit yes. The prompt names the operation and its
 // target — with the title when one cheap retrieve can fetch it — so the user

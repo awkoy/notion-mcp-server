@@ -24,12 +24,12 @@ export function buildInstructions(): string {
   const { enabled, total, readOnly, confirmDestructive } = accessSummary();
   const scope =
     enabled < total
-      ? `\n\nOnly ${enabled} of ${total} operations are enabled here${readOnly ? " (read-only mode)" : ""}; the rest return operation_not_allowed. The notion://operations resource lists what works.`
+      ? `\n\nOnly ${enabled} of ${total} operations are enabled here${readOnly ? " (read-only mode)" : ""}; the tool enums and the notion://operations resource list what works.`
       : "";
   const confirm = confirmDestructive
     ? `\n\nDestructive operations ask the user to confirm before running; a confirmation_declined error means the user said no, so do not retry the call — ask what they want instead.`
     : "";
-  return `Notion MCP server. notion_execute(operation, payload) runs one named operation; notion_describe(operation) returns its JSON Schema and a working example; the notion://operations resource lists every operation with a one-line summary.
+  return `Notion MCP server. notion_read(operation, payload) runs one read operation and notion_write(operation, payload) one write operation; each tool's operation enum is its complete menu. notion_describe(operation) returns an operation's JSON Schema and a working example; the notion://operations resource lists every operation with a one-line summary.
 
 How to work:
 - Find things with search_pages (title search across pages and databases) or query_database. Results are slimmed to id, title, url and a few fields. Every id field also accepts a Notion URL, so paste links as-is.
