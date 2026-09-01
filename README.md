@@ -248,6 +248,7 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | `NOTION_READ_ONLY` | — | — | `true`/`1`/`yes` disables every write operation in one switch |
 | `NOTION_ALLOWED_OPERATIONS` | — | all | Comma-separated allowlist of operations or group presets — see [Restricting operations](#restricting-operations) |
 | `NOTION_BLOCKED_OPERATIONS` | — | — | Comma-separated blocklist (same vocabulary); wins over the allowlist |
+| `NOTION_UPLOAD_ROOT` | — | — | Confine `upload_file`'s `path` source to one directory. Unset, a `path` source can read any file the server process can — set this if a model composes the path. Relative paths resolve inside it; symlinks are resolved before the check, so they can't point out |
 | `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Route Notion API traffic through an HTTP(S) proxy (standard env vars, lowercase also accepted) |
 | `NOTION_DAILY_LOG_PAGE_ID` | — | — | Only used by the daily-log MCP prompt |
 
