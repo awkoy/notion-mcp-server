@@ -94,7 +94,7 @@ claude mcp add notion -s user \
   -- docker run --rm -i -e NOTION_TOKEN ghcr.io/awkoy/notion-mcp-server:latest
 ```
 
-The `-i` flag is required (stdio transport). The image is OCI-compliant — Podman, OrbStack, colima, Rancher Desktop, Finch, and nerdctl all work with the same flags.
+The `-i` flag is required (stdio transport). The image is OCI-compliant — Podman, OrbStack, colima, Rancher Desktop, Finch, and nerdctl all work with the same flags. For a long-running HTTP container (and the health check that goes with it), see [Remote / HTTP transport](#-remote--http-transport).
 
 **Step 3 — try it.** In a new chat:
 
@@ -120,8 +120,8 @@ Three options exist. Honest guidance:
 
 | | Best for | Auth | Headless / CI | Notes |
 | --- | --- | --- | --- | --- |
-| **[Notion hosted MCP](https://developers.notion.com/docs/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor | OAuth (human must click) | ❌ | First-party, 18 markdown tools, some plan-gated |
-| **[Official open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion has soft-deprecated it (“may sunset this repository… issues and PRs not actively monitored”) |
+| **[Notion hosted MCP](https://developers.notion.com/guides/mcp/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor | OAuth (human must click; Notion says non-interactive auth is in the works) | ❌ | First-party, ~34 markdown tools (11 of them Custom Agent session tools that need Notion AI), some plan-gated |
+| **[Official open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion calls it deprecated and “no longer actively maintained”; the repo says it “may sunset” it and that issues and PRs are not actively monitored |
 | **This server** | Agents, automation, CI, self-hosting, token-sensitive workloads | Token (PAT) | ✅ | Actively maintained, agent-first design below |
 
 If you just want to chat with your Notion in claude.ai's web UI, use Notion's hosted connector — it's one click. Use **this** server when your agent runs unattended, when context/token cost matters, or when you want batch/idempotent semantics and self-hosting.
@@ -259,7 +259,7 @@ Official reference: [PAT guide](https://developers.notion.com/guides/get-started
 | `NOTION_CONFIRM_DESTRUCTIVE` | — | — | `true`/`1` makes every destructive operation ask you to confirm first, through MCP elicitation — see [Restricting operations](#restricting-operations) |
 | `NOTION_UPLOAD_ROOT` | — | — | Confine `upload_file`'s `path` source to one directory. Unset, a `path` source can read any file the server process can — set this if a model composes the path. Relative paths resolve inside it; symlinks are resolved before the check, so they can't point out — see [Files](#files) |
 | `NOTION_FILE_URLS` | — | `full` | `ref` replaces Notion's signed file URLs (~1,650 chars, valid for an hour) in slim responses with short `notion-file:` refs that `get_file_url` / `get_image` resolve on demand — see [Files](#files) |
-| `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Route Notion API traffic through an HTTP(S) proxy (standard env vars, lowercase also accepted) |
+| `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Route all outbound traffic — Notion API calls and the downloads in `get_image` / `upload_file`'s `url` source — through an HTTP(S) proxy (standard env vars, lowercase also accepted) |
 | `NOTION_DAILY_LOG_PAGE_ID` | — | — | Only used by the daily-log MCP prompt |
 
 HTTP-transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`, `MCP_AUTH_TOKEN`, …) are covered in [Remote / HTTP transport](#-remote--http-transport).
@@ -385,7 +385,40 @@ npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0
 In Docker:
 
 ```bash
-docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -p 3000:3000 ghcr.io/awkoy/notion-mcp-server
+docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
+  -p 3000:3000 ghcr.io/awkoy/notion-mcp-server
+```
+
+`HOST=0.0.0.0` is what makes the published port reachable — inside the container `127.0.0.1` is the container's own loopback — and a non-loopback bind is exactly where `MCP_AUTH_TOKEN` matters.
+
+**Health check.** The image ships without a `HEALTHCHECK`: it starts in stdio mode, where nothing listens, so a built-in probe of `/health` would mark every stdio container unhealthy. For an HTTP deployment add one yourself — the same command sits in the `Dockerfile`, commented out:
+
+```bash
+docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
+  -p 3000:3000 \
+  --health-cmd "node -e \"fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
+  --health-interval 30s --health-timeout 3s --health-start-period 5s --health-retries 3 \
+  ghcr.io/awkoy/notion-mcp-server
+```
+
+Or in Compose:
+
+```yaml
+services:
+  notion-mcp-server:
+    image: ghcr.io/awkoy/notion-mcp-server:latest
+    environment:
+      NOTION_TOKEN: ${NOTION_TOKEN:?NOTION_TOKEN is required}
+      MCP_TRANSPORT: http
+      HOST: 0.0.0.0
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
+    ports: ["3000:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
 ```
 
 ## 🌟 Features: what this Notion MCP server does
@@ -526,7 +559,7 @@ See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/to
 
 ### What's the difference between this and Notion's official MCP?
 
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless. Their **open-source** server is soft-deprecated and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
+Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless (Notion says non-interactive authorization is in the works, but not yet). Their **open-source** server is, in Notion's words, "no longer actively maintained" and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
 
 ### Can I use it with Cursor, VS Code, ChatGPT, or Cline?
 

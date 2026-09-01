@@ -2,7 +2,9 @@ import { z } from "zod";
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { getClient } from "../services/notion.js";
+import type { Readable } from "node:stream";
+import type { Response } from "node-fetch";
+import { getClient, proxyAwareFetch } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { slimFileUpload, slimList } from "../utils/slim.js";
@@ -124,7 +126,9 @@ async function resolveBytes(source: Source): Promise<Uint8Array<ArrayBuffer>> {
     out.set(buf);
     return out;
   }
-  const res = await fetch(source.url);
+  // Through the proxy-aware helper, not the global fetch: behind a corporate
+  // proxy the global one cannot reach the URL at all.
+  const res = await proxyAwareFetch(source.url);
   if (!res.ok) {
     throw new Error(
       `Failed to fetch ${source.url}: ${res.status} ${res.statusText}`
@@ -604,26 +608,38 @@ function imageMimeType(contentType: string | null): string | undefined {
   return type && type.startsWith("image/") ? type : undefined;
 }
 
+// node-fetch types the body as NodeJS.ReadableStream; at runtime it is a Node
+// Readable, which is what destroy() and async iteration below need.
+function bodyStream(res: Response): Readable | null {
+  return res.body as Readable | null;
+}
+
+// Drop a body we will not read, so the socket goes back to the pool (or is
+// closed) instead of sitting there until the response is garbage-collected.
+function discardBody(res: Response): void {
+  bodyStream(res)?.destroy();
+}
+
 // Read the body in chunks with a running total and stop the moment it passes
 // the cap. arrayBuffer() would hold the whole response in memory before the
 // size could be checked, and a chunked response carries no content-length.
 async function readCapped(
-  body: ReadableStream<Uint8Array> | null,
+  body: Readable | null,
   max: number
 ): Promise<Buffer | undefined> {
   if (!body) return Buffer.alloc(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Buffer[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
+  for await (const chunk of body) {
+    const buf: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.byteLength;
     if (total > max) {
-      await reader.cancel();
+      // Returning from inside for-await also destroys the stream; doing it
+      // explicitly keeps the intent visible.
+      body.destroy();
       return undefined;
     }
-    chunks.push(value);
+    chunks.push(buf);
   }
   return Buffer.concat(chunks);
 }
@@ -697,9 +713,11 @@ register({
       };
     }
 
-    const res = await fetch(url);
+    // proxyAwareFetch, not the global fetch, so HTTPS_PROXY applies here as it
+    // does to every Notion API call.
+    const res = await proxyAwareFetch(url);
     if (!res.ok) {
-      await res.body?.cancel();
+      discardBody(res);
       return {
         ok: false,
         error: {
@@ -711,7 +729,7 @@ register({
     }
     const mimeType = imageMimeType(res.headers.get("content-type"));
     if (!mimeType) {
-      await res.body?.cancel();
+      discardBody(res);
       return {
         ok: false,
         error: {
@@ -725,10 +743,10 @@ register({
     // is read; the capped read below covers a missing or wrong header.
     const declared = Number(res.headers.get("content-length"));
     if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
-      await res.body?.cancel();
+      discardBody(res);
       return { ok: false, error: tooLarge(`${declared} bytes`) };
     }
-    const bytes = await readCapped(res.body, MAX_IMAGE_BYTES);
+    const bytes = await readCapped(bodyStream(res), MAX_IMAGE_BYTES);
     if (!bytes) {
       return { ok: false, error: tooLarge(`over ${MAX_IMAGE_BYTES} bytes`) };
     }

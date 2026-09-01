@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,9 +68,16 @@ const notionStub = {
   },
 };
 
-vi.mock("../src/services/notion.js", () => ({
+// Only getClient is replaced: proxyAwareFetch stays real (it is what the URL
+// source goes through) and node-fetch underneath it is the stub.
+vi.mock("../src/services/notion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/services/notion.js")>()),
   getClient: async () => notionStub,
 }));
+
+// vi.mock is hoisted above the imports, so the stub it hands out must be too.
+const { fetchStub } = vi.hoisted(() => ({ fetchStub: vi.fn() }));
+vi.mock("node-fetch", () => ({ default: fetchStub }));
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
@@ -81,6 +89,7 @@ beforeAll(async () => {
 beforeEach(() => {
   for (const fn of Object.values(notionStub.fileUploads)) fn.mockReset();
   notionStub.blocks.children.append.mockReset();
+  fetchStub.mockReset();
 });
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -342,7 +351,7 @@ describe("upload_file (multi-part)", () => {
 describe("upload_file (URL source)", () => {
   it("fetches the URL and forwards the exact bytes to fileUploads.send", async () => {
     const remoteBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x42, 0x00, 0x99]);
-    const fetchStub = vi.fn().mockResolvedValue({
+    fetchStub.mockResolvedValue({
       ok: true,
       status: 200,
       arrayBuffer: async () =>
@@ -351,7 +360,6 @@ describe("upload_file (URL source)", () => {
           remoteBytes.byteOffset + remoteBytes.byteLength
         ),
     });
-    vi.stubGlobal("fetch", fetchStub);
 
     notionStub.fileUploads.create.mockResolvedValue({ id: "fu-url" });
     notionStub.fileUploads.send.mockResolvedValue({
@@ -359,7 +367,33 @@ describe("upload_file (URL source)", () => {
       status: "uploaded",
     });
 
+    const res = await dispatch("upload_file", {
+      mode: "single",
+      filename: "blob.pdf",
+      source: { type: "url", url: "https://example.com/blob.pdf" },
+    });
+
+    expect(res).toMatchObject({ ok: true });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(fetchStub.mock.calls[0][0]).toBe("https://example.com/blob.pdf");
+    expect((await sendBytes(0)).equals(remoteBytes)).toBe(true);
+  });
+
+  it("goes through the proxy in HTTPS_PROXY, like every Notion API call", async () => {
+    const saved = process.env.HTTPS_PROXY;
+    process.env.HTTPS_PROXY = "http://proxy.local:3128";
     try {
+      fetchStub.mockResolvedValue({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(4),
+      });
+      notionStub.fileUploads.create.mockResolvedValue({ id: "fu-proxy" });
+      notionStub.fileUploads.send.mockResolvedValue({
+        id: "fu-proxy",
+        status: "uploaded",
+      });
+
       const res = await dispatch("upload_file", {
         mode: "single",
         filename: "blob.pdf",
@@ -367,10 +401,12 @@ describe("upload_file (URL source)", () => {
       });
 
       expect(res).toMatchObject({ ok: true });
-      expect(fetchStub).toHaveBeenCalledWith("https://example.com/blob.pdf");
-      expect((await sendBytes(0)).equals(remoteBytes)).toBe(true);
+      const init = fetchStub.mock.calls[0][1] as { agent?: HttpsProxyAgent<string> };
+      expect(init.agent).toBeInstanceOf(HttpsProxyAgent);
+      expect(init.agent?.proxy.href).toBe("http://proxy.local:3128/");
     } finally {
-      vi.unstubAllGlobals();
+      if (saved === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = saved;
     }
   });
 });
