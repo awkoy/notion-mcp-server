@@ -20,18 +20,22 @@ export const EMAIL_PROPERTY_VALUE_SCHEMA = z.object({
 });
 
 export const FILES_PROPERTY_VALUE_SCHEMA = z.object({
-  // A file property value carries no `type` discriminator, unlike a file on a
-  // block or a cover.
+  // Unlike a file on a block or a cover, a file property value only takes the
+  // `type` tag optionally: Notion tells the arms apart by which key is present.
+  // An external file needs a `name`; an uploaded one already has its filename,
+  // so `name` is optional there (SDK: FileUploadWithOptionalNameRequest).
   files: z.array(
     z.union([
       z.object({
+        type: z.literal("external").optional(),
         name: z.string(),
         external: z.object({
           url: z.url({ protocol: /^https?$/ }),
         }),
       }),
       z.object({
-        name: z.string(),
+        type: z.literal("file_upload").optional(),
+        name: z.string().optional(),
         file_upload: z.object({
           id: z.string().describe("file_upload_id returned by upload_file"),
         }),

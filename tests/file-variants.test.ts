@@ -67,4 +67,31 @@ describe("files property value", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  it("takes a file_upload entry without a name, which the upload already carries", () => {
+    const parsed = FILES_PROPERTY_VALUE_SCHEMA.safeParse({
+      files: [{ file_upload: { id: UPLOAD_ID } }],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("keeps an explicit type tag and rejects a tag that contradicts the body", () => {
+    const tagged = FILES_PROPERTY_VALUE_SCHEMA.safeParse({
+      files: [{ type: "file_upload", file_upload: { id: UPLOAD_ID } }],
+    });
+    expect(tagged.success).toBe(true);
+    expect(tagged.data!.files[0]).toMatchObject({ type: "file_upload" });
+
+    const contradicted = FILES_PROPERTY_VALUE_SCHEMA.safeParse({
+      files: [{ type: "external", file_upload: { id: UPLOAD_ID } }],
+    });
+    expect(contradicted.success).toBe(false);
+  });
+
+  it("still requires a name on an external entry", () => {
+    const parsed = FILES_PROPERTY_VALUE_SCHEMA.safeParse({
+      files: [{ external: { url: "https://example.com/dot.png" } }],
+    });
+    expect(parsed.success).toBe(false);
+  });
 });
