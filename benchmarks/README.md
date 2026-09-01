@@ -2,7 +2,7 @@
 
 How much of an agent's context window does the Notion tool surface consume **before it does any work**? Every MCP client sends the server's `tools/list` payload — tool names, descriptions, and JSON input schemas — into the model's context on connection, and it stays there for the whole session. Fewer, smaller schemas = more room for the actual task.
 
-This benchmark measures that payload for **this server** (2 tools) against the **official open-source server** [`@notionhq/notion-mcp-server`](https://www.npmjs.com/package/@notionhq/notion-mcp-server) (one tool per REST endpoint).
+This benchmark measures that payload for **this server** (3 tools) against the **official open-source server** [`@notionhq/notion-mcp-server`](https://www.npmjs.com/package/@notionhq/notion-mcp-server) (one tool per REST endpoint).
 
 ## Method
 
@@ -12,35 +12,35 @@ This benchmark measures that payload for **this server** (2 tools) against the *
 
 ## Results
 
-Measured against `@notionhq/notion-mcp-server` (Notion-Version `2022-06-28`), this server at v2.10.1.
+Measured against `@notionhq/notion-mcp-server` (Notion-Version `2022-06-28`). This server's static footprint was re-measured at v3.0.0, when `notion_execute` became `notion_read` + `notion_write` with an enum of operation names in each (the two enums are ~330 of the tokens); the per-operation `notion_describe` costs below are from v2.10.1.
 
 ### Static footprint — always in context, every request
 
 | Server | Tools | Tool-schema tokens |
 | --- | --- | --- |
 | Official open-source server | 24 | **17,163** |
-| This server | 2 | **422** |
+| This server | 3 | **1,005** |
 
-**97.5% smaller — 40.7× less** context spent on tool schemas at connection.
+**94.1% smaller — 17.1× less** context spent on tool schemas at connection.
 
-The official server front-loads all 24 endpoint schemas whether or not you use them. This server exposes two tools — `notion_execute` (dispatches 44 operations) and `notion_describe` (returns any operation's schema on demand) — so the full operation catalog never sits in context.
+The official server front-loads all 24 endpoint schemas whether or not you use them. This server exposes three tools — `notion_read` and `notion_write` (which between them dispatch every operation, each carrying an enum of its operation names) and `notion_describe` (returns any operation's schema on demand) — so the full operation catalog never sits in context.
 
-### Realistic sessions — static 422 + `notion_describe` only for operations actually used
+### Realistic sessions — static 1,005 + `notion_describe` only for operations actually used
 
 | Task | Operations described | Tokens | vs. 17,163 |
 | --- | --- | --- | --- |
-| Read a page | `get_page` | 582 | 97% less |
-| Search + read | `search_pages`, `get_page` | 802 | 95% less |
-| Query a database | `query_database` | 796 | 95% less |
-| Write: page + blocks | `create_page`, `append_blocks` | 2,270 | 87% less |
-| Typical mixed (4 ops) | `get_page`, `search_pages`, `append_blocks`, `query_database` | 1,424 | 92% less |
-| Heavy (8 ops) | 8 distinct operations | 3,578 | 79% less |
+| Read a page | `get_page` | 1,165 | 93% less |
+| Search + read | `search_pages`, `get_page` | 1,385 | 92% less |
+| Query a database | `query_database` | 1,379 | 92% less |
+| Write: page + blocks | `create_page`, `append_blocks` | 2,853 | 83% less |
+| Typical mixed (4 ops) | `get_page`, `search_pages`, `append_blocks`, `query_database` | 2,007 | 88% less |
+| Heavy (8 ops) | 8 distinct operations | 4,161 | 76% less |
 
-`notion_describe` output averages ~650 tokens/operation (69 for a trivial op like `delete_comment`, up to ~4,500 for `batch_mixed_blocks`). Often the agent skips `describe` entirely — `notion_execute` returns self-healing validation errors that let the model correct its own payload in one turn.
+`notion_describe` output averages ~650 tokens/operation (69 for a trivial op like `delete_comment`, up to ~4,500 for `batch_mixed_blocks`). Often the agent skips `describe` entirely — `notion_read` / `notion_write` return self-healing validation errors that let the model correct its own payload in one turn.
 
 ### Honest worst case
 
-Describing **all 44 operations** would cost ~29,000 tokens — more than the official server's 17,163. You would never do this: the design pays only for what a task touches, while the official server pays its full 17,163 on every connection regardless. Note also this server covers **44 operations vs. the official 24 endpoints**, with richer per-operation schemas (batch semantics, idempotency), so even per-operation the payloads aren't strictly like-for-like.
+Describing **all 44 operations** would cost ~29,600 tokens — more than the official server's 17,163. You would never do this: the design pays only for what a task touches, while the official server pays its full 17,163 on every connection regardless. Note also this server covers **44 operations vs. the official 24 endpoints**, with richer per-operation schemas (batch semantics, idempotency), so even per-operation the payloads aren't strictly like-for-like.
 
 ## Reproduce
 
