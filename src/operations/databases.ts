@@ -355,7 +355,7 @@ const UpdateDatabaseParams = z.object({
 });
 
 const DeleteDatabaseParams = z.object({
-  database_id: z.string(),
+  database_id: notionId(),
   in_trash: z
     .boolean()
     .optional()

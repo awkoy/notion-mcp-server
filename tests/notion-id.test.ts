@@ -5,6 +5,7 @@ import { emitJsonSchema } from "../src/schema/emit.js";
 
 const notionStub = {
   blocks: { retrieve: vi.fn(), children: { append: vi.fn() } },
+  databases: { update: vi.fn() },
   pages: { create: vi.fn(), update: vi.fn() },
   views: { retrieve: vi.fn() },
   users: { retrieve: vi.fn() },
@@ -177,6 +178,7 @@ describe("notionId through the operations", () => {
   beforeEach(() => {
     notionStub.blocks.retrieve.mockReset().mockResolvedValue({ id: BLOCK_DASHED });
     notionStub.blocks.children.append.mockReset().mockResolvedValue({ results: [{ id: "b" }] });
+    notionStub.databases.update.mockReset().mockResolvedValue({ id: DASHED });
     notionStub.pages.create.mockReset().mockResolvedValue({ id: "p" });
     notionStub.pages.update.mockReset().mockResolvedValue({ id: DASHED });
     notionStub.views.retrieve.mockReset().mockResolvedValue({ id: VIEW_DASHED });
@@ -232,6 +234,17 @@ describe("notionId through the operations", () => {
     });
     expect(res.ok).toBe(true);
     expect(notionStub.views.retrieve.mock.calls[0][0].view_id).toBe(VIEW_DASHED);
+  });
+
+  it("a database view link in database_id yields the database, not the view", async () => {
+    const res = await dispatch("delete_database", {
+      database_id: `https://www.notion.so/acme/${BARE}?v=${VIEW_BARE}`,
+    });
+    expect(res.ok).toBe(true);
+    expect(notionStub.databases.update.mock.calls[0][0]).toEqual({
+      database_id: DASHED,
+      in_trash: true,
+    });
   });
 
   it("a URL inside `parent` is normalized through the shared $def", async () => {

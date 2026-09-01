@@ -111,7 +111,7 @@ const UpdateDataSourceParams = z.object({
 });
 
 const DeleteDataSourceParams = z.object({
-  data_source_id: z.string(),
+  data_source_id: notionId(),
   in_trash: z
     .boolean()
     .optional()
