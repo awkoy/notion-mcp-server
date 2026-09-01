@@ -120,8 +120,8 @@ Three options exist. Honest guidance:
 
 | | Best for | Auth | Headless / CI | Notes |
 | --- | --- | --- | --- | --- |
-| **[Notion hosted MCP](https://developers.notion.com/docs/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor | OAuth (human must click) | ❌ | First-party, 18 markdown tools, some plan-gated |
-| **[Official open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion has soft-deprecated it (“may sunset this repository… issues and PRs not actively monitored”) |
+| **[Notion hosted MCP](https://developers.notion.com/guides/mcp/get-started-with-mcp)** (`mcp.notion.com`) | Interactive chat in claude.ai, ChatGPT, Cursor | OAuth (human must click; Notion says non-interactive auth is in the works) | ❌ | First-party, ~34 markdown tools (11 of them Custom Agent session tools that need Notion AI), some plan-gated |
+| **[Official open-source server](https://github.com/makenotion/notion-mcp-server)** | — | Token | ✅ | Notion calls it deprecated and “no longer actively maintained”; the repo says it “may sunset” it and that issues and PRs are not actively monitored |
 | **This server** | Agents, automation, CI, self-hosting, token-sensitive workloads | Token (PAT) | ✅ | Actively maintained, agent-first design below |
 
 If you just want to chat with your Notion in claude.ai's web UI, use Notion's hosted connector — it's one click. Use **this** server when your agent runs unattended, when context/token cost matters, or when you want batch/idempotent semantics and self-hosting.
@@ -559,7 +559,7 @@ See the [Quick start](#-quick-start): get a PAT at [app.notion.com/developers/to
 
 ### What's the difference between this and Notion's official MCP?
 
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless. Their **open-source** server is soft-deprecated and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
+Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat — it can't run headless (Notion says non-interactive authorization is in the works, but not yet). Their **open-source** server is, in Notion's words, "no longer actively maintained" and exposes one tool per endpoint. This server authenticates with a token (works in CI/automation), exposes 2 tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. See [Which Notion MCP should you use?](#-which-notion-mcp-should-you-use).
 
 ### Can I use it with Cursor, VS Code, ChatGPT, or Cline?
 
