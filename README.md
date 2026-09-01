@@ -443,6 +443,17 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
 }
 ```
 
+```jsonc
+// upload a file and place it on a page in one call
+{
+  "operation": "upload_file",
+  "payload": {
+    "source": { "type": "path", "path": "~/Desktop/chart.png" },
+    "attach_to": { "block_id": "<page-or-block-id>", "caption": "Q3 revenue" }
+  }
+}
+```
+
 If a payload doesn't validate, the error response includes the operation's full JSON Schema, a working example, and a `fix` hint — the next call can be corrected without a `notion_describe` round-trip.
 
 ### `notion_describe`
