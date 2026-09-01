@@ -48,4 +48,12 @@ USER node
 # set MCP_TRANSPORT=http and publish this port to run the HTTP transport.
 EXPOSE 3000
 
+# No HEALTHCHECK by default. The default transport is stdio, where nothing
+# listens, so a probe of /health would mark every stdio container unhealthy.
+# For an HTTP deployment (MCP_TRANSPORT=http) uncomment the line below, or pass
+# the same command as `docker run --health-cmd` / a compose `healthcheck:` —
+# see the README's "Remote / HTTP transport" section.
+# HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+#   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 ENTRYPOINT ["node", "build/index.js"]

@@ -94,7 +94,7 @@ claude mcp add notion -s user \
   -- docker run --rm -i -e NOTION_TOKEN ghcr.io/awkoy/notion-mcp-server:latest
 ```
 
-The `-i` flag is required (stdio transport). The image is OCI-compliant — Podman, OrbStack, colima, Rancher Desktop, Finch, and nerdctl all work with the same flags.
+The `-i` flag is required (stdio transport). The image is OCI-compliant — Podman, OrbStack, colima, Rancher Desktop, Finch, and nerdctl all work with the same flags. For a long-running HTTP container (and the health check that goes with it), see [Remote / HTTP transport](#-remote--http-transport).
 
 **Step 3 — try it.** In a new chat:
 
@@ -385,7 +385,40 @@ npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0
 In Docker:
 
 ```bash
-docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -p 3000:3000 ghcr.io/awkoy/notion-mcp-server
+docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
+  -p 3000:3000 ghcr.io/awkoy/notion-mcp-server
+```
+
+`HOST=0.0.0.0` is what makes the published port reachable — inside the container `127.0.0.1` is the container's own loopback — and a non-loopback bind is exactly where `MCP_AUTH_TOKEN` matters.
+
+**Health check.** The image ships without a `HEALTHCHECK`: it starts in stdio mode, where nothing listens, so a built-in probe of `/health` would mark every stdio container unhealthy. For an HTTP deployment add one yourself — the same command sits in the `Dockerfile`, commented out:
+
+```bash
+docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \
+  -p 3000:3000 \
+  --health-cmd "node -e \"fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
+  --health-interval 30s --health-timeout 3s --health-start-period 5s --health-retries 3 \
+  ghcr.io/awkoy/notion-mcp-server
+```
+
+Or in Compose:
+
+```yaml
+services:
+  notion-mcp-server:
+    image: ghcr.io/awkoy/notion-mcp-server:latest
+    environment:
+      NOTION_TOKEN: ${NOTION_TOKEN:?NOTION_TOKEN is required}
+      MCP_TRANSPORT: http
+      HOST: 0.0.0.0
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
+    ports: ["3000:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
 ```
 
 ## 🌟 Features: what this Notion MCP server does
