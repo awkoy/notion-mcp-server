@@ -51,6 +51,12 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
+      - name: Build
+        # tests/cli.test.ts spawns build/index.js, so the build must exist
+        # before the tests run — the same order as ci.yml. `npm publish` still
+        # rebuilds through `prepare`, so what ships is built from the same tree.
+        run: npm run build
+
       - name: Run tests
         run: npm test
 
