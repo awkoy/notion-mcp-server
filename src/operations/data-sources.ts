@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isFullDatabase } from "@notionhq/client";
+import { isFullDatabase, isFullDataSource } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
@@ -7,6 +7,7 @@ import { slimDataSource } from "../utils/slim.js";
 import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
 import { notionId } from "../schema/id.js";
+import { forgetDataSourceSchema, rememberDataSourceSchema } from "../services/schema-cache.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -176,6 +177,10 @@ register({
       ...(icon !== undefined ? { icon } : {}),
     };
     const response = await notion.dataSources.update(asSdk<UpdateDataSourceBody>(body));
+    // The property schema may just have changed; the write and filter paths
+    // read it from the cache.
+    if (response && isFullDataSource(response)) rememberDataSourceSchema(response);
+    else forgetDataSourceSchema(data_source_id);
     return { ok: true, data: slimDataSource(response, verbose ?? false) };
   }),
 });

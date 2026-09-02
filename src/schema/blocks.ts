@@ -6,23 +6,11 @@ import { preprocessJson } from "./preprocess.js";
 import { LANGUAGE_SCHEMA } from "./lang.js";
 import { EXTERNAL_FILE_SCHEMA, FILE_UPLOAD_SCHEMA } from "./file.js";
 
+// Only `type` is a request field. `object`, `created_time`, `has_children`,
+// `archived` … are what Notion echoes back, and listing them in every block
+// variant doubled the emitted schema for nothing a caller could set.
 export const BASE_BLOCK_REQUEST_SCHEMA = z.object({
   type: z.string().describe("Type of block"),
-  object: z.literal("block").optional().describe("Object type identifier"),
-  created_time: z
-    .string()
-    .optional()
-    .describe("ISO timestamp of block creation"),
-  last_edited_time: z
-    .string()
-    .optional()
-    .describe("ISO timestamp of last edit"),
-  has_children: z
-    .boolean()
-    .optional()
-    .describe("Whether block has child blocks"),
-  archived: z.boolean().optional().describe("Whether block is archived"),
-  in_trash: z.boolean().optional().describe("Whether block is in trash (2026-03-11 surface)"),
 });
 
 export const TEXT_BLOCK_BASE_REQUEST_SCHEMA = z.object({

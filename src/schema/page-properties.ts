@@ -113,3 +113,55 @@ export const VERIFICATION_PROPERTY_VALUE_SCHEMA = z.object({
     })
     .describe("Verification property value"),
 });
+
+// ── Property value: typed objects plus plain-value shorthand ─────────────────
+
+/** `{ start, end?, time_zone? }` — a date value without the `date` wrapper. */
+export const DATE_SHORTHAND_SCHEMA = z.object({
+  start: z.string(),
+  end: z.string().nullable().optional(),
+  time_zone: z.string().nullable().optional(),
+});
+
+/** `{ name?, url }` — an external file without the `external` wrapper. */
+export const FILE_SHORTHAND_SCHEMA = z.object({
+  name: z.string().optional(),
+  url: z.string(),
+});
+
+/**
+ * One page property value. Either the typed Notion object (`{ select: { name } }`,
+ * `{ date: { start } }`, …) or a plain value that the server coerces from the
+ * data source's property type: string, number, boolean, null (clear), an array
+ * of strings (multi_select / people / relation), a `{ start, end? }` date, an
+ * array of `{ name, url }` files, or a bare rich-text array.
+ */
+export const PROPERTY_VALUE_SCHEMA = z
+  .union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(z.string()),
+    DATE_SHORTHAND_SCHEMA,
+    z.array(FILE_SHORTHAND_SCHEMA),
+    z.array(RICH_TEXT_ITEM_REQUEST_SCHEMA),
+    TITLE_PROPERTY_VALUE_SCHEMA,
+    RICH_TEXT_PROPERTY_VALUE_SCHEMA,
+    NUMBER_PROPERTY_VALUE_SCHEMA,
+    SELECT_PROPERTY_VALUE_SCHEMA,
+    MULTI_SELECT_PROPERTY_VALUE_SCHEMA,
+    STATUS_PROPERTY_VALUE_SCHEMA,
+    DATE_PROPERTY_VALUE_SCHEMA,
+    PEOPLE_PROPERTY_VALUE_SCHEMA,
+    FILES_PROPERTY_VALUE_SCHEMA,
+    CHECKBOX_PROPERTY_VALUE_SCHEMA,
+    URL_PROPERTY_VALUE_SCHEMA,
+    EMAIL_PROPERTY_VALUE_SCHEMA,
+    PHONE_NUMBER_PROPERTY_VALUE_SCHEMA,
+    RELATION_PROPERTY_VALUE_SCHEMA,
+    VERIFICATION_PROPERTY_VALUE_SCHEMA,
+  ])
+  .describe(
+    "Property value. For a database row a plain value is enough — the server types it from the property definition: a string for title / rich_text / select / status / date / url / email / phone_number, a number, true/false, an array of names or ids for multi_select / people / relation, { start, end? } for a date range, [{ name, url }] for files, null to clear. Typed Notion objects such as { select: { name } } are accepted too."
+  );

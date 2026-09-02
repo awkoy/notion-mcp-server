@@ -186,3 +186,58 @@ describe("compileWhere — empty + invalid input", () => {
     expect(() => compileWhere({ Status: { in: [] } })).toThrow(/"in".*non-empty/);
   });
 });
+
+describe("compileWhere — with the data source's property types", () => {
+  const types = {
+    Name: { type: "title" },
+    Status: { type: "status" },
+    Kind: { type: "select" },
+    Done: { type: "checkbox" },
+    Due: { type: "date" },
+    Notes: { type: "rich_text" },
+    Total: { type: "formula" },
+  };
+
+  it("uses the declared type instead of guessing from the value", () => {
+    expect(compileWhere({ Status: "Done" }, types)).toEqual({
+      property: "Status",
+      status: { equals: "Done" },
+    });
+    expect(compileWhere({ Name: "Report" }, types)).toEqual({
+      property: "Name",
+      title: { equals: "Report" },
+    });
+    expect(compileWhere({ Notes: { contains: "x" } }, types)).toEqual({
+      property: "Notes",
+      rich_text: { contains: "x" },
+    });
+  });
+
+  it("compiles null against the declared type", () => {
+    expect(compileWhere({ Due: null }, types)).toEqual({ property: "Due", date: { is_empty: true } });
+    expect(compileWhere({ Done: null }, types)).toEqual({ property: "Done", checkbox: { equals: false } });
+  });
+
+  it("rejects a property the data source does not have, listing the valid names", () => {
+    expect(() => compileWhere({ Priority: "High" }, types)).toThrow(
+      /Unknown property "Priority"\. The data source has: Name, Status, Kind, Done, Due, Notes, Total/
+    );
+  });
+
+  it("falls back to inference for types the DSL has no operators for, and lets __type win", () => {
+    expect(compileWhere({ Total: { gte: 3 } }, types)).toEqual({ property: "Total", number: { greater_than_or_equal_to: 3 } });
+    expect(compileWhere({ Kind: { __type: "rich_text", contains: "a" } }, types)).toEqual({
+      property: "Kind",
+      rich_text: { contains: "a" },
+    });
+  });
+
+  it("threads the types through AND / OR / NOT", () => {
+    expect(compileWhere({ or: [{ Status: "Done" }, { not: { Kind: "Bug" } }] }, types)).toEqual({
+      or: [
+        { property: "Status", status: { equals: "Done" } },
+        { property: "Kind", select: { does_not_equal: "Bug" } },
+      ],
+    });
+  });
+});

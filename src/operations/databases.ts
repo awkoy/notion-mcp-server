@@ -10,7 +10,8 @@ import { PARENT_SCHEMA } from "../schema/page.js";
 import { ICON_SCHEMA } from "../schema/icon.js";
 import { FILE_SCHEMA } from "../schema/file.js";
 import { TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA } from "../schema/rich-text.js";
-import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
+import { WHERE_SCHEMA, compileWhere, type PropertyTypes } from "../schema/filter-dsl.js";
+import { getDataSourceSchema } from "../services/schema-cache.js";
 import type { OperationResult } from "./types.js";
 import {
   asSdk,
@@ -120,6 +121,20 @@ register({
 // query_database
 // ──────────────────────────────────────────────────────────────────────────
 
+type Sort =
+  | { property: string; direction: "ascending" | "descending" }
+  | { timestamp: "created_time" | "last_edited_time"; direction: "ascending" | "descending" };
+
+/** `"-Due Date"` → `{ property: "Due Date", direction: "descending" }`. */
+function compileSort(sort: string | Sort): Sort {
+  if (typeof sort !== "string") return sort;
+  const descending = sort.startsWith("-");
+  const name = descending ? sort.slice(1) : sort;
+  const direction = descending ? "descending" : "ascending";
+  if (name === "created_time" || name === "last_edited_time") return { timestamp: name, direction };
+  return { property: name, direction };
+}
+
 const QueryDatabaseParams = z
   .object({
     database_id: notionId()
@@ -133,12 +148,28 @@ const QueryDatabaseParams = z
         "Data source ID. Use for multi-source databases or when you've already resolved the source via list_data_sources."
       ),
     where: WHERE_SCHEMA.optional().describe(
-      "Typed shorthand filter DSL. Property names map to scalar values (equals) or operator objects like {gte:3, contains:'x'}. Top-level AND/OR arrays and NOT compose. Mutually exclusive with `filter`."
+      "Filter by property name: a plain value means equals ({ Status: 'Done', Priority: 'High' }), an operator object refines it ({ Score: { gte: 3 }, Name: { contains: 'x' }, Due: { before: '2026-01-01' } }, null means empty), AND/OR arrays and NOT compose. Property types come from the data source, so status and select just work. Mutually exclusive with `filter`."
     ),
     filter: z.unknown().optional().describe(
       "Raw Notion filter JSON. Use this for edge cases the `where` DSL can't express. Mutually exclusive with `where`."
     ),
-    sorts: z.array(z.unknown()).optional(),
+    sorts: z
+      .array(
+        z.union([
+          z
+            .string()
+            .describe(
+              "Property name, ascending; prefix with '-' for descending. 'created_time' / 'last_edited_time' sort by timestamp."
+            ),
+          z.object({ property: z.string(), direction: z.enum(["ascending", "descending"]) }),
+          z.object({
+            timestamp: z.enum(["created_time", "last_edited_time"]),
+            direction: z.enum(["ascending", "descending"]),
+          }),
+        ])
+      )
+      .optional()
+      .describe("Sort order, e.g. ['-Due Date', 'Priority'] or [{ property: 'Due Date', direction: 'descending' }]."),
     start_cursor: z.string().optional(),
     page_size: z.number().min(1).max(MAX_PAGE_SIZE).optional(),
     paginate: z.boolean().optional().describe(
@@ -163,12 +194,14 @@ register({
   name: "query_database",
   access: "read",
   domain: "databases",
-  description: "Query a database with optional filter and sorts. Results are page objects.",
+  description:
+    "Query a database's rows with an optional `where` filter ({ Status: 'Done', Score: { gte: 3 } }) and sorts (['-Due Date']). Results are slim page objects with their properties.",
   batchable: false,
   schema: QueryDatabaseParams,
   example: {
     database_id: "<database-id>",
-    filter: { property: "Status", status: { equals: "Done" } },
+    where: { Status: "Done", Priority: { in: ["High", "Medium"] } },
+    sorts: ["-Due Date"],
     page_size: 50,
   },
   handler: tryHandler(async ({
@@ -213,15 +246,26 @@ register({
 
     let compiledFilter: unknown;
     if (where !== undefined) {
+      // The data source's property types make the filter exact (status vs
+      // select, title vs rich_text) and let an unknown name fail here with
+      // the valid names instead of at Notion. Cached; a failed lookup just
+      // falls back to inferring types from the values.
+      let types: PropertyTypes | undefined;
       try {
-        compiledFilter = compileWhere(where);
+        const schema = await getDataSourceSchema(dsId);
+        if (Object.keys(schema).length > 0) types = schema;
+      } catch {
+        types = undefined;
+      }
+      try {
+        compiledFilter = compileWhere(where, types);
       } catch (err) {
         return {
           ok: false,
           error: {
             code: "where_compile_error",
             message: err instanceof Error ? err.message : String(err),
-            fix: "Check your `where` clause shape. Pass `__type` on the property to force a property type, or fall back to raw `filter`.",
+            fix: "Check the `where` clause: property names as in get_data_source, a plain value or an operator object per property. Pass `__type` to force a property type, or fall back to raw `filter`.",
           },
         };
       }
@@ -232,7 +276,7 @@ register({
     const baseBody = {
       data_source_id: dsId,
       ...(compiledFilter !== undefined ? { filter: compiledFilter } : {}),
-      ...(sorts !== undefined ? { sorts } : {}),
+      ...(sorts !== undefined ? { sorts: sorts.map(compileSort) } : {}),
     };
     const pageSize = page_size ?? DEFAULT_PAGE_SIZE;
     const runQuery = (cursor: string | undefined, size: number) =>

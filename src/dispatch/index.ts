@@ -39,6 +39,65 @@ function isBatchPayload(payload: RawPayload): payload is BatchPayload {
   );
 }
 
+const BATCH_ENVELOPE_KEYS = new Set(["items", "atomic", "idempotency_key", "concurrency"]);
+
+/**
+ * The keys a schema accepts at its top level, when it is a plain object
+ * (possibly behind preprocess / optional wrappers). Undefined for anything
+ * else — a loose object, a union — so no warning is ever produced for them.
+ */
+function acceptedKeys(schema: unknown): string[] | undefined {
+  let current: unknown = schema;
+  for (let depth = 0; depth < 12; depth++) {
+    const def = (current as { _zod?: { def?: Record<string, unknown> } })?._zod?.def;
+    if (!def) return undefined;
+    switch (def.type) {
+      case "object":
+        if (def.catchall) return undefined;
+        return Object.keys(def.shape as Record<string, unknown>);
+      case "pipe": {
+        // z.preprocess(fn, schema) keeps the object in `out`; schema.transform(fn) in `in`.
+        const out = acceptedKeys(def.out);
+        return out ?? acceptedKeys(def.in);
+      }
+      case "optional":
+      case "nullable":
+      case "default":
+      case "prefault":
+      case "nonoptional":
+      case "readonly":
+      case "catch":
+        current = def.innerType;
+        break;
+      default:
+        return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * z.object strips keys it does not know, so a misspelt or misplaced field
+ * silently does nothing. Rather than reject the call (an extra round-trip
+ * when everything else was right), run it and say what was ignored.
+ */
+function unknownKeyWarning(def: OperationDef, payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+  const accepted = acceptedKeys(def.schema);
+  if (!accepted) return undefined;
+  const allowed = new Set(accepted);
+  const unknown = Object.keys(payload).filter((k) => !allowed.has(k));
+  if (unknown.length === 0) return undefined;
+  const list = unknown.map((k) => `"${k}"`).join(", ");
+  return `Ignored unknown field${unknown.length > 1 ? "s" : ""} ${list}. ${def.name} accepts: ${accepted.join(", ")}.`;
+}
+
+function withWarning<T extends { ok: boolean }>(result: T, warning: string | undefined): T {
+  if (!warning || !result.ok) return result;
+  const existing = (result as { warnings?: string[] }).warnings ?? [];
+  return { ...result, warnings: [warning, ...existing] };
+}
+
 function unknownOperationError(name: string): OperationError {
   return {
     code: "unknown_operation",
@@ -116,7 +175,8 @@ async function runSingle(
     return { ok: false, error: buildValidationError(def, parsed.error) };
   }
   try {
-    return await runHandlerWithLimitAndRetry(def, parsed.data);
+    const result = await runHandlerWithLimitAndRetry(def, parsed.data);
+    return withWarning(result, unknownKeyWarning(def, payload));
   } catch (error) {
     return { ok: false, error: toErrorEnvelope(error) };
   }
@@ -169,7 +229,14 @@ async function runBatch(
     try {
       const result = await runHandlerWithLimitAndRetry(def, parsed.data);
       if (result.ok) {
-        const success: BatchItemResult = { index, ok: true, data: result.data };
+        const warning = unknownKeyWarning(def, item);
+        const warnings = [...(warning ? [warning] : []), ...(result.warnings ?? [])];
+        const success: BatchItemResult = {
+          index,
+          ok: true,
+          data: result.data,
+          ...(warnings.length ? { warnings } : {}),
+        };
         if (atomic && def.rollback) createdForRollback.push({ item: success });
         return success;
       }
@@ -208,11 +275,19 @@ async function runBatch(
     }
   }
 
+  const envelopeUnknown = Object.keys(payload).filter((k) => !BATCH_ENVELOPE_KEYS.has(k));
   const batchResult: BatchResult = {
     ok: failed === 0,
     summary: { total: results.length, succeeded, failed },
     results,
     ...(rolledBack !== undefined ? { rolled_back: rolledBack } : {}),
+    ...(envelopeUnknown.length
+      ? {
+          warnings: [
+            `Ignored unknown batch field${envelopeUnknown.length > 1 ? "s" : ""} ${envelopeUnknown.map((k) => `"${k}"`).join(", ")}. A batch payload accepts: items, atomic, concurrency, idempotency_key.`,
+          ],
+        }
+      : {}),
   };
 
   if (idempotencyKey) {
@@ -224,7 +299,7 @@ async function runBatch(
 
 export const BATCH_ENVELOPE_HELP = `Batch mode: pass { items: [...], atomic?: boolean, idempotency_key?: string, concurrency?: 1-10 }. Each item is validated independently; failures are reported per-item. atomic:true forces serial execution (concurrency=1) and triggers best-effort rollback of created entities on first failure; subsequent items are skipped with code:"aborted".`;
 
-export const _internal = { isBatchPayload };
+export const _internal = { isBatchPayload, acceptedKeys, unknownKeyWarning };
 
 // Re-export Zod for downstream operation files to share a single version
 export { z };

@@ -114,3 +114,37 @@ describe("parseMarkdownToBlocks", () => {
     expect(b.image.caption[0].text.content).toBe("alt text");
   });
 });
+
+describe("parseMarkdownToBlocks — GFM tables", () => {
+  it("turns a table into a table block whose children are table_row blocks", () => {
+    const md = "| Name | Qty |\n|---|---|\n| Apple | **3** |\n| Pear | 5 |";
+    const [table] = parseMarkdownToBlocks(md) as Block[];
+    expect(table.type).toBe("table");
+    expect(table.table.table_width).toBe(2);
+    expect(table.table.has_column_header).toBe(true);
+    expect(table.table.has_row_header).toBe(false);
+    const rows = table.table.children;
+    expect(rows.map((r: Block) => r.type)).toEqual(["table_row", "table_row", "table_row"]);
+    expect(rows[0].table_row.cells[0][0].text.content).toBe("Name");
+    expect(rows[1].table_row.cells[0][0].text.content).toBe("Apple");
+    expect(rows[1].table_row.cells[1][0].text.content).toBe("3");
+    expect(rows[1].table_row.cells[1][0].annotations.bold).toBe(true);
+    expect(rows[2].table_row.cells[1][0].text.content).toBe("5");
+  });
+
+  it("pads short rows to the table width so Notion accepts them", () => {
+    const md = "| A | B | C |\n|---|---|---|\n| 1 |";
+    const [table] = parseMarkdownToBlocks(md) as Block[];
+    expect(table.table.table_width).toBe(3);
+    const cells = table.table.children[1].table_row.cells;
+    expect(cells).toHaveLength(3);
+    expect(cells[1]).toEqual([]);
+    expect(cells[2]).toEqual([]);
+  });
+
+  it("keeps a table between other blocks", () => {
+    const md = "Intro\n\n| A |\n|---|\n| 1 |\n\nOutro";
+    const blocks = parseMarkdownToBlocks(md) as Block[];
+    expect(blocks.map((b) => b.type)).toEqual(["paragraph", "table", "paragraph"]);
+  });
+});

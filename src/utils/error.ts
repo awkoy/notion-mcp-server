@@ -63,7 +63,7 @@ const ERROR_MESSAGES: Record<string, ErrorEntry> = {
   },
   [NotionErrorCode.ValidationError]: {
     message: "The request body does not match the schema for the expected parameters.",
-    fix: "Call notion_describe with this operation name to fetch the schema, then retry. Check the 'path' field on the error for the specific bad property.",
+    fix: "Notion rejected the request body: read the message for the field it names (the `path` field, when present, points at it), fix that field and retry. notion_describe shows the operation's schema and a working example.",
   },
   [NotionErrorCode.MissingVersion]: {
     message: "The request is missing the required Notion-Version header.",
