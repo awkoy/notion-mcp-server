@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { z } from "zod";
 import { register } from "../src/operations/registry.js";
 import type { OperationName, OperationDef } from "../src/operations/types.js";
-import { dispatch } from "../src/dispatch/index.js";
+import { dispatch, _internal } from "../src/dispatch/index.js";
 
 // Register fake operations under names from the union so dispatch can find them.
 // We use names that are reserved in the union but have no real handler conflict
@@ -149,5 +149,67 @@ describe("dispatch — batch", () => {
     // Same cached result is returned and no new side effects ran.
     expect(second).toEqual(first);
     expect(tracker.created.length).toBe(createdAfterFirst);
+  });
+});
+
+describe("unknown top-level fields are ignored with a warning, not rejected", () => {
+  it("runs the call and names the ignored field and the accepted ones", async () => {
+    const res = await dispatch(FAKE_OP, { id: "abc", object: "page" });
+    expect(res).toEqual({
+      ok: true,
+      data: { echo: "abc" },
+      warnings: ['Ignored unknown field "object". get_user accepts: id.'],
+    });
+  });
+
+  it("lists several unknown fields in one warning", async () => {
+    const res = await dispatch(FAKE_OP, { id: "abc", a: 1, b: 2 });
+    expect((res as { warnings?: string[] }).warnings).toEqual([
+      'Ignored unknown fields "a", "b". get_user accepts: id.',
+    ]);
+  });
+
+  it("adds no warnings key when every field is known", async () => {
+    const res = await dispatch(FAKE_OP, { id: "abc" });
+    expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("warns per batch item and on the envelope", async () => {
+    const res = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 1, extra: true }, { value: 2 }],
+      atomic: false,
+      parallel: 4,
+    });
+    const batch = res as {
+      ok: boolean;
+      warnings?: string[];
+      results: { ok: boolean; warnings?: string[] }[];
+    };
+    expect(batch.ok).toBe(true);
+    expect(batch.results[0].warnings).toEqual([
+      'Ignored unknown field "extra". set_page_title accepts: value.',
+    ]);
+    expect(batch.results[1]).not.toHaveProperty("warnings");
+    expect(batch.warnings).toEqual([
+      'Ignored unknown batch field "parallel". A batch payload accepts: items, atomic, concurrency, idempotency_key.',
+    ]);
+  });
+
+  it("does not attach warnings to a failed call", async () => {
+    const res = await dispatch(FAKE_BATCH_OP, { items: [{ value: -1, extra: true }] });
+    const item = (res as { results: Record<string, unknown>[] }).results[0];
+    expect(item.ok).toBe(false);
+    expect(item).not.toHaveProperty("warnings");
+  });
+
+  it("reads the accepted keys through preprocess and optional wrappers, and gives up on loose objects", () => {
+    const { acceptedKeys } = _internal;
+    expect(acceptedKeys(z.object({ a: z.string(), b: z.number().optional() }))).toEqual(["a", "b"]);
+    expect(acceptedKeys(z.preprocess((v) => v, z.object({ page_id: z.string() })))).toEqual(["page_id"]);
+    expect(acceptedKeys(z.object({ a: z.string() }).refine(() => true))).toEqual(["a"]);
+    expect(acceptedKeys(z.object({ a: z.string() }).optional())).toEqual(["a"]);
+    expect(acceptedKeys(z.looseObject({ a: z.string() }))).toBeUndefined();
+    expect(acceptedKeys(z.union([z.object({ a: z.string() }), z.object({ b: z.string() })]))).toBeUndefined();
+    expect(acceptedKeys(z.string())).toBeUndefined();
   });
 });

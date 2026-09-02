@@ -429,10 +429,12 @@ services:
 - **Idempotency keys** — same `(operation, idempotency_key)` returns the cached result for 5 minutes. Safe to retry on flaky networks.
 - **Rate-limit + retry baked in** — token-bucket limiter (3 req/s default, `NOTION_RATE_LIMIT` to change) with exponential backoff on 429/5xx/timeouts, honoring `Retry-After`.
 - **Self-healing validation errors** — failures return `{ schema, example, fix }` so the model corrects bad payloads in one round-trip.
-- **Markdown everywhere** — `create_page` / `append_blocks` / `update_block` / comment bodies accept a `markdown` string (full GFM: headings 1–4, lists, nested to-dos, blockquotes, fenced code with language detection, images, dividers, inline formatting), plus full round-trip via `get_page_markdown` / `update_page_markdown`.
+- **Markdown everywhere** — `create_page` / `append_blocks` / `update_block` / comment bodies accept a `markdown` string (full GFM: headings 1–4, lists, nested to-dos, blockquotes, fenced code with language detection, tables, images, dividers, inline formatting), plus full round-trip via `get_page_markdown` / `update_page_markdown`.
 - **Notion templates** — `create_page` can apply a data source's template (`template: { type: "template_id" | "default" }`), with `list_data_source_templates` to discover template IDs.
 - **Database views** — list/get/query/create/update/delete views; `query_view` runs a view's stored filters/sorts and returns hydrated rows.
-- **Typed `where` filter shorthand** — `query_database` takes `{Status: {equals: "Done"}, AND: [...]}` and compiles it to Notion filter JSON (raw `filter` still accepted for edge cases).
+- **Plain property values** — a database row's properties take plain values: `{ Status: "Done", "Due Date": "2026-10-01", Tags: ["a", "b"], Done: true, Notes: null }`. The server reads the data source's schema (cached for 5 minutes) and types each value; `title` always addresses the title property, an unknown property name or `status` option is rejected with the valid names, and the full Notion shapes still work. `get_data_source` lists `select` / `multi_select` / `status` options inline.
+- **Typed `where` filter shorthand** — `query_database` takes `{ Status: "Done", Priority: { in: ["High", "Medium"] }, OR: [...] }`, resolves each property's type from the data source's schema and compiles it to Notion filter JSON; `sorts: ["-Due Date"]` sorts descending. Raw `filter` / object sorts still accepted.
+- **Warnings, not rejections** — an unknown top-level field is ignored, the call still runs, and the result's `warnings` names the field and the fields the operation accepts; a property name that differs only in case is corrected with a warning. No extra round-trip when the rest of the payload was right.
 - **Slim responses + flattened rows** — noisy fields dropped by default, `query_database` rows flattened to name → primitive maps, compact JSON wire format (~30% smaller). `verbose: true` opts out per call.
 - **File uploads** — single-part and multi-part (5 MB chunks) transparently; MIME inferred from filename.
 - **Short file refs + image reads** — `NOTION_FILE_URLS=ref` swaps Notion's ~500-token signed file URLs for `notion-file:` refs; `get_file_url` mints a fresh URL and `get_image` returns the picture as MCP image content. See [Files](#files).
@@ -517,6 +519,18 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
 ```
 
 ```jsonc
+// a database row: plain property values, typed from the data source's schema
+{
+  "operation": "create_page",
+  "payload": {
+    "parent": { "type": "data_source_id", "data_source_id": "<data-source-id>" },
+    "title": "Write the report",
+    "properties": { "Status": "In Progress", "Priority": "High", "Due Date": "2026-10-01", "Tags": ["q3", "docs"] }
+  }
+}
+```
+
+```jsonc
 // upload a file and place it on a page in one call
 {
   "operation": "upload_file",
@@ -571,7 +585,8 @@ Dynamic resources route through the same auth, rate limiting, and access gating 
 - **`object_not_found` / "Could not find …"** — an Internal Integration token only sees pages explicitly Connected to it. Switch to a PAT to skip per-page sharing.
 - **"Notion auth failed" on every call** — token missing, revoked, or expired (PATs expire after 1 year). Check `NOTION_TOKEN` in your client config, then confirm the token is still listed as Active at [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens).
 - **"No parent page configured"** — pass `parent` in the call, or set `NOTION_PAGE_ID`.
-- **`multi_source_database` from `query_database`** — the database has multiple data sources. Call `list_data_sources`, then pass `data_source_id` instead of `database_id`.
+- **`multi_source_database` from `query_database` or `create_page`** — the database has multiple data sources. Call `list_data_sources`, then pass `data_source_id` (or a `data_source_id` parent) instead of `database_id`.
+- **A successful result carries `warnings`** — the call ran; each entry names a field that was ignored (misspelt or misplaced) or a property name that was corrected. Fix the payload next time, nothing to retry.
 - **Tools don't appear in Claude Desktop** — token typo (must stay inside the quotes) or the app wasn't fully quit (`Cmd+Q`, not window close) before reopening.
 - **Startup logs "Notion auth check failed" but tools work** — the startup check is best-effort; ignore if calls succeed.
 - **Docker exits immediately / "Connection closed"** — the `-i` flag is required: `docker run --rm -i …`.

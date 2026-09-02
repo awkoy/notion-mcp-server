@@ -208,19 +208,41 @@ function buildLeaf(
   return { property: propertyName, [type]: condition };
 }
 
-function compilePropertyClause(propertyName: string, value: unknown): NotionFilter {
+/** Property name → type, as the data source declares it. */
+export type PropertyTypes = Record<string, { type: string }>;
+
+/**
+ * The declared type of a property when the data source schema is known.
+ * Throws for a name the schema does not have, listing the valid ones; returns
+ * undefined for types the DSL has no operators for (formula, rollup …), which
+ * then fall back to inference.
+ */
+function declaredType(propertyName: string, types: PropertyTypes | undefined): PropertyType | undefined {
+  if (!types) return undefined;
+  const known = types[propertyName];
+  if (!known) {
+    throw new Error(
+      `Unknown property "${propertyName}". The data source has: ${Object.keys(types).join(", ")}`
+    );
+  }
+  return (PROPERTY_TYPES as readonly string[]).includes(known.type) ? (known.type as PropertyType) : undefined;
+}
+
+function compilePropertyClause(propertyName: string, value: unknown, types?: PropertyTypes): NotionFilter {
+  const declared = declaredType(propertyName, types);
   // Bare scalar shorthand → equals
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    const type = inferTypeFromScalar(value);
+    const type = declared ?? inferTypeFromScalar(value);
     const opMap = opMapFor(type);
     return buildLeaf(propertyName, type, { [opMap.eq]: value });
   }
   if (value === null) {
-    return buildLeaf(propertyName, "rich_text", { is_empty: true });
+    if (declared === "checkbox") return buildLeaf(propertyName, "checkbox", { equals: false });
+    return buildLeaf(propertyName, declared ?? "rich_text", { is_empty: true });
   }
 
   const ops = asObject(value, `filter value for property "${propertyName}"`);
-  const type = inferTypeFromOps(ops);
+  const type = typeof ops.__type === "string" ? inferTypeFromOps(ops) : (declared ?? inferTypeFromOps(ops));
   const opMap = opMapFor(type);
 
   // {in: [...]} → OR of equals on the same property
@@ -332,14 +354,15 @@ const NOT_KEYS = new Set(["not", "NOT"]);
 function compileCombinator(
   value: unknown,
   keyword: string,
-  wrapKey: "and" | "or"
+  wrapKey: "and" | "or",
+  types?: PropertyTypes
 ): NotionFilter | undefined {
   if (!Array.isArray(value)) {
     throw new Error(`${keyword} must be an array of where clauses`);
   }
   const inner: NotionFilter[] = [];
   for (const child of value) {
-    const compiled = compileWhere(child);
+    const compiled = compileWhere(child, types);
     if (compiled) inner.push(compiled);
   }
   if (inner.length === 0) return undefined;
@@ -347,7 +370,14 @@ function compileCombinator(
   return { [wrapKey]: inner };
 }
 
-export function compileWhere(where: unknown): NotionFilter | undefined {
+/**
+ * Compile the `where` DSL into a Notion filter. With `types` (the data
+ * source's property definitions) each clause uses the property's declared
+ * type — status stays status, a title is a title filter — and an unknown
+ * property name is an error naming the valid ones; without it the type is
+ * inferred from the value.
+ */
+export function compileWhere(where: unknown, types?: PropertyTypes): NotionFilter | undefined {
   if (where === undefined || where === null) return undefined;
   const obj = asObject(where, "where clause");
   const entries = Object.entries(obj);
@@ -357,21 +387,21 @@ export function compileWhere(where: unknown): NotionFilter | undefined {
 
   for (const [key, value] of entries) {
     if (AND_KEYS.has(key)) {
-      const compiled = compileCombinator(value, key, "and");
+      const compiled = compileCombinator(value, key, "and", types);
       if (compiled) parts.push(compiled);
       continue;
     }
     if (OR_KEYS.has(key)) {
-      const compiled = compileCombinator(value, key, "or");
+      const compiled = compileCombinator(value, key, "or", types);
       if (compiled) parts.push(compiled);
       continue;
     }
     if (NOT_KEYS.has(key)) {
-      const inner = compileWhere(value);
+      const inner = compileWhere(value, types);
       if (inner) parts.push(negate(inner));
       continue;
     }
-    parts.push(compilePropertyClause(key, value));
+    parts.push(compilePropertyClause(key, value, types));
   }
 
   if (parts.length === 0) return undefined;

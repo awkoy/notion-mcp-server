@@ -318,9 +318,7 @@ export const VERIFICATION_DB_PROPERTY_SCHEMA = z.object({
 // the null-deletes-the-property form Notion takes on dataSources.update is
 // added at update_data_source, because create_database (initial_data_source)
 // has no such form and update_database no longer carries properties at all.
-export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
-  preprocessJson,
-  z
+const DATABASE_PROPERTY_UNION = z
     .discriminatedUnion("type", [
       TITLE_DB_PROPERTY_SCHEMA,
       RICH_TEXT_DB_PROPERTY_SCHEMA,
@@ -345,6 +343,28 @@ export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
       UNIQUE_ID_DB_PROPERTY_SCHEMA,
       VERIFICATION_DB_PROPERTY_SCHEMA,
     ])
-    .describe("Union of all possible database property types")
+    .describe("Union of all possible database property types");
+
+const DATABASE_PROPERTY_TYPES = new Set<string>(
+  DATABASE_PROPERTY_UNION.options.map((option) => option.shape.type.value)
+);
+
+// Notion itself takes `{ select: { options } }` without a `type`; the body key
+// says which kind it is. Fill `type` in from the sole body key so a definition
+// needs no more than the API does, but never override an explicit `type`.
+export function inferPropertyDefinitionType(val: unknown): unknown {
+  const v = preprocessJson(val);
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return v;
+  const obj = v as Record<string, unknown>;
+  if (typeof obj.type === "string") return v;
+  const bodies = Object.keys(obj).filter(
+    (k) => DATABASE_PROPERTY_TYPES.has(k) && typeof obj[k] === "object" && obj[k] !== null
+  );
+  return bodies.length === 1 ? { ...obj, type: bodies[0] } : v;
+}
+
+export const DATABASE_PROPERTY_SCHEMA = z.preprocess(
+  inferPropertyDefinitionType,
+  DATABASE_PROPERTY_UNION
 );
 

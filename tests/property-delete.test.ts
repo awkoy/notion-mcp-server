@@ -62,7 +62,10 @@ describe("update_data_source: null deletes a property", () => {
     // The definition union is still there next to it, not replaced by it.
     const definition = variants.find((v) => v && typeof v === "object" && !("type" in (v as object)));
     expect(definition).toBeDefined();
-    expect((definition as any).oneOf ?? (definition as any).anyOf).toBeInstanceOf(Array);
+    // The definition union is hoisted into $defs; follow the $ref.
+    const ref = (definition as any).$ref as string | undefined;
+    const resolved = ref ? json.$defs[ref.split("/").pop()!] : definition;
+    expect((resolved as any).oneOf ?? (resolved as any).anyOf).toBeInstanceOf(Array);
   });
 
   it("forwards the null to dataSources.update untouched", async () => {

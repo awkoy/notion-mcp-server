@@ -393,3 +393,83 @@ describe("slimList", () => {
     expect(out.next_cursor).toBe(null);
   });
 });
+
+describe("slimBlock — table rows", () => {
+  it("returns a table_row's cells as plain strings", () => {
+    const row = fx<Parameters<typeof slimBlock>[0]>({
+      object: "block",
+      id: "r1",
+      type: "table_row",
+      has_children: false,
+      in_trash: false,
+      table_row: {
+        cells: [
+          [{ type: "text", plain_text: "Ap", text: { content: "Ap" } }, { type: "text", plain_text: "ple", text: { content: "ple" } }],
+          [],
+          [{ type: "text", plain_text: "3", text: { content: "3" } }],
+        ],
+      },
+    });
+    expect(slimBlock(row)).toMatchObject({ id: "r1", type: "table_row", cells: ["Apple", "", "3"] });
+  });
+
+  it("reports a table's width", () => {
+    const table = fx<Parameters<typeof slimBlock>[0]>({
+      object: "block",
+      id: "t1",
+      type: "table",
+      has_children: true,
+      in_trash: false,
+      table: { table_width: 3, has_column_header: true, has_row_header: false },
+    });
+    expect(slimBlock(table)).toMatchObject({ id: "t1", type: "table", table_width: 3, has_children: true });
+  });
+});
+
+describe("slimDataSource — option names", () => {
+  it("lists the options of select, multi_select and status properties and the target of a relation", () => {
+    const ds = fx<Parameters<typeof slimDataSource>[0]>({
+      object: "data_source",
+      id: "ds1",
+      url: "u",
+      title: [{ plain_text: "Tasks" }],
+      description: [],
+      parent: { type: "database_id", database_id: "db1" },
+      properties: {
+        Name: { type: "title", title: {} },
+        Status: {
+          type: "status",
+          status: { options: [{ name: "Not Started" }, { name: "In Progress" }, { name: "Done" }], groups: [] },
+        },
+        Tags: { type: "multi_select", multi_select: { options: [{ name: "a" }, { name: "b" }] } },
+        Kind: { type: "select", select: { options: [] } },
+        Project: { type: "relation", relation: { data_source_id: "ds-projects", type: "single_property" } },
+      },
+    });
+    expect(slimDataSource(ds)).toMatchObject({
+      properties: {
+        Name: "title",
+        Status: "status: Not Started | In Progress | Done",
+        Tags: "multi_select: a | b",
+        Kind: "select",
+        Project: "relation → ds-projects",
+      },
+    });
+  });
+
+  it("caps a long option list", () => {
+    const options = Array.from({ length: 40 }, (_, i) => ({ name: `o${i}` }));
+    const ds = fx<Parameters<typeof slimDataSource>[0]>({
+      object: "data_source",
+      id: "ds1",
+      url: "u",
+      title: [],
+      description: [],
+      parent: { type: "database_id", database_id: "db1" },
+      properties: { Many: { type: "select", select: { options } } },
+    });
+    const text = (slimDataSource(ds) as { properties: Record<string, string> }).properties.Many;
+    expect(text.startsWith("select: o0 | o1 |")).toBe(true);
+    expect(text.endsWith("| o29 | +10 more")).toBe(true);
+  });
+});

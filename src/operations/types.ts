@@ -63,7 +63,7 @@ export type OperationDomain =
   | "views";
 
 export type OperationResult<T = unknown> =
-  | { ok: true; data: T }
+  | { ok: true; data: T; warnings?: string[] }
   | { ok: false; error: OperationError };
 
 export type OperationError = {
@@ -74,7 +74,7 @@ export type OperationError = {
 };
 
 export type BatchItemResult<T = unknown> =
-  | { index: number; ok: true; data: T }
+  | { index: number; ok: true; data: T; warnings?: string[] }
   | { index: number; ok: false; error: OperationError };
 
 export type BatchResult<T = unknown> = {
@@ -82,6 +82,8 @@ export type BatchResult<T = unknown> = {
   summary: { total: number; succeeded: number; failed: number };
   results: BatchItemResult<T>[];
   rolled_back?: number;
+  /** Non-fatal notes about the envelope, e.g. an unknown top-level field that was ignored. */
+  warnings?: string[];
 };
 
 export type BatchEnvelope<T> = {

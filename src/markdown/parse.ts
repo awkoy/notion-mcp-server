@@ -18,6 +18,7 @@ import type {
   Strong,
   Delete,
   Text,
+  Table,
 } from "mdast";
 
 type RichText =
@@ -68,9 +69,34 @@ function convertBlock(node: RootContent): NotionBlock[] {
       return [codeFrom(node)];
     case "thematicBreak":
       return [{ type: "divider", divider: {} }];
+    case "table":
+      return [tableFrom(node)];
     default:
       return [];
   }
+}
+
+// A GFM table becomes a Notion table block whose children are table_row
+// blocks. Notion insists that every row has exactly table_width cells and
+// that the rows travel with the table, so short rows are padded and the
+// header row is kept as the first row with has_column_header.
+function tableFrom(node: Table): NotionBlock {
+  const rows = node.children.map((row) => row.children.map((cell) => phrasingToRichText(cell.children)));
+  const width = Math.max(1, ...rows.map((r) => r.length));
+  const children = rows.map((cells) => {
+    const padded = [...cells];
+    while (padded.length < width) padded.push([]);
+    return { type: "table_row", table_row: { cells: padded } };
+  });
+  return {
+    type: "table",
+    table: {
+      table_width: width,
+      has_column_header: true,
+      has_row_header: false,
+      children,
+    },
+  };
 }
 
 function paragraphFrom(node: Paragraph): NotionBlock {
