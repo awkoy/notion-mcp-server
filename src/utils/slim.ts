@@ -220,6 +220,12 @@ export function slimBlock(block: BlockResponse, verbose = false) {
 }
 
 export function extractBlockText(block: BlockObjectResponse): string | undefined {
+  // child_page / child_database carry their name as a plain `title` string
+  // (not a `rich_text` array), so the generic path below misses them and
+  // silently drops the one piece of text that identifies what they are.
+  if (block.type === "child_page") return block.child_page.title || undefined;
+  if (block.type === "child_database") return block.child_database.title || undefined;
+
   // Many block subtypes expose a `rich_text` array under their type key.
   // Read it via a structural narrow so we don't have to enumerate every variant.
   const inner = (block as unknown as Record<string, unknown>)[block.type];

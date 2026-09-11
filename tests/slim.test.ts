@@ -223,6 +223,26 @@ describe("slimBlock", () => {
     });
     expect(slimBlock(image)).toMatchObject({ type: "image", image: "https://e.com/x.png" });
   });
+
+  it("surfaces the title of child_page and child_database blocks", () => {
+    const childPage = fx<Parameters<typeof slimBlock>[0]>({
+      object: "block",
+      id: "cp1",
+      type: "child_page",
+      has_children: true,
+      child_page: { title: "Roadmap" },
+    });
+    expect(slimBlock(childPage)).toMatchObject({ type: "child_page", text: "Roadmap" });
+
+    const childDb = fx<Parameters<typeof slimBlock>[0]>({
+      object: "block",
+      id: "cd1",
+      type: "child_database",
+      has_children: true,
+      child_database: { title: "Tasks" },
+    });
+    expect(slimBlock(childDb)).toMatchObject({ type: "child_database", text: "Tasks" });
+  });
 });
 
 describe("slimDatabase", () => {
