@@ -224,24 +224,94 @@ describe("slimBlock", () => {
     expect(slimBlock(image)).toMatchObject({ type: "image", image: "https://e.com/x.png" });
   });
 
-  it("surfaces the title of child_page and child_database blocks", () => {
-    const childPage = fx<Parameters<typeof slimBlock>[0]>({
-      object: "block",
-      id: "cp1",
-      type: "child_page",
-      has_children: true,
-      child_page: { title: "Roadmap" },
-    });
-    expect(slimBlock(childPage)).toMatchObject({ type: "child_page", text: "Roadmap" });
+  // Every block subtype keeps its text under a different key; `text` should
+  // name the block whatever that key happens to be.
+  const blockText = (type: string, inner: unknown) =>
+    (
+      slimBlock(
+        fx<Parameters<typeof slimBlock>[0]>({ object: "block", id: `${type}1`, type, [type]: inner })
+      ) as { text?: string }
+    ).text;
 
-    const childDb = fx<Parameters<typeof slimBlock>[0]>({
+  it("surfaces the title of child_page and child_database blocks", () => {
+    expect(blockText("child_page", { title: "Roadmap" })).toBe("Roadmap");
+    expect(blockText("child_database", { title: "Tasks" })).toBe("Tasks");
+  });
+
+  it("surfaces an equation's LaTeX expression", () => {
+    expect(blockText("equation", { expression: "E = mc^2" })).toBe("E = mc^2");
+  });
+
+  it("falls back to the caption on media and link blocks", () => {
+    const file = { url: "https://e.com/x" };
+    expect(blockText("bookmark", { url: "https://e.com", caption: [{ plain_text: "the spec" }] })).toBe("the spec");
+    expect(blockText("embed", { url: "https://e.com", caption: [{ plain_text: "a demo" }] })).toBe("a demo");
+    expect(blockText("image", { type: "external", external: file, caption: [{ plain_text: "the diagram" }] })).toBe("the diagram");
+    expect(blockText("video", { type: "external", external: file, caption: [{ plain_text: "the walkthrough" }] })).toBe("the walkthrough");
+    expect(blockText("pdf", { type: "external", external: file, caption: [{ plain_text: "the contract" }] })).toBe("the contract");
+    expect(blockText("audio", { type: "external", external: file, caption: [{ plain_text: "the interview" }] })).toBe("the interview");
+  });
+
+  it("keeps an image's caption alongside its url", () => {
+    const image = fx<Parameters<typeof slimBlock>[0]>({
       object: "block",
-      id: "cd1",
-      type: "child_database",
-      has_children: true,
-      child_database: { title: "Tasks" },
+      id: "i2",
+      type: "image",
+      image: {
+        type: "external",
+        external: { url: "https://e.com/x.png" },
+        caption: [{ plain_text: "the diagram" }],
+      },
     });
-    expect(slimBlock(childDb)).toMatchObject({ type: "child_database", text: "Tasks" });
+    // slimBlock gives image its own branch; the caption must survive the spread.
+    expect(slimBlock(image)).toMatchObject({
+      type: "image",
+      image: "https://e.com/x.png",
+      text: "the diagram",
+    });
+  });
+
+  it("names an uncaptioned file by its filename", () => {
+    const inner = { type: "file", file: { url: "https://e.com/q.pdf" }, name: "Q3-report.pdf" };
+    expect(blockText("file", { ...inner, caption: [] })).toBe("Q3-report.pdf");
+    // An authored caption still outranks the filename.
+    expect(blockText("file", { ...inner, caption: [{ plain_text: "the quarterly" }] })).toBe("the quarterly");
+  });
+
+  it("falls back to the url when a link block has no caption", () => {
+    expect(blockText("bookmark", { url: "https://spec.example", caption: [] })).toBe("https://spec.example");
+    expect(blockText("embed", { url: "https://e.com/demo" })).toBe("https://e.com/demo");
+    // link_preview has no caption key at all.
+    expect(blockText("link_preview", { url: "https://github.com/x/y/pull/1" })).toBe("https://github.com/x/y/pull/1");
+  });
+
+  it("describes a table_row by its cells", () => {
+    expect(blockText("table_row", { cells: [[{ plain_text: "Alice" }], [{ plain_text: "42" }]] })).toBe("Alice | 42");
+    expect(blockText("table_row", { cells: [[], []] })).toBeUndefined();
+  });
+
+  it("prefers a code block's source over its caption, but falls through when empty", () => {
+    const captioned = { caption: [{ plain_text: "prints one" }], language: "python" };
+    expect(blockText("code", { ...captioned, rich_text: [{ plain_text: "print(1)" }] })).toBe("print(1)");
+    // An empty source must not win with "" and swallow the caption.
+    expect(blockText("code", { ...captioned, rich_text: [] })).toBe("prints one");
+  });
+
+  it("tolerates malformed rich text instead of throwing", () => {
+    // slimBlock is mapped across a whole page, so one odd block must not
+    // abort the entire response.
+    expect(blockText("image", { type: "external", external: { url: "https://e.com/x.png" }, caption: [null] })).toBeUndefined();
+    expect(blockText("paragraph", { rich_text: [null, { plain_text: "kept" }] })).toBe("kept");
+  });
+
+  it("leaves text undefined for blocks that carry none", () => {
+    expect(blockText("divider", {})).toBeUndefined();
+    expect(blockText("child_page", { title: "" })).toBeUndefined();
+    expect(blockText("equation", { expression: "" })).toBeUndefined();
+    expect(blockText("paragraph", { rich_text: [] })).toBeUndefined();
+    // A subtype whose payload key is missing entirely must not throw.
+    const bare = fx<Parameters<typeof slimBlock>[0]>({ object: "block", id: "u1", type: "unsupported" });
+    expect((slimBlock(bare) as { text?: string }).text).toBeUndefined();
   });
 });
 

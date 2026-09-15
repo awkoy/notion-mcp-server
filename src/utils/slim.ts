@@ -219,20 +219,60 @@ export function slimBlock(block: BlockResponse, verbose = false) {
   return base;
 }
 
-export function extractBlockText(block: BlockObjectResponse): string | undefined {
-  // child_page / child_database carry their name as a plain `title` string
-  // (not a `rich_text` array), so the generic path below misses them and
-  // silently drops the one piece of text that identifies what they are.
-  if (block.type === "child_page") return block.child_page.title || undefined;
-  if (block.type === "child_database") return block.child_database.title || undefined;
+// Read a rich-text array that arrived through an `unknown` record. Tolerant of
+// items the SDK types don't cover: one malformed entry must not abort a whole
+// page read, since slimBlock is mapped across every block in a response.
+function richTextField(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = value
+    .map((item) => (item as RichTextItemResponse | null | undefined)?.plain_text)
+    .filter((part): part is string => typeof part === "string")
+    .join("");
+  return text || undefined;
+}
 
-  // Many block subtypes expose a `rich_text` array under their type key.
-  // Read it via a structural narrow so we don't have to enumerate every variant.
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+// table_row keeps its text as an array of per-cell rich-text arrays.
+function cellsField(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cells = value.map((cell) => richTextField(cell));
+  if (!cells.some((cell) => cell !== undefined)) return undefined;
+  return cells.map((cell) => cell ?? "").join(" | ");
+}
+
+// A block's text lives under one of several differently named keys depending on
+// its subtype, so try them in descending order of how well each describes the
+// block. Authored prose first, then the string that identifies the block, then
+// its bare url as a last resort — a block should never come back text-free.
+// Note `code` carries both a `rich_text` source and a `caption`: the source
+// wins, but an empty one has to fall through rather than return "".
+// Only top-level `url` strings are read (bookmark, embed, link_preview), where
+// the url *is* the content; the nested urls on file-backed media are expiring
+// S3 links, and slimBlock surfaces the one that matters (image) on its own.
+const TEXT_FIELDS: readonly (readonly [string, (value: unknown) => string | undefined])[] = [
+  ["rich_text", richTextField],
+  ["title", stringField], // child_page, child_database
+  ["expression", stringField], // equation — LaTeX source, not rich text
+  ["caption", richTextField], // bookmark, embed, image, video, pdf, file, audio
+  ["cells", cellsField], // table_row
+  ["name", stringField], // file — its filename, when it carries no caption
+  ["url", stringField], // bookmark, embed, link_preview
+];
+
+export function extractBlockText(block: BlockObjectResponse): string | undefined {
+  // Read the subtype's payload via a structural narrow so we don't have to
+  // enumerate all 37 block variants.
   const inner = (block as unknown as Record<string, unknown>)[block.type];
   if (typeof inner !== "object" || inner === null) return undefined;
-  const richText = (inner as { rich_text?: unknown }).rich_text;
-  if (!Array.isArray(richText)) return undefined;
-  return extractRichText(richText as RichTextItemResponse[]);
+  const fields = inner as Record<string, unknown>;
+  for (const [key, read] of TEXT_FIELDS) {
+    const text = read(fields[key]);
+    if (text !== undefined) return text;
+  }
+  return undefined;
 }
 
 export function slimDatabase(db: DatabaseResponse, verbose = false) {
