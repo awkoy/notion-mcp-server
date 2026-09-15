@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Blocks that keep their text somewhere other than `rich_text` are no longer returned text-free.** `extractBlockText` read only a `rich_text` array, so `get_block` / `get_block_children` described a whole class of blocks with no text at all: `child_page` and `child_database` (their name is a plain `title` string), `equation` (LaTeX under `expression`), `table_row` (per-cell arrays under `cells`), and the caption-bearing media and link blocks — `bookmark`, `embed`, `image`, `video`, `pdf`, `file`, `audio`. A model could see that a child page existed but not what it was called, so it had to open one blindly to find out. The function now tries each key in descending order of how well it describes the block: authored prose (`rich_text`, then `caption`), the identifying string (`title`, `expression`, `cells`, and a file's `name`), and finally a bare top-level `url` for `bookmark` / `embed` / `link_preview`, where the url is the entire content. Only top-level urls are read — the nested ones on file-backed media are expiring S3 links. This also sharpens `NOTION_CONFIRM_DESTRUCTIVE` prompts, which render `${type}: ${text}` from the same function: deleting a child page now asks about `child_page: Roadmap` rather than a bare `child_page`. (PR #94 covered the two `child_*` cases; thanks @ontenkutsenko for catching the class of bug.)
+- **An empty `rich_text` array no longer shadows a block's caption.** It returned `""`, which is falsy to callers but not `undefined`, so a `code` block with an empty source and a caption reported no text and dropped the caption. Empty now falls through to the next key, and blocks with no text at all omit `text` entirely instead of carrying `text: ""` — an empty paragraph is `{id, type}`.
+- **One malformed rich-text item no longer aborts a whole page read.** `extractBlockText` reads through an `unknown` record precisely to tolerate shapes the SDK types don't cover, but then handed the array to `extractRichText`, which does an unguarded `.map((r) => r.plain_text)`. A single `null` entry threw a `TypeError` that took out the entire `get_block_children` response, since `slimBlock` is mapped across every block. Non-string entries are now skipped.
+
 ## [3.0.0] — 2026-09-02
 
 ### Changed
