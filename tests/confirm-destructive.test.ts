@@ -193,7 +193,10 @@ describe("confirm destructive: the prompt", () => {
   });
 
   it("gives up on a slow lookup after 5 s and still asks", async () => {
-    vi.useFakeTimers();
+    // Timers only: faking Date too would leave the dispatch rate limiter's
+    // next slot 5 s in the future once real time is restored, and the next
+    // test's dispatch would wait it out.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     notionStub.pages.retrieve.mockReturnValue(new Promise(() => {}));
     try {
       await withFlag("true", async () => {

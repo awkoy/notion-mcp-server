@@ -1,9 +1,11 @@
-import type {
-  LoggingLevel,
-  LoggingMessageNotificationParams,
-  McpServer,
-  ServerContext,
+import {
+  LOG_LEVEL_META_KEY,
+  type LoggingLevel,
+  type LoggingMessageNotificationParams,
+  type McpServer,
+  type ServerContext,
 } from "@modelcontextprotocol/server";
+import { isModernRequest } from "./mcp-era.js";
 
 /**
  * Server-side logger. Every line goes to stderr exactly as it always has, and
@@ -18,7 +20,10 @@ import type {
  *   Notion auth probe, unhandled errors) have no request behind them. They go
  *   to the one server registered with `setProcessLogServer()`. Only the stdio
  *   transport registers one: it runs exactly one server per process, so the
- *   line belongs to that client. The HTTP transport runs one server per
+ *   line belongs to that client. That server is created lazily, when the
+ *   client's first message arrives, so lines written before then (the
+ *   startup ones) are held — a few dozen at most — and replayed once the
+ *   client has finished `initialize`. The HTTP transport runs one server per
  *   session, sessions come and go, and a process line has no single session
  *   to belong to — so it registers none and those lines stay on stderr. A
  *   session therefore never sees another session's traffic.
@@ -38,11 +43,15 @@ import type {
  * caller — a log call before `connect()` or after the transport closed just
  * writes stderr.
  *
- * The MCP logging capability is deprecated as of protocol 2026-07-28
- * (SEP-2577) in favour of stderr and OpenTelemetry, with at least a
- * twelve-month window in which it keeps working; this server negotiates up to
- * 2025-11-25, where it is fully supported. The stderr line is the one that
- * outlives it.
+ * Protocol 2026-07-28 has no `logging/setLevel` (SEP-2575): a client that
+ * wants log notifications says so per request with the
+ * `io.modelcontextprotocol/logLevel` envelope key, and one that says nothing
+ * gets nothing. The SDK lifts that envelope into `ctx.mcpReq.envelope`, so a
+ * request-level line on a 2026-07-28 request is gated by the request's own
+ * level, and process-level lines never apply (there is no connection to send
+ * them on). The capability itself is deprecated in that revision (SEP-2577)
+ * in favour of stderr and OpenTelemetry, with at least a twelve-month window
+ * in which it keeps working. The stderr line is the one that outlives it.
  */
 
 const LOGGER_NAME = "notion-mcp-server";
@@ -74,6 +83,9 @@ const attached = new WeakSet<McpServer>();
 /** Level the client picked via `logging/setLevel`; absent means DEFAULT_LEVEL. */
 const clientLevels = new WeakMap<McpServer, LoggingLevel>();
 let processServer: McpServer | undefined;
+/** Process-level lines written before a process server existed, oldest first. */
+const pending: LoggingMessageNotificationParams[] = [];
+const PENDING_LIMIT = 32;
 
 /**
  * Make `server` a log target: own its `logging/setLevel` so the level its client
@@ -94,17 +106,39 @@ export function attachLogServer(server: McpServer): void {
 /**
  * Register the server that process-level lines (no request context) are
  * forwarded to — stdio only, where there is exactly one server per process.
- * Detaches itself when that server's transport closes; pass `undefined` to
- * detach explicitly.
+ * Lines held from before the registration are replayed once its client has
+ * initialized (right away if it already has). Detaches itself when that
+ * server's transport closes, dropping anything still held; pass `undefined`
+ * to detach explicitly.
  */
 export function setProcessLogServer(server: McpServer | undefined): void {
   processServer = server;
-  if (!server) return;
+  if (!server) {
+    pending.length = 0;
+    return;
+  }
   attachLogServer(server);
-  const previous = server.server.onclose;
+  const previousClose = server.server.onclose;
   server.server.onclose = () => {
-    if (processServer === server) processServer = undefined;
-    previous?.();
+    if (processServer === server) {
+      processServer = undefined;
+      pending.length = 0;
+    }
+    previousClose?.();
+  };
+  const replay = (): void => {
+    for (const params of pending.splice(0)) forward({ server }, params);
+  };
+  // `initialize` has been answered once the client's identity is known; the
+  // `notifications/initialized` hook covers a server registered before that.
+  if (server.server.getClientVersion()) {
+    replay();
+    return;
+  }
+  const previousInit = server.server.oninitialized;
+  server.server.oninitialized = () => {
+    previousInit?.();
+    if (processServer === server) replay();
   };
 }
 
@@ -113,10 +147,23 @@ export function clientLogLevel(server: McpServer): LoggingLevel {
   return clientLevels.get(server) ?? DEFAULT_LEVEL;
 }
 
+/**
+ * The level a request-level line has to reach to be forwarded: the request's
+ * own envelope level on 2026-07-28 (none means the client did not ask for
+ * logs; the SDK has already validated the value), the `logging/setLevel`
+ * store otherwise.
+ */
+function thresholdFor(server: McpServer, ctx: ServerContext | undefined): LoggingLevel | undefined {
+  if (!isModernRequest(ctx)) return clientLogLevel(server);
+  const envelope = ctx?.mcpReq.envelope as Record<string, unknown> | undefined;
+  return envelope?.[LOG_LEVEL_META_KEY] as LoggingLevel | undefined;
+}
+
 function forward(target: LogTarget, params: LoggingMessageNotificationParams): void {
   const { server, ctx } = target;
   if (!server.isConnected()) return;
-  if (severity(params.level) < severity(clientLogLevel(server))) return;
+  const threshold = thresholdFor(server, ctx);
+  if (threshold === undefined || severity(params.level) < severity(threshold)) return;
   try {
     const sent = ctx
       ? ctx.mcpReq.notify({ method: "notifications/message", params })
@@ -131,9 +178,16 @@ function forward(target: LogTarget, params: LoggingMessageNotificationParams): v
 
 function emit(level: LoggingLevel, message: string, data?: LogData, target?: LogTarget): void {
   console.error(message);
+  const params = { level, logger: LOGGER_NAME, data: { message, ...data } };
   const to = target ?? (processServer ? { server: processServer } : undefined);
-  if (!to) return;
-  forward(to, { level, logger: LOGGER_NAME, data: { message, ...data } });
+  if (to) {
+    forward(to, params);
+    return;
+  }
+  // No process server yet (stdio creates it on the client's first message):
+  // hold the line for it. The cap keeps a process that never gets a client —
+  // or the HTTP transport, which never registers one — from growing this.
+  if (pending.length < PENDING_LIMIT) pending.push(params);
 }
 
 /**

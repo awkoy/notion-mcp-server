@@ -34,6 +34,8 @@ claude mcp add notion -s user \
   -- npx -y notion-mcp-server
 ```
 
+Claude Code speaks the 2025-era protocol over stdio unless told otherwise; set `MCP_PROTOCOL_NEGOTIATION=auto` in its environment and it probes for, and uses, MCP 2026-07-28 (stateless requests, cache hints on every list). The server serves both.
+
 ### Cursor
 
 [![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=notion&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm5vdGlvbi1tY3Atc2VydmVyIl0sImVudiI6eyJOT1RJT05fVE9LRU4iOiJZT1VSX05PVElPTl9UT0tFTiJ9fQ==)
@@ -303,7 +305,7 @@ On startup the server logs one line to stderr summarizing what resolved — chec
 Operation access: 22/48 enabled (allow=read; block=(none))
 ```
 
-**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation): a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
+**Confirm instead of block.** `NOTION_CONFIRM_DESTRUCTIVE=true` keeps destructive operations enabled but makes `notion_write` ask *you* before running one, through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) — an `elicitation/create` request on 2025-era clients, an `input_required` round trip on MCP 2026-07-28 clients, where the retry carries a sealed `requestState` that only matches the call it was minted for: a yes/no dialog in your client that names the operation and its target — the page, database, data source or block title when one retrieve can fetch it (bounded to 5 s), otherwise the id; for a batch, how many items. Restores (`restore_page`, `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry do not prompt, and a blocked operation is still rejected with `operation_not_allowed` before anyone is asked. Decline, cancel or answer no and the call returns `confirmation_declined`; the server instructions tell the model not to retry it and to ask you instead. A client that has not declared the elicitation capability gets `confirmation_unavailable` rather than a silent run — use a client that supports elicitation, unset the variable, or block destructive operations outright with `NOTION_BLOCKED_OPERATIONS=destructive`.
 
 <details>
 <summary><b>Per-operation reference & limitations</b></summary>
@@ -354,7 +356,7 @@ MCP_TRANSPORT=http PORT=3000 NOTION_TOKEN=ntn_xxx npx -y notion-mcp-server
 # -> notion-mcp-server vX.Y.Z running on http://127.0.0.1:3000/mcp
 ```
 
-It serves MCP **Streamable HTTP** at `POST/GET/DELETE /mcp` (stateful sessions via the `mcp-session-id` header) plus an unauthenticated `GET /health`. It's **single-tenant** — every request acts as the one `NOTION_TOKEN` the process started with.
+It serves MCP **Streamable HTTP** on `/mcp` for both current protocol generations, chosen per request from what the client sends: **MCP 2026-07-28** clients get the stateless path (every `POST` stands alone — no session, `server/discover`, cache hints on every list), **2024-11-05 … 2025-11-25** clients get sessions via the `mcp-session-id` header plus the `GET` stream and `DELETE`; a `GET`/`DELETE` without a session id is answered 405. There is also an unauthenticated `GET /health`. It's **single-tenant** — every request acts as the one `NOTION_TOKEN` the process started with.
 
 | env | default | meaning |
 | --- | --- | --- |
@@ -366,6 +368,8 @@ It serves MCP **Streamable HTTP** at `POST/GET/DELETE /mcp` (stateful sessions v
 | `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for browser `Origin` allowlist |
 
 > ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback (the default) that's just local processes. Before binding a non-loopback `HOST`, set `MCP_AUTH_TOKEN` (the server warns if you don't) and/or front it with an authenticating reverse proxy.
+
+> Claude Desktop builds affected by [anthropics/claude-code#93290](https://github.com/anthropics/claude-code/issues/93290) send a 2026-07-28 body under a `MCP-Protocol-Version: 2025-11-25` header. The server realigns that one known mismatch so those builds work; every other header/body disagreement gets the rejection the spec prescribes (`-32020`).
 
 Connect from clients that support headers (Claude Code, Cursor, VS Code):
 
@@ -645,12 +649,12 @@ claude mcp add notion -s user \
   -- node "$(pwd)/build/index.js"
 ```
 
-Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. The server honours `logging/setLevel`; the default is `info`. At `debug` you also get one line per `notion_read` / `notion_write` call (operation, batch size, duration, ok or error — never the payload or page content).
+Everything the server logs goes to stderr, as before, and is also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`), so it shows up in the client's own log view — VS Code's output channel, MCP Inspector, Claude Desktop's logs — where stderr is usually hidden. 2025-era clients pick the level with `logging/setLevel` (default `info`); MCP 2026-07-28 clients have no such call and ask per request with the `io.modelcontextprotocol/logLevel` envelope key — a request without it gets no log notifications. Stderr is unaffected either way. At `debug` you also get one line per `notion_read` / `notion_write` call (operation, batch size, duration, ok or error — never the payload or page content).
 
 <details>
 <summary><b>Technical details: how it's built</b></summary>
 
-- TypeScript + MCP TypeScript SDK v2 (`@modelcontextprotocol/server` + `@modelcontextprotocol/node` 2.0.0); stdio + Streamable HTTP transports
+- TypeScript + MCP TypeScript SDK v2 (`@modelcontextprotocol/server` + `@modelcontextprotocol/node` 2.0.0); stdio + Streamable HTTP transports; protocol revisions 2024-11-05 through 2026-07-28 (`serveStdio` / `createMcpHandler` for the stateless 2026-07-28 path, the sessionful transport for the rest)
 - Notion SDK `@notionhq/client@^5.22.0`, pinned `Notion-Version: 2026-03-11`
 - Zod 4 payload validation; emits draft-7 JSON Schema with `$defs` deduplication for error envelopes
 - Markdown → Notion blocks via `remark` / `remark-gfm`
@@ -671,6 +675,7 @@ printf 'NOTION_TOKEN=ntn_...\nNOTION_PAGE_ID=<page the token can write under>\n'
 npm run e2e                      # read-only pass
 npm run e2e -- --write           # full pass; creates one page under NOTION_PAGE_ID and trashes it at the end
 npm run e2e -- --write --keep    # keep the test page for inspection
+npm run e2e -- --modern          # any of the above as an MCP 2026-07-28 client (stateless envelope, input_required confirmations)
 ```
 
 It prints a PASS/FAIL table per check and lists any operation the run did not reach, and exits non-zero on a failure. It is not part of CI.

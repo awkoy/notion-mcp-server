@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP protocol revision 2026-07-28, over HTTP and stdio.** The server now serves the stateless generation of the protocol next to the 2024-11-05 … 2025-11-25 one, choosing per request from what the client sends. On HTTP a 2026-07-28 `POST` stands alone — `createMcpHandler` builds a fresh `McpServer` per request, answers `server/discover`, and issues no `Mcp-Session-Id` — while 2025-era clients keep the sessionful transport, the `GET` stream and `DELETE` exactly as before; on stdio `serveStdio` serves whichever era the client opens with. Every cacheable list (`server/discover`, `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, the `notion://operations` resource) carries a five-minute private cache hint (SEP-2549); `notion://page/…` and `notion://database/…` carry thirty seconds. Log forwarding follows the request's `io.modelcontextprotocol/logLevel` envelope key on 2026-07-28, where `logging/setLevel` no longer exists.
+- **`NOTION_CONFIRM_DESTRUCTIVE` on 2026-07-28 clients** asks through the multi-round-trip flow (SEP-2322): `notion_write` returns an `input_required` result with one elicitation and a sealed `requestState`; the client's retry carries the answer. The state is HMAC-signed with a per-process key, expires after five minutes, is bound to `tools/call`, and names the exact call it was minted for — a retry that echoes it against a different operation or payload is refused with `confirmation_mismatch` and runs nothing, a tampered or expired one is rejected by the SDK before the handler runs. 2025-era clients still get a plain `elicitation/create` (the SDK's legacy shim drives the same code path), with the same 5-minute limit, now as the shim's round timeout rather than a request timeout on the elicitation.
+- **Interop shim for Claude Desktop** ([anthropics/claude-code#93290](https://github.com/anthropics/claude-code/issues/93290)): a 2026-07-28 body under a `MCP-Protocol-Version: 2025-11-25` header is realigned to the body instead of being rejected with `-32020`. Only that one known mismatch; everything else stays strict. To be removed once the client fix has shipped widely.
+- `npm run e2e -- --modern` runs the live smoke test as a 2026-07-28 client.
+
+### Changed
+
+- **HTTP auth error codes.** A wrong bearer token now answers JSON-RPC `-32003` (was `-32002`, which 2026-07-28 retires); a missing token stays `-32001`. HTTP statuses are unchanged (403 / 401).
+- **`GET` / `DELETE /mcp` without `mcp-session-id`** answer 405 instead of 400: only a 2025-era session has a stream to open or a session to end, and the stateless path has neither.
+- **Confirmation dialog that times out or fails on a 2025-era client.** `notion_write` now returns the SDK shim's plain-text `isError` result ("Fulfilling input required by 'tools/call' failed: …") rather than the `confirmation_declined` error envelope; a dialog the user answers "no" still yields `confirmation_declined`. The sealed state outlives the five-minute answer window by thirty seconds so an answer given at the end of it is applied rather than rejected as expired; on 2026-07-28 a retry that echoes the state after that is refused by the SDK with `-32602` before the handler runs.
+- **Process-level log lines on stdio** (the startup banner, the operation-access summary, the Notion auth probe) are held until the 2025-era client has finished `initialize`, then forwarded as `notifications/message`; before, they were written only to stderr because the server is now created on the client's first message.
+
 ## [3.0.1] — 2026-09-15
 
 ### Fixed
