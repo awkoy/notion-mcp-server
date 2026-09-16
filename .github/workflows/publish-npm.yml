@@ -61,7 +61,18 @@ jobs:
         run: npm test
 
       - name: Publish to npm
-        run: npm publish
+        # Idempotent: a version already on the registry is left alone instead of
+        # failing the run with EPUBLISHCONFLICT, so the workflow can be re-run by
+        # hand when a later step fails — as the MCP Registry step did for v3.1.0,
+        # after npm itself had accepted the tarball.
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already on npm; skipping publish."
+          else
+            npm publish
+          fi
 
       - name: Sync server.json version with package.json
         run: |
@@ -78,10 +89,32 @@ jobs:
         run: |
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
 
+      - name: Wait for npm to serve the published version
+        # npm's publish pipeline is asynchronous: `npm publish` returns "your
+        # package is being processed" and the version is not fetchable yet. The
+        # MCP Registry validates our package against what registry.npmjs.org
+        # serves, so registering too early fails with "version was not found".
+        # v3.1.0 took about sixteen minutes to appear — far past the five
+        # minutes of retries the step below carried on its own, which failed the
+        # release run even though the npm publish had succeeded.
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$NAME/$VERSION")
+            if [ "$code" = "200" ]; then
+              echo "npm serves $NAME@$VERSION (after $(( (i - 1) * 30 ))s)."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::npm did not serve $NAME@$VERSION within 20 minutes."
+          exit 1
+
       - name: Publish to MCP Registry
-        # Retries because the registry validates the mcpName field against the
-        # package.json served by registry.npmjs.org, and the version published
-        # above can take a minute to propagate.
+        # Still retried: the registry validates the mcpName field against the
+        # package.json served by npm, and its own view of that registry can lag
+        # the check above by a few seconds.
         run: |
           ./mcp-publisher login github-oidc
           for i in 1 2 3 4 5; do
