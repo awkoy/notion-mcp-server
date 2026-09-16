@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interop shim for Claude Desktop** ([anthropics/claude-code#93290](https://github.com/anthropics/claude-code/issues/93290)): a 2026-07-28 body under a `MCP-Protocol-Version: 2025-11-25` header is realigned to the body instead of being rejected with `-32020`. Only that one known mismatch; everything else stays strict. To be removed once the client fix has shipped widely.
 - `npm run e2e -- --modern` runs the live smoke test as a 2026-07-28 client.
 
+### Fixed
+
+- **Approving a destructive confirmation no longer comes back as a refusal.** The prompt asked for a form with one required boolean, `confirm`. Clients render that as a checkbox, so approving the dialog without also ticking the box sent `{"action": "accept", "content": {"confirm": false}}` — a yes read back as `confirmation_declined`, and the operation refused with advice not to retry. The user had to tick a checkbox *and* accept, and nothing said so. The elicitation now requests no fields at all: the dialog's own accept is the yes, decline and cancel are the no, and `content` is not read. Confirming a delete is one keypress again.
+
 ### Changed
 
 - **HTTP auth error codes.** A wrong bearer token now answers JSON-RPC `-32003` (was `-32002`, which 2026-07-28 retires); a missing token stays `-32001`. HTTP statuses are unchanged (403 / 401).

@@ -76,7 +76,7 @@ const PAGE = {
     },
   },
 };
-const ACCEPT = { action: "accept", content: { confirm: true } };
+const ACCEPT = { action: "accept" };
 const ARCHIVE = { operation: "archive_page", payload: { page_id: "p-1" } };
 
 let server: HttpHandle;

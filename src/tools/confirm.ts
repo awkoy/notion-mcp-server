@@ -1,7 +1,7 @@
 import {
   CLIENT_CAPABILITIES_META_KEY,
-  acceptedContent,
   inputRequired,
+  inputResponse,
   type ClientCapabilities,
   type InputRequiredResult,
   type McpServer,
@@ -124,17 +124,12 @@ export async function confirmDestructiveCall(
     inputRequests: {
       [CONFIRM_KEY]: inputRequired.elicit({
         message: promptMessage(def, plan, target),
-        requestedSchema: {
-          type: "object",
-          properties: {
-            confirm: {
-              type: "boolean",
-              title: "Confirm",
-              description: `Yes: ${subject}. No: leave everything as it is.`,
-            },
-          },
-          required: ["confirm"],
-        },
+        // No fields: the client shows the message with a plain
+        // accept/decline, and accepting *is* the yes. A boolean field here
+        // asks the same question twice — clients render it as a checkbox,
+        // and an approval given without also ticking it comes back as
+        // `confirm: false`, reading the user's yes as a no.
+        requestedSchema: { type: "object", properties: {} },
       }),
     },
     // Sealed: the retry has to echo it, and it names the call it was minted
@@ -191,9 +186,11 @@ function answered(
       `The retry carried the confirmation state but no answer, so the request to ${state.subject} was treated as declined.`
     );
   }
-  // Declined, cancelled, or anything but a literal true: nobody said yes.
-  const content = acceptedContent(responses, CONFIRM_KEY);
-  if (content?.confirm === true) return null;
+  // Accepting the dialog is the yes; declining, cancelling, or an answer
+  // that is not an elicitation at all are the no. Nothing is read out of
+  // `content` — the form has no fields to fill in.
+  const answer = inputResponse(responses, CONFIRM_KEY);
+  if (answer.kind === "elicit" && answer.action === "accept") return null;
   return declined(`The user declined to ${state.subject}.`);
 }
 
