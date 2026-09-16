@@ -1,4 +1,12 @@
-import type { ElicitResult, McpServer, ServerContext } from "@modelcontextprotocol/server";
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  inputRequired,
+  inputResponse,
+  type ClientCapabilities,
+  type InputRequiredResult,
+  type McpServer,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import { isFullBlock, isFullDatabase, isFullDataSource, isFullPage } from "@notionhq/client";
 import { getOperation } from "../operations/registry.js";
 import {
@@ -9,26 +17,34 @@ import {
 import type { OperationDef, OperationDomain, OperationError } from "../operations/types.js";
 import { getClient } from "../services/notion.js";
 import { extractBlockText, extractRichText, extractTitle } from "../utils/slim.js";
+import { callDigest, requestStateCodec, type ConfirmState } from "../server/request-state.js";
+import { isModernRequest } from "../utils/mcp-era.js";
 
 // Opt-in confirmation of destructive operations (NOTION_CONFIRM_DESTRUCTIVE).
 //
 // Before notion_write dispatches an operation the registry marks
-// `destructive: true`, the server asks the human through MCP elicitation and
-// only proceeds on an explicit yes. The prompt names the operation and its
-// target — with the title when one cheap retrieve can fetch it — so the user
-// knows what they are approving, and a "no" comes back to the model as a
+// `destructive: true`, the server asks the human and only proceeds on an
+// explicit yes. The prompt names the operation and its target — with the
+// title when one cheap retrieve can fetch it — so the user knows what they
+// are approving, and a "no" comes back to the model as a
 // confirmation_declined error it must not retry.
+//
+// The question is asked the 2026-07-28 way (multi-round-trip, SEP-2322): the
+// tool call returns an `input_required` result carrying one elicitation and
+// a sealed `requestState`; the client shows the dialog and retries the same
+// call with the answer, and this handler runs again from the top with
+// `ctx.mcpReq.inputResponses` filled in. A 2025-era client never sees any of
+// that: the SDK's legacy shim turns the return into a real
+// `elicitation/create` request on the connection and re-enters the handler
+// itself, so both eras run this one code path.
 
 /** How long one title lookup may take before the prompt goes out without it. */
 const LOOKUP_TIMEOUT_MS = 5_000;
-/**
- * How long the user gets to answer. The SDK default (60 s) is tuned for
- * machine round-trips; a person reading a dialog deserves more.
- */
-const CONFIRM_TIMEOUT_MS = 5 * 60_000;
 /** Ids listed in a batch prompt before the rest collapse into "and N more". */
 const MAX_LISTED_IDS = 5;
 const MAX_TITLE_CHARS = 80;
+/** Key of the one input request a confirmation round carries. */
+const CONFIRM_KEY = "confirm";
 
 type TargetKind = "page" | "database" | "data source" | "block" | "comment" | "view";
 
@@ -60,20 +76,19 @@ type Plan = {
   total: number;
 };
 
-type ConfirmContext = Pick<ServerContext, "mcpReq">;
-
 /**
  * Ask the user to confirm `operation` if the flag is on and the call is
  * destructive. Resolves to `null` when dispatch may go ahead (flag off,
- * non-destructive call, restore, or the user said yes) and to an error
- * envelope otherwise.
+ * non-destructive call, restore, or the user said yes), to an
+ * `input_required` result when the question has to go out first, and to an
+ * error envelope otherwise.
  */
 export async function confirmDestructiveCall(
   server: McpServer,
-  ctx: ConfirmContext,
+  ctx: ServerContext,
   operation: string,
   payload: unknown
-): Promise<OperationError | null> {
+): Promise<OperationError | InputRequiredResult | null> {
   if (!confirmDestructiveEnabled()) return null;
   const def = getOperation(operation);
   if (!def?.destructive) return null;
@@ -81,13 +96,23 @@ export async function confirmDestructiveCall(
   // with operation_not_allowed, and the user should not be asked about it.
   if (!isOperationAllowed(operation)) return null;
 
+  // Second round: the answer is in. The state was verified (HMAC, TTL, bound
+  // to tools/call) before this handler ran; what is left to check is that it
+  // was minted for *this* call.
+  const state = ctx.mcpReq.requestState<ConfirmState>();
+  const responses = ctx.mcpReq.inputResponses;
+  if (state !== undefined || responses !== undefined) {
+    return answered(state, responses, callDigest(operation, payload));
+  }
+
   const plan = planFor(def, payload);
   if (!plan || plan.targets.length === 0) return null;
 
+  const digest = callDigest(operation, payload);
   const target = await describeTargets(plan);
   const subject = `run ${def.name} on ${target}`;
 
-  if (!server.server.getClientCapabilities()?.elicitation?.form) {
+  if (!supportsFormElicitation(server, ctx)) {
     return {
       code: "confirmation_unavailable",
       message: `${CONFIRM_DESTRUCTIVE_ENV_VAR} is on but this MCP client does not support elicitation, so ${def.name} cannot be confirmed.`,
@@ -95,34 +120,78 @@ export async function confirmDestructiveCall(
     };
   }
 
-  let result: ElicitResult;
-  try {
-    result = await ctx.mcpReq.elicitInput(
-      {
+  return inputRequired({
+    inputRequests: {
+      [CONFIRM_KEY]: inputRequired.elicit({
         message: promptMessage(def, plan, target),
-        requestedSchema: {
-          type: "object",
-          properties: {
-            confirm: {
-              type: "boolean",
-              title: "Confirm",
-              description: `Yes: ${subject}. No: leave everything as it is.`,
-            },
-          },
-          required: ["confirm"],
-        },
-      },
-      { signal: ctx.mcpReq.signal, timeout: CONFIRM_TIMEOUT_MS }
-    );
-  } catch (error) {
-    // A cancelled tool call, a timed-out dialog or a client that errors on
-    // the request all mean the same thing: nobody said yes.
-    const reason = error instanceof Error ? error.message : String(error);
-    return declined(`No confirmation was received to ${subject} (${reason}).`);
-  }
+        // No fields: the client shows the message with a plain
+        // accept/decline, and accepting *is* the yes. A boolean field here
+        // asks the same question twice — clients render it as a checkbox,
+        // and an approval given without also ticking it comes back as
+        // `confirm: false`, reading the user's yes as a no.
+        requestedSchema: { type: "object", properties: {} },
+      }),
+    },
+    // Sealed: the retry has to echo it, and it names the call it was minted
+    // for. `subject` rides along so the declined message can name the target
+    // without a second lookup.
+    requestState: await requestStateCodec.mint({ kind: "confirm", digest, subject }, ctx),
+  });
+}
 
-  if (result.action === "accept" && result.content?.confirm === true) return null;
-  return declined(`The user declined to ${subject}.`);
+/**
+ * Can this client show the dialog? On 2026-07-28 the answer travels with the
+ * request (`io.modelcontextprotocol/clientCapabilities` in the envelope; the
+ * SDK does not copy it onto the server on every serving path, so it is read
+ * from there); before that it was declared once at `initialize`, which the
+ * SDK keeps on the server.
+ */
+function supportsFormElicitation(server: McpServer, ctx: ServerContext): boolean {
+  const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+  const capabilities = (
+    isModernRequest(ctx)
+      ? envelope?.[CLIENT_CAPABILITIES_META_KEY]
+      : server.server.getClientCapabilities()
+  ) as ClientCapabilities | undefined;
+  const elicitation = capabilities?.elicitation;
+  if (!elicitation || typeof elicitation !== "object") return false;
+  // A bare `elicitation: {}` is the 2025-06-18 spelling of form support.
+  return "form" in elicitation || Object.keys(elicitation).length === 0;
+}
+
+/** The retried call: did the user say yes, and to this call? */
+function answered(
+  state: ConfirmState | undefined,
+  responses: Record<string, unknown> | undefined,
+  digest: string
+): OperationError | null {
+  if (!state || state.kind !== "confirm") {
+    return {
+      code: "confirmation_mismatch",
+      message:
+        "The answer came back without the sealed requestState that was issued with the question, so nothing ran.",
+      fix: "Call again without inputResponses and requestState to be asked afresh.",
+    };
+  }
+  if (state.digest !== digest) {
+    return {
+      code: "confirmation_mismatch",
+      message:
+        "The confirmation that came back was minted for a different call, so nothing ran.",
+      fix: "Call again without inputResponses and requestState to be asked afresh.",
+    };
+  }
+  if (responses === undefined) {
+    return declined(
+      `The retry carried the confirmation state but no answer, so the request to ${state.subject} was treated as declined.`
+    );
+  }
+  // Accepting the dialog is the yes; declining, cancelling, or an answer
+  // that is not an elicitation at all are the no. Nothing is read out of
+  // `content` — the form has no fields to fill in.
+  const answer = inputResponse(responses, CONFIRM_KEY);
+  if (answer.kind === "elicit" && answer.action === "accept") return null;
+  return declined(`The user declined to ${state.subject}.`);
 }
 
 function declined(message: string): OperationError {

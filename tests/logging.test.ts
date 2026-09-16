@@ -209,6 +209,47 @@ describe("logger forwarding", () => {
     });
   });
 
+  it("holds process-level lines written before a process server exists and replays them once one registers", async () => {
+    log.info("notion-mcp-server v0 running on stdio");
+    log.info("Operation access: all");
+    const s = await connect();
+    setProcessLogServer(s.server);
+
+    await vi.waitFor(() => expect(s.received).toHaveLength(2));
+    expect(s.received.map((e) => (e.data as { message: string }).message)).toEqual([
+      "notion-mcp-server v0 running on stdio",
+      "Operation access: all",
+    ]);
+  });
+
+  it("replays held lines only once the client has initialized when registered before connect", async () => {
+    log.info("early");
+    const server = createServer();
+    setProcessLogServer(server);
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "logging-test", version: "0.0.0" });
+    const received: LogEntry[] = [];
+    client.setNotificationHandler("notifications/message", (n) => {
+      received.push(n.params);
+    });
+    await client.connect(clientTransport);
+    open.push({ client, server, received });
+
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(received[0]).toMatchObject({ level: "info", data: { message: "early" } });
+  });
+
+  it("drops held lines when the process server is detached", async () => {
+    log.info("orphan");
+    setProcessLogServer(undefined);
+    const s = await connect();
+    setProcessLogServer(s.server);
+
+    await flush(s);
+    expect(s.received.map((e) => (e.data as { message: string }).message)).toEqual(["flush"]);
+  });
+
   it("drops lines below the client's level but still writes them to stderr", async () => {
     const s = await connect();
     await s.client.setLoggingLevel("warning");

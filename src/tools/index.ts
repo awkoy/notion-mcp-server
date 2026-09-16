@@ -1,5 +1,10 @@
-import type { CallToolResult, McpServer, ServerContext } from "@modelcontextprotocol/server";
-import { ResourceTemplate } from "@modelcontextprotocol/server";
+import type {
+  CallToolResult,
+  InputRequiredResult,
+  McpServer,
+  ServerContext,
+} from "@modelcontextprotocol/server";
+import { ResourceTemplate, isInputRequiredResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { readNotionResource } from "./resources.js";
 import { getOperation } from "../operations/index.js";
@@ -15,6 +20,17 @@ import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
 import { confirmDestructiveCall } from "./confirm.js";
 import { log } from "../utils/log.js";
+
+/**
+ * SEP-2549 cache hints for a 2026-07-28 client. What the server lists (tools,
+ * prompts, resources, the operations index) only changes with the process's
+ * environment, so a client may hold it for five minutes; `private` because it
+ * depends on this operator's NOTION_* access settings. Live Notion content
+ * (a page, a database schema) gets 30 s: enough for "read it twice in one
+ * turn", short enough not to serve stale content across turns.
+ */
+export const LIST_CACHE = { ttlMs: 5 * 60_000, cacheScope: "private" } as const;
+const LIVE_CACHE = { ttlMs: 30_000, cacheScope: "private" } as const;
 
 // An operation that returns non-text content puts MCP content blocks under
 // `data._mcp_content`, and they leave the JSON envelope here. get_image is the
@@ -120,12 +136,14 @@ async function runOperation(
   tool: string,
   operation: string,
   payload: Record<string, unknown>
-): Promise<CallToolResult> {
+): Promise<CallToolResult | InputRequiredResult> {
   // With NOTION_CONFIRM_DESTRUCTIVE on, a destructive call first asks the
-  // user through elicitation; a "no" (or a client that cannot ask) comes
-  // back as an error envelope and nothing is dispatched.
-  const denied = await confirmDestructiveCall(server, ctx, operation, payload);
-  if (denied) return errorContent({ ok: false, error: denied });
+  // user: an input_required result goes back to the client, which retries
+  // the call with the answer (the SDK does that round-trip itself for a
+  // 2025-era client); a "no" (or a client that cannot ask) comes back as an
+  // error envelope and nothing is dispatched.
+  const gate = await confirmDestructiveCall(server, ctx, operation, payload);
+  if (gate) return isInputRequiredResult(gate) ? gate : errorContent({ ok: false, error: gate });
   const started = performance.now();
   const result = await dispatch(operation, payload);
   const items = "summary" in result ? result.summary.total : undefined;
@@ -255,6 +273,8 @@ export function registerAllTools(server: McpServer): void {
       title: "Notion operations index",
       description: "Markdown table of every supported operation, batchability, and one-line description.",
       mimeType: "text/markdown",
+      // Changes only with the process's access settings — like the tool list.
+      cacheHint: LIST_CACHE,
     },
     async () => ({
       contents: [
@@ -279,6 +299,8 @@ export function registerAllTools(server: McpServer): void {
       description:
         "Read any Notion page as markdown by id — notion://page/<page_id>.",
       mimeType: "text/markdown",
+      // Live Notion content: a client may reuse it briefly, never share it.
+      cacheHint: LIVE_CACHE,
     },
     async (uri, variables) => {
       const { mimeType, text } = await readNotionResource(
@@ -297,6 +319,8 @@ export function registerAllTools(server: McpServer): void {
       description:
         "Read a Notion data source's schema by id — notion://database/<data_source_id>.",
       mimeType: "application/json",
+      // Live Notion content: a client may reuse it briefly, never share it.
+      cacheHint: LIVE_CACHE,
     },
     async (uri, variables) => {
       const { mimeType, text } = await readNotionResource(

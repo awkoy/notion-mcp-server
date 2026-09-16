@@ -7,6 +7,8 @@
 //   npm run e2e -- --write # also every write operation, inside one page created
 //                          # under NOTION_PAGE_ID and trashed at the end
 //   npm run e2e -- --write --keep   # leave the test page for inspection
+//   npm run e2e -- --modern         # same, as a 2026-07-28 client (stateless
+//                                   # per-request envelope, no session)
 //
 // `npm run e2e` loads NOTION_TOKEN and NOTION_PAGE_ID from ./.env (gitignored);
 // or run `node --env-file=<file> scripts/e2e.mjs` with any env file.
@@ -19,6 +21,7 @@ import { fileURLToPath } from "node:url";
 const SERVER = fileURLToPath(new URL("../build/index.js", import.meta.url));
 const WRITE = process.argv.includes("--write");
 const KEEP = process.argv.includes("--keep");
+const MODERN = process.argv.includes("--modern");
 const ROOT = process.env.NOTION_PAGE_ID;
 if (!process.env.NOTION_TOKEN) { console.error("NOTION_TOKEN missing"); process.exit(2); }
 if (WRITE && !ROOT) { console.error("NOTION_PAGE_ID required for --write"); process.exit(2); }
@@ -30,7 +33,10 @@ const transport = new StdioClientTransport({
   stderr: "pipe",
 });
 transport.stderr?.on("data", (d) => process.stderr.write("[server] " + d));
-const client = new Client({ name: "e2e-smoke", version: "0.0.0" });
+const client = new Client(
+  { name: "e2e-smoke", version: "0.0.0" },
+  MODERN ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : undefined
+);
 await client.connect(transport);
 
 const results = [];

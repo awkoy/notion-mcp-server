@@ -96,6 +96,7 @@ describe("Streamable HTTP transport (auth required)", () => {
       body: INIT_BODY,
     });
     expect(res.status).toBe(401);
+    expect((await res.json()).error.code).toBe(-32001);
   });
 
   it("403s a /mcp request with a wrong bearer token", async () => {
@@ -109,6 +110,7 @@ describe("Streamable HTTP transport (auth required)", () => {
       body: INIT_BODY,
     });
     expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe(-32003);
   });
 
   it("still serves /health without auth", async () => {

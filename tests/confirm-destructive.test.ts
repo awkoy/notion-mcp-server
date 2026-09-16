@@ -60,7 +60,7 @@ let client: Client;
 /** A client that never declared the capability. */
 let bareClient: Client;
 let prompts: ElicitRequest["params"][] = [];
-let answer: ElicitResult = { action: "accept", content: { confirm: true } };
+let answer: ElicitResult = { action: "accept" };
 
 async function connect(c: Client): Promise<Client> {
   const server = createServer();
@@ -98,7 +98,7 @@ beforeEach(() => {
   };
   reset(notionStub);
   prompts = [];
-  answer = { action: "accept", content: { confirm: true } };
+  answer = { action: "accept" };
   notionStub.pages.retrieve.mockResolvedValue(PAGE);
   notionStub.pages.update.mockResolvedValue({ ...PAGE, in_trash: true });
 });
@@ -145,7 +145,7 @@ describe("confirm destructive: flag off", () => {
 });
 
 describe("confirm destructive: the prompt", () => {
-  it("accept with confirm:true dispatches, and the message names the operation and the page title", async () => {
+  it("accept dispatches, and the message names the operation and the page title", async () => {
     await withFlag("true", async () => {
       const { result, body } = await execute(client, "archive_page", { page_id: "p-1" });
       expect(result.isError).toBeFalsy();
@@ -156,8 +156,10 @@ describe("confirm destructive: the prompt", () => {
       expect(prompt.message).toContain('page "Roadmap" (p-1)');
       expect(prompt.mode ?? "form").toBe("form");
       if (!("requestedSchema" in prompt)) throw new Error("expected a form prompt");
-      expect(prompt.requestedSchema.required).toEqual(["confirm"]);
-      expect(prompt.requestedSchema.properties.confirm).toMatchObject({ type: "boolean" });
+      // No fields: the client shows a plain accept/decline, so the user is
+      // never asked to tick a control *and* accept the dialog.
+      expect(prompt.requestedSchema.properties).toEqual({});
+      expect(prompt.requestedSchema.required).toBeUndefined();
       expect(notionStub.pages.retrieve).toHaveBeenCalledTimes(1);
       expect(notionStub.pages.update).toHaveBeenCalledTimes(1);
     });
@@ -193,7 +195,10 @@ describe("confirm destructive: the prompt", () => {
   });
 
   it("gives up on a slow lookup after 5 s and still asks", async () => {
-    vi.useFakeTimers();
+    // Timers only: faking Date too would leave the dispatch rate limiter's
+    // next slot 5 s in the future once real time is restored, and the next
+    // test's dispatch would wait it out.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     notionStub.pages.retrieve.mockReturnValue(new Promise(() => {}));
     try {
       await withFlag("true", async () => {
@@ -233,13 +238,13 @@ describe("confirm destructive: refusals", () => {
     });
   });
 
-  it("accept with confirm:false is a refusal", async () => {
+  it("accept carrying content the field-less form never asked for is still a yes", async () => {
     answer = { action: "accept", content: { confirm: false } };
     await withFlag("true", async () => {
       const { result, body } = await execute(client, "archive_page", { page_id: "p-1" });
-      expect(result.isError).toBe(true);
-      expect(body.error?.code).toBe("confirmation_declined");
-      expect(notionStub.pages.update).not.toHaveBeenCalled();
+      expect(result.isError).toBeFalsy();
+      expect(body.ok).toBe(true);
+      expect(notionStub.pages.update).toHaveBeenCalledTimes(1);
     });
   });
 

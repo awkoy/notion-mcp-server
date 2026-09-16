@@ -1,19 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { CONFIG } from "../config/index.js";
 import { getClient } from "../services/notion.js";
-import { registerAllTools } from "../tools/index.js";
+import { LIST_CACHE, registerAllTools } from "../tools/index.js";
 import { accessSummary } from "../operations/access.js";
 import { attachLogServer, log, setProcessLogServer } from "../utils/log.js";
+import { CONFIRM_TTL_SECONDS, requestStateCodec } from "./request-state.js";
 
-/**
- * Build a fresh, fully-registered MCP server instance.
- *
- * A factory (not a module singleton) because the Streamable HTTP transport needs
- * one server per session. `initOperations()` must have run before this is called —
- * it populates the global operation registry that the tools read from; this factory
- * only wires the server's tools/resources/prompts and never re-registers operations.
- */
 /**
  * Shown to the model by every client at connect time. Claude Code and Cursor
  * load only the tool names plus this text until a tool is actually needed,
@@ -41,6 +34,20 @@ How to work:
 - Archive and delete operations cannot be undone through the API; confirm with the user before running them.` + scope + confirm;
 }
 
+/**
+ * Build a fresh, fully-registered MCP server instance.
+ *
+ * A factory (not a module singleton): the legacy Streamable HTTP wiring needs one
+ * server per session, and the 2026-07-28 serving path one per request — the SDK
+ * pins a protocol era to an instance, so reusing one across requests is unsafe.
+ * `initOperations()` must have run before this is called — it populates the
+ * global operation registry that the tools read from; this factory only wires
+ * the server's tools/resources/prompts and never re-registers operations.
+ *
+ * Usable directly as the factory `createMcpHandler` / `serveStdio` take: the
+ * server is built the same way for both eras, so the request context they
+ * pass is not needed here.
+ */
 export function createServer(): McpServer {
   const server = new McpServer(
     {
@@ -59,6 +66,24 @@ export function createServer(): McpServer {
         logging: {},
       },
       instructions: buildInstructions(),
+      // SEP-2549 cache hints, mandatory on every list/discover result from
+      // protocol 2026-07-28 (Claude Code drops a server's tools when they are
+      // missing); tools/index.ts says why five minutes and why private.
+      cacheHints: {
+        "server/discover": LIST_CACHE,
+        "tools/list": LIST_CACHE,
+        "prompts/list": LIST_CACHE,
+        "resources/list": LIST_CACHE,
+        "resources/templates/list": LIST_CACHE,
+      },
+      // Destructive-operation confirmation (tools/confirm.ts) is written as a
+      // 2026-07-28 multi-round-trip handler; the SDK's legacy shim turns its
+      // input_required return into a real elicitation for 2025-era clients.
+      // The round timeout is how long a person gets to answer that dialog.
+      inputRequired: { roundTimeoutMs: CONFIRM_TTL_SECONDS * 1000 },
+      // The echoed requestState is verified (HMAC, TTL, method binding) before
+      // the handler runs; a bad one is answered "Invalid or expired requestState".
+      requestState: { verify: requestStateCodec.verify },
     }
   );
 
@@ -93,14 +118,35 @@ export function verifyNotionAuth(): void {
 
 export async function startStdio(): Promise<void> {
   try {
-    const server = createServer();
-    // stdio runs one server per process, so the process-level lines (banner,
-    // access summary, auth probe) belong to this client. The HTTP transport
-    // never does this: one server per session, and a process line has no
-    // single session to go to.
-    setProcessLogServer(server);
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+    // One server per connection in both eras: a 2025-era client pins the
+    // instance with its `initialize`, a 2026-07-28 one (Claude Code with
+    // MCP_PROTOCOL_NEGOTIATION=auto) with its first request. The factory also
+    // runs for a discarded `server/discover` probe, so the process log server
+    // is only registered for the instance a legacy `initialize` pins: stdio
+    // runs one client per process, so the process-level lines (banner, access
+    // summary, auth probe) belong to that client — on a 2025-era connection,
+    // where the logging channel still exists. The HTTP transport never does
+    // this: a process line has no single session.
+    serveStdio(
+      (ctx) => {
+        try {
+          const server = createServer();
+          if (ctx.era === "legacy") setProcessLogServer(server);
+          return server;
+        } catch (error) {
+          // serveStdio only reports a failed factory through `onerror`, after
+          // which the process would sit on stdin serving nothing. Fail loudly.
+          log.error(
+            `Failed to start stdio server: ${error instanceof Error ? error.message : String(error)}`
+          );
+          process.exit(1);
+        }
+      },
+      {
+        legacy: "serve",
+        onerror: (error) => log.error(`stdio transport error: ${error.message}`),
+      }
+    );
     log.info(`${CONFIG.serverName} v${CONFIG.serverVersion} running on stdio`);
     logAccessSummary();
     verifyNotionAuth();
