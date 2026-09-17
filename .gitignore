@@ -5,7 +5,10 @@
 /logs
 /tmp
 # Internal AI-assisted planning/spec/smoke artifacts — kept locally, not published.
-/docs/
+# The guides linked from the README are the exception.
+/docs/*
+!/docs/faq.md
+!/docs/claude-desktop-walkthrough.md
 .env
 .cursor
 .cursorignore
