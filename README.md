@@ -11,9 +11,10 @@ Give your AI read/write access to Notion with one token and one command. Claude 
 Notion ships its own MCP server. Where this one differs:
 
 - **It authenticates with a token, so it runs headless.** Notion's hosted MCP is OAuth-only and someone has to click "Authorize". This one works in CI, cron jobs, background agents and self-hosted deployments.
-- **It doesn't spend your context on tool schemas.** The official open-source server loads 24 endpoint schemas into the model's context at connection: 17,163 tokens, re-sent with every request for the rest of the session. This one loads three tools, 1,005 tokens. That is 94% less, 17× smaller, and operation schemas are fetched only when a task actually touches one, so a four-operation session still runs 86% lighter. [Measured, reproducible →](./benchmarks)
+- **It doesn't spend your context on tool schemas.** The official open-source server loads 24 endpoint schemas into the model's context at connection: 17,163 tokens, re-sent with every request for the rest of the session. This one loads three tools, 1,005 tokens — 94% less, 17× smaller — and fetches an operation's schema only when a task actually touches it.
+- **It doesn't spend your context on answers either.** Reading the same pages through both servers, pulling a page's content costs **82% less** (26,071 → 4,568 tokens on an 88-block page), a 25-row database query **81% less**, a page object **68% less**. Notion's raw JSON is mostly `id`/`type` wrappers, `annotations`, and `created_by`/`parent`/`icon` blocks, and none of it reaches the model. That is the half that compounds, because a tool surface is paid once and responses are paid on every call. [Measured against a reproducible fixture, with the caveats stated →](./benchmarks#part-2--the-responses)
 
-Responses are slimmed on the way back too: a database query returns flat name → value rows, typically 5–10× fewer tokens than Notion's raw `properties` bags, with nothing lost. Batched mutations with atomic rollback, idempotency keys, retry on rate limits and self-healing validation errors are built in, and the [comparison below](#which-notion-mcp-should-you-use) has the rest.
+Nothing is lost to get there: a database query returns flat name → value rows instead of Notion's raw `properties` bags (5.3× lighter in the benchmark), and `verbose: true` gives you the untouched SDK shape whenever you want it — within 4 tokens of what the official server returns, which is how the benchmark proves both are reading the same thing. Batched mutations with atomic rollback, idempotency keys, retry on rate limits and self-healing validation errors are built in, and the [comparison below](#which-notion-mcp-should-you-use) has the rest.
 
 <a href="https://glama.ai/mcp/servers/zrh07hteaa">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/zrh07hteaa/badge" alt="Notion MCP Server on Glama" />
@@ -122,13 +123,14 @@ To chat with your Notion in claude.ai's web UI, use Notion's hosted connector: i
 | Capability | Official Notion MCP (open source) | **This server** |
 | --- | --- | --- |
 | **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **3 tools**, 1,005 tokens — [94% less schema at connection](./benchmarks) |
+| **Response size** | Full Notion envelope on every read | [**82% less** reading a page's blocks](./benchmarks#part-2--the-responses), 81% on a 25-row database query, 68% on a page object, 71% on a search — same objects, both servers, matched pairs |
 | **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
 | **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
 | **Rate-limit handling** | 429s bubble up | ✅ Token-bucket limiter (3 req/s default) + exponential backoff, honors `Retry-After` |
-| **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default; `verbose: true` opts out |
-| **Database queries** | Raw `properties` bag per row | **Flattened** name → primitive map (all 20+ property types) |
+| **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default; `verbose: true` opts out and returns the raw shape |
+| **Database queries** | Raw `properties` bag per row | **Flattened** name → primitive map (all 20+ property types) — 16,629 → 3,143 tokens on the benchmark's 25-row query |
 | **Writing properties** | Full Notion property JSON | Plain values: `{ Status: "Done", Due: "2026-10-01", Tags: ["a"] }`, typed from the data source schema (cached 5 min); wrong names and options rejected with the valid ones |
 | **Filters** | Raw Notion filter JSON | Typed `where` shorthand — `{ Status: "Done", Priority: { in: [...] }, OR: [...] }` and `sorts: ["-Due Date"]`; raw filters still accepted |
 | **Unknown fields** | Rejected | Ignored with a `warnings` entry naming the field and the accepted ones, so the call still runs |
@@ -141,7 +143,7 @@ To chat with your Notion in claude.ai's web UI, use Notion's hosted connector: i
 | **Validation errors** | Plain error string | **Self-healing**: `{ code, message, path, issues, schema, example, fix }` — corrected in one round-trip |
 | **Notion API version** | — | Pinned `2026-03-11` (data sources, views, templates) |
 
-What that buys you in practice: renaming 50 pages is one `notion_write` call with `{ items: [...], concurrency: 10 }` rather than 50 trips through the agent's reasoning loop, and the prompt-token savings are the bigger half of the win. The [benchmark](./benchmarks) has the method, the tokenizer and an honest worst case.
+What that buys you in practice: renaming 50 pages is one `notion_write` call with `{ items: [...], concurrency: 10 }` rather than 50 trips through the agent's reasoning loop, and the prompt-token savings are the bigger half of the win. The [benchmark](./benchmarks) has the method, the tokenizer, the control that validates it, an honest worst case, and the limits of its own sample.
 
 </details>
 
