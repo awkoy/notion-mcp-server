@@ -11,7 +11,7 @@ Give your AI read/write access to Notion with one token and one command. Claude 
 Notion ships its own MCP server. Where this one differs:
 
 - **It authenticates with a token, so it runs headless.** Notion's hosted MCP is OAuth-only and someone has to click "Authorize". This one works in CI, cron jobs, background agents and self-hosted deployments.
-- **It doesn't spend your context on tool schemas.** The official open-source server loads 24 endpoint schemas into the model's context at connection: 17,163 tokens, re-sent with every request for the rest of the session. This one loads three tools, 1,005 tokens. That is 94% less, 17× smaller, and operation schemas are fetched only when a task actually touches one, so even a heavy eight-operation session stays 76% lighter. [Measured, reproducible →](./benchmarks)
+- **It doesn't spend your context on tool schemas.** The official open-source server loads 24 endpoint schemas into the model's context at connection: 17,163 tokens, re-sent with every request for the rest of the session. This one loads three tools, 1,005 tokens. That is 94% less, 17× smaller, and operation schemas are fetched only when a task actually touches one, so a four-operation session still runs 86% lighter. [Measured, reproducible →](./benchmarks)
 
 Responses are slimmed on the way back too: a database query returns flat name → value rows, typically 5–10× fewer tokens than Notion's raw `properties` bags, with nothing lost. Batched mutations with atomic rollback, idempotency keys, retry on rate limits and self-healing validation errors are built in, and the [comparison below](#which-notion-mcp-should-you-use) has the rest.
 
