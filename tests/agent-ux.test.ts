@@ -411,6 +411,70 @@ describe("search_pages", () => {
       ["database", "db-1"],
       ["data_source", "ds-tasks"],
     ]);
+    expect(notionStub.search).toHaveBeenCalledWith({
+      query: "x",
+      page_size: 10,
+      start_cursor: undefined,
+    });
+  });
+
+  it("opt-in title_relevance promotes the strongest normalized title match", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: [
+        { object: "page", id: "cloud-email", url: "u1", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Email from Example Cloud" }] } } },
+        { object: "page", id: "other", url: "u2", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Migration notes 2026" }] } } },
+        { object: "page", id: "target", url: "u3", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "ARCHIVE — MIGRATION COPY — Project-Cloud-InScene Migration — 2026-07-29" }] } } },
+      ],
+      has_more: true,
+      next_cursor: "raw-next",
+    });
+
+    const res = (await dispatch("search_pages", {
+      query: "ARCHIVE MIGRATION COPY Project-Cloud-InScene Migration 2026-07-29",
+      ranking: "title_relevance",
+      page_size: 2,
+    })) as Ok;
+    const data = res.data as {
+      results: { id: string }[];
+      ranking: string;
+      candidates_considered: number;
+      source_has_more: boolean;
+    };
+    expect(data.results.map((r) => r.id)).toEqual(["target", "other"]);
+    expect(data.ranking).toBe("title_relevance");
+    expect(data.candidates_considered).toBe(3);
+    expect(data.source_has_more).toBe(true);
+    expect(notionStub.search).toHaveBeenCalledWith({
+      query: "ARCHIVE MIGRATION COPY Project-Cloud-InScene Migration 2026-07-29",
+      page_size: 100,
+    });
+  });
+
+  it("rejects native sort/pagination controls in title_relevance mode", async () => {
+    const sorted = (await dispatch("search_pages", {
+      query: "Project-Cloud-InScene",
+      ranking: "title_relevance",
+      sort_direction: "descending",
+    })) as Err;
+    expect(sorted.error.code).toBe("validation_error");
+
+    const paged = (await dispatch("search_pages", {
+      query: "Project-Cloud-InScene",
+      ranking: "title_relevance",
+      paginate: true,
+    })) as Err;
+    expect(paged.error.code).toBe("validation_error");
+    expect(notionStub.search).not.toHaveBeenCalled();
+  });
+
+  it("requires a non-empty query in title_relevance mode", async () => {
+    const res = (await dispatch("search_pages", {
+      query: "   ",
+      ranking: "title_relevance",
+    })) as Err;
+    expect(res.error.code).toBe("validation_error");
+    expect(notionStub.search).not.toHaveBeenCalled();
   });
 });
 
