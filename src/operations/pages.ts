@@ -438,6 +438,7 @@ register({
 function normalizeTitleSearch(value: string): string {
   return value
     .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
     .toLowerCase()
     .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/g, " ")
@@ -460,16 +461,15 @@ function titleSearchScore(title: unknown, query: string): number {
   const titleTokens = new Set(normalizedTitle.split(" ").filter(Boolean));
   const matched = queryTokens.filter((token) => titleTokens.has(token)).length;
   score += matched * 1_000;
-  score += Math.round((matched / queryTokens.length) * 10_000);
   return score;
 }
 
-function rankTitleSearch<T>(items: T[], query: string): T[] {
+function rankTitleSearch<T>(items: T[], query: string, getTitle: (item: T) => unknown): T[] {
   return items
     .map((item, index) => ({
       item,
       index,
-      score: titleSearchScore((item as { title?: unknown }).title, query),
+      score: titleSearchScore(getTitle(item), query),
     }))
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map(({ item }) => item);
@@ -495,6 +495,24 @@ const SearchPagesParams = z.object({
     .optional()
     .describe("Max pages to fetch when paginate=true (default 10, ~1000 items with page_size=100)."),
   verbose: VERBOSE,
+}).superRefine((params, ctx) => {
+  if (params.ranking !== "title_relevance") return;
+  if (!normalizeTitleSearch(params.query ?? "")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["query"],
+      message: "ranking=title_relevance requires a non-empty title query.",
+    });
+  }
+  for (const field of ["sort_direction", "start_cursor", "paginate"] as const) {
+    if (params[field] !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: [field],
+        message: `ranking=title_relevance cannot be combined with ${field}. Remove it or use ranking=notion.`,
+      });
+    }
+  }
 });
 
 register({
@@ -519,38 +537,22 @@ register({
       : {};
 
     if (ranking === "title_relevance") {
-      const normalizedQuery = query?.trim() ?? "";
-      if (!normalizedQuery) {
-        return {
-          ok: false,
-          error: {
-            code: "validation_error",
-            message: "ranking=title_relevance requires a non-empty query.",
-            fix: "Provide a title query, or omit ranking to preserve Notion's native ordering.",
-          },
-        };
-      }
-      if (sort_direction || start_cursor || paginate) {
-        return {
-          ok: false,
-          error: {
-            code: "validation_error",
-            message: "ranking=title_relevance cannot be combined with sort_direction, start_cursor, or paginate.",
-            fix: "Remove those fields for local title relevance ranking, or use ranking=notion for native ordering and pagination.",
-          },
-        };
-      }
-
+      const titleQuery = query!.trim(); // Validated by SearchPagesParams.
       const requested = page_size ?? 10;
-      const response = await notion.search({ query: normalizedQuery, page_size: 100 });
-      const candidates = response.results.map((item) => slimKind(item, verbose ?? false));
-      const ranked = rankTitleSearch(candidates, normalizedQuery);
+      const response = await notion.search({ query: titleQuery, page_size: 100 });
+      // Rank raw results using a compact, consistently shaped title, then
+      // convert them to the caller's selected (slim or verbose) representation.
+      const ranked = rankTitleSearch(
+        response.results,
+        titleQuery,
+        (item) => (slimItem(item, false) as { title?: unknown }).title
+      );
       return {
         ok: true,
         data: {
-          results: ranked.slice(0, requested),
+          results: ranked.slice(0, requested).map((item) => slimKind(item, verbose ?? false)),
           ranking: "title_relevance",
-          candidates_considered: candidates.length,
+          candidates_considered: response.results.length,
           source_has_more: response.has_more,
         },
       };
