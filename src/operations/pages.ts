@@ -435,20 +435,22 @@ register({
 // search_pages
 // ──────────────────────────────────────────────────────────────────────────
 
-function normalizeTitleSearch(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/\p{M}+/gu, "")
+// Folding combining marks makes accents optional (`café` finds `Cafe`), but it
+// also merges letters some languages keep apart (`й`/`и`, `ї`/`і`). Ranking
+// therefore scores both ways: folded first, then with marks kept to break ties.
+function normalizeTitleSearch(value: string, foldMarks = true): string {
+  const decomposed = value.normalize("NFKD");
+  return (foldMarks ? decomposed.replace(/\p{M}+/gu, "") : decomposed)
     .toLowerCase()
     .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function titleSearchScore(title: unknown, query: string): number {
+function titleSearchScore(title: unknown, query: string, foldMarks = true): number {
   if (typeof title !== "string") return 0;
-  const normalizedTitle = normalizeTitleSearch(title);
-  const normalizedQuery = normalizeTitleSearch(query);
+  const normalizedTitle = normalizeTitleSearch(title, foldMarks);
+  const normalizedQuery = normalizeTitleSearch(query, foldMarks);
   if (!normalizedTitle || !normalizedQuery) return 0;
   if (normalizedTitle === normalizedQuery) return 1_000_000;
 
@@ -466,12 +468,16 @@ function titleSearchScore(title: unknown, query: string): number {
 
 function rankTitleSearch<T>(items: T[], query: string, getTitle: (item: T) => unknown): T[] {
   return items
-    .map((item, index) => ({
-      item,
-      index,
-      score: titleSearchScore(getTitle(item), query),
-    }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((item, index) => {
+      const title = getTitle(item);
+      return {
+        item,
+        index,
+        score: titleSearchScore(title, query),
+        markScore: titleSearchScore(title, query, false),
+      };
+    })
+    .sort((a, b) => b.score - a.score || b.markScore - a.markScore || a.index - b.index)
     .map(({ item }) => item);
 }
 
@@ -481,7 +487,7 @@ const SearchPagesParams = z.object({
   ranking: z
     .enum(["notion", "title_relevance"])
     .optional()
-    .describe("Result ordering. Omit or use notion to preserve Notion's native order. title_relevance re-ranks up to 100 candidates by normalized title match and is incompatible with sort_direction, start_cursor, and paginate."),
+    .describe("Result ordering. Omit or use notion to preserve Notion's native order. title_relevance re-ranks up to 100 candidates by normalized title match and is incompatible with sort_direction, start_cursor, and paginate=true."),
   page_size: z.number().min(1).max(100).optional(),
   start_cursor: z.string().optional(),
   paginate: z
@@ -505,7 +511,9 @@ const SearchPagesParams = z.object({
     });
   }
   for (const field of ["sort_direction", "start_cursor", "paginate"] as const) {
-    if (params[field] !== undefined) {
+    // paginate:false asks for a single page, which is all this mode returns anyway.
+    const conflicts = field === "paginate" ? params.paginate === true : params[field] !== undefined;
+    if (conflicts) {
       ctx.addIssue({
         code: "custom",
         path: [field],
