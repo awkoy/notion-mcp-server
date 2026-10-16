@@ -411,6 +411,176 @@ describe("search_pages", () => {
       ["database", "db-1"],
       ["data_source", "ds-tasks"],
     ]);
+    expect(notionStub.search).toHaveBeenCalledWith({
+      query: "x",
+      page_size: 10,
+      start_cursor: undefined,
+    });
+  });
+
+  it("opt-in title_relevance promotes the strongest normalized title match", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: [
+        { object: "page", id: "cloud-email", url: "u1", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Email from Example Cloud" }] } } },
+        { object: "page", id: "other", url: "u2", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Migration notes 2026" }] } } },
+        { object: "page", id: "target", url: "u3", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "ARCHIVE — MIGRATION COPY — Project-Cloud-InScene Migration — 2026-07-29" }] } } },
+      ],
+      has_more: true,
+      next_cursor: "raw-next",
+    });
+
+    const res = (await dispatch("search_pages", {
+      query: "ARCHIVE MIGRATION COPY Project-Cloud-InScene Migration 2026-07-29",
+      ranking: "title_relevance",
+      page_size: 2,
+    })) as Ok;
+    const data = res.data as {
+      results: { id: string }[];
+      ranking: string;
+      candidates_considered: number;
+      source_has_more: boolean;
+    };
+    expect(data.results.map((r) => r.id)).toEqual(["target", "other"]);
+    expect(data.ranking).toBe("title_relevance");
+    expect(data.candidates_considered).toBe(3);
+    expect(data.source_has_more).toBe(true);
+    expect(notionStub.search).toHaveBeenCalledWith({
+      query: "ARCHIVE MIGRATION COPY Project-Cloud-InScene Migration 2026-07-29",
+      page_size: 100,
+    });
+  });
+
+  it("rejects native sort/pagination controls in title_relevance mode", async () => {
+    const sorted = (await dispatch("search_pages", {
+      query: "Project-Cloud-InScene",
+      ranking: "title_relevance",
+      sort_direction: "descending",
+    })) as Err;
+    expect(sorted.error.code).toBe("validation_error");
+
+    const paged = (await dispatch("search_pages", {
+      query: "Project-Cloud-InScene",
+      ranking: "title_relevance",
+      paginate: true,
+    })) as Err;
+    expect(paged.error.code).toBe("validation_error");
+
+    const cursor = (await dispatch("search_pages", {
+      query: "Project-Cloud-InScene",
+      ranking: "title_relevance",
+      start_cursor: "opaque-next-page",
+    })) as Err;
+    expect(cursor.error.code).toBe("validation_error");
+    expect(cursor.error.message).toContain("start_cursor");
+    expect(notionStub.search).not.toHaveBeenCalled();
+  });
+
+  it("requires a non-empty query in title_relevance mode", async () => {
+    for (const query of ["   ", " — !! "]) {
+      const res = (await dispatch("search_pages", {
+        query,
+        ranking: "title_relevance",
+      })) as Err;
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("query");
+    }
+    expect(notionStub.search).not.toHaveBeenCalled();
+  });
+
+  it("ranks full verbose pages, databases, and data sources exactly like slim results", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: [
+        { object: "page", id: "page-notes", url: "u1", parent: { type: "workspace", workspace: true }, properties: { Name: { type: "title", title: [{ plain_text: "Roadmap notes" }] } } },
+        { object: "data_source", id: "ds-guide", url: "u2", title: [{ plain_text: "Roadmap guide" }], description: [], parent: { type: "database_id", database_id: "db-exact" }, properties: {} },
+        { object: "database", id: "db-exact", url: "u3", title: [{ plain_text: "Roadmap" }], description: [], parent: { type: "workspace", workspace: true }, data_sources: [] },
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const ids: string[][] = [];
+    for (const verbose of [false, true]) {
+      const res = (await dispatch("search_pages", {
+        query: "Roadmap",
+        ranking: "title_relevance",
+        verbose,
+      })) as Ok;
+      expect(res.ok).toBe(true);
+      const items = (res.data as { results: { id: string; object: string; title?: unknown; properties?: unknown }[] }).results;
+      ids.push(items.map((item) => item.id));
+      expect(items.map((item) => item.object)).toEqual(["database", "page", "data_source"]);
+      if (verbose) {
+        expect(Array.isArray(items[0].title)).toBe(true);
+        expect(items[1].properties).toBeDefined();
+        expect(Array.isArray(items[2].title)).toBe(true);
+      } else {
+        expect(items[0].title).toBe("Roadmap");
+      }
+    }
+    expect(ids[0]).toEqual(["db-exact", "page-notes", "ds-guide"]);
+    expect(ids[1]).toEqual(ids[0]);
+  });
+
+  it("normalizes accents, punctuation, case, and whitespace for ranking", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: [
+        { object: "page", id: "phrase", url: "u1", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Café — Roadmap notes" }] } } },
+        { object: "page", id: "exact", url: "u2", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Cafe Roadmap" }] } } },
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    const res = (await dispatch("search_pages", {
+      query: "  CAFÉ — Roadmap  ",
+      ranking: "title_relevance",
+    })) as Ok;
+    expect((res.data as { results: { id: string }[] }).results.map((item) => item.id)).toEqual(["exact", "phrase"]);
+    expect(notionStub.search).toHaveBeenCalledWith({ query: "CAFÉ — Roadmap", page_size: 100 });
+  });
+
+  it("preserves native candidate order for equal scores, without guessing canonical status", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: [
+        { object: "page", id: "archive", url: "u1", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Project Cloud ARCHIVE" }] } } },
+        { object: "page", id: "draft", url: "u2", parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "Project Cloud draft" }] } } },
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    const res = (await dispatch("search_pages", {
+      query: "Project Cloud",
+      ranking: "title_relevance",
+    })) as Ok;
+    expect((res.data as { results: { id: string }[] }).results.map((item) => item.id)).toEqual(["archive", "draft"]);
+  });
+
+  it("discloses first-100 candidate truncation rather than implying global ranking", async () => {
+    notionStub.search.mockResolvedValue({
+      object: "list",
+      results: Array.from({ length: 100 }, (_, i) => ({
+        object: "page", id: `p-${i}`, url: "u",
+        parent: { type: "workspace", workspace: true },
+        properties: { title: { type: "title", title: [{ plain_text: `Roadmap ${i}` }] } },
+      })),
+      has_more: true,
+      next_cursor: "more-results-exist",
+    });
+    const res = (await dispatch("search_pages", {
+      query: "Roadmap",
+      ranking: "title_relevance",
+      page_size: 5,
+    })) as Ok;
+    expect(res.data).toMatchObject({
+      ranking: "title_relevance",
+      candidates_considered: 100,
+      source_has_more: true,
+    });
+    expect((res.data as { results: unknown[] }).results).toHaveLength(5);
+    expect(notionStub.search).toHaveBeenCalledExactlyOnceWith({ query: "Roadmap", page_size: 100 });
   });
 });
 

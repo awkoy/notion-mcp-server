@@ -435,9 +435,53 @@ register({
 // search_pages
 // ──────────────────────────────────────────────────────────────────────────
 
+function normalizeTitleSearch(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleSearchScore(title: unknown, query: string): number {
+  if (typeof title !== "string") return 0;
+  const normalizedTitle = normalizeTitleSearch(title);
+  const normalizedQuery = normalizeTitleSearch(query);
+  if (!normalizedTitle || !normalizedQuery) return 0;
+  if (normalizedTitle === normalizedQuery) return 1_000_000;
+
+  let score = 0;
+  const phraseIndex = normalizedTitle.indexOf(normalizedQuery);
+  if (phraseIndex >= 0) score += 100_000 - Math.min(phraseIndex, 1_000);
+  if (normalizedTitle.startsWith(normalizedQuery)) score += 50_000;
+
+  const queryTokens = [...new Set(normalizedQuery.split(" ").filter(Boolean))];
+  const titleTokens = new Set(normalizedTitle.split(" ").filter(Boolean));
+  const matched = queryTokens.filter((token) => titleTokens.has(token)).length;
+  score += matched * 1_000;
+  return score;
+}
+
+function rankTitleSearch<T>(items: T[], query: string, getTitle: (item: T) => unknown): T[] {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      score: titleSearchScore(getTitle(item), query),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ item }) => item);
+}
+
 const SearchPagesParams = z.object({
   query: z.string().optional().describe("Title substring. Notion search is title-only — it does not search page body content."),
   sort_direction: z.enum(["ascending", "descending"]).optional(),
+  ranking: z
+    .enum(["notion", "title_relevance"])
+    .optional()
+    .describe("Result ordering. Omit or use notion to preserve Notion's native order. title_relevance re-ranks up to 100 candidates by normalized title match and is incompatible with sort_direction, start_cursor, and paginate."),
   page_size: z.number().min(1).max(100).optional(),
   start_cursor: z.string().optional(),
   paginate: z
@@ -451,6 +495,24 @@ const SearchPagesParams = z.object({
     .optional()
     .describe("Max pages to fetch when paginate=true (default 10, ~1000 items with page_size=100)."),
   verbose: VERBOSE,
+}).superRefine((params, ctx) => {
+  if (params.ranking !== "title_relevance") return;
+  if (!normalizeTitleSearch(params.query ?? "")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["query"],
+      message: "ranking=title_relevance requires a non-empty title query.",
+    });
+  }
+  for (const field of ["sort_direction", "start_cursor", "paginate"] as const) {
+    if (params[field] !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: [field],
+        message: `ranking=title_relevance cannot be combined with ${field}. Remove it or use ranking=notion.`,
+      });
+    }
+  }
 });
 
 register({
@@ -458,11 +520,11 @@ register({
   access: "read",
   domain: "pages",
   description:
-    "Search pages and databases by title. Title-only; does NOT search page body content. Each result carries `object` (page | database | data_source). Pass paginate:true to auto-walk all pages.",
+    "Search pages and databases by title. Title-only; does NOT search page body content. Each result carries `object` (page | database | data_source). Default ordering is Notion's native search order. Pass ranking:'title_relevance' to re-rank up to 100 candidates by normalized title relevance. Pass paginate:true to auto-walk all pages.",
   batchable: false,
   schema: SearchPagesParams,
   example: { query: "smoke test", page_size: 10 },
-  handler: tryHandler(async ({ query, sort_direction, page_size, start_cursor, paginate, page_limit, verbose }): Promise<OperationResult> => {
+  handler: tryHandler(async ({ query, sort_direction, ranking, page_size, start_cursor, paginate, page_limit, verbose }): Promise<OperationResult> => {
     const notion = await getClient();
     // Slim pages and databases look alike; the object kind says which id
     // goes where (a database id is not a valid create_page parent).
@@ -473,6 +535,28 @@ register({
     const sort = sort_direction
       ? { sort: { direction: sort_direction, timestamp: "last_edited_time" as const } }
       : {};
+
+    if (ranking === "title_relevance") {
+      const titleQuery = query!.trim(); // Validated by SearchPagesParams.
+      const requested = page_size ?? 10;
+      const response = await notion.search({ query: titleQuery, page_size: 100 });
+      // Rank raw results using a compact, consistently shaped title, then
+      // convert them to the caller's selected (slim or verbose) representation.
+      const ranked = rankTitleSearch(
+        response.results,
+        titleQuery,
+        (item) => (slimItem(item, false) as { title?: unknown }).title
+      );
+      return {
+        ok: true,
+        data: {
+          results: ranked.slice(0, requested).map((item) => slimKind(item, verbose ?? false)),
+          ranking: "title_relevance",
+          candidates_considered: response.results.length,
+          source_has_more: response.has_more,
+        },
+      };
+    }
 
     if (paginate) {
       const { results, truncated, pages_walked } = await paginateAll(
