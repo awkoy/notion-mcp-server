@@ -488,6 +488,17 @@ describe("search_pages", () => {
     expect(notionStub.search).not.toHaveBeenCalled();
   });
 
+  it("accepts paginate:false in title_relevance mode", async () => {
+    notionStub.search.mockResolvedValue({ object: "list", results: [], has_more: false, next_cursor: null });
+    const res = (await dispatch("search_pages", {
+      query: "Roadmap",
+      ranking: "title_relevance",
+      paginate: false,
+    })) as Ok;
+    expect(res.ok).toBe(true);
+    expect(notionStub.search).toHaveBeenCalledExactlyOnceWith({ query: "Roadmap", page_size: 100 });
+  });
+
   it("ranks full verbose pages, databases, and data sources exactly like slim results", async () => {
     notionStub.search.mockResolvedValue({
       object: "list",
@@ -539,6 +550,33 @@ describe("search_pages", () => {
     })) as Ok;
     expect((res.data as { results: { id: string }[] }).results.map((item) => item.id)).toEqual(["exact", "phrase"]);
     expect(notionStub.search).toHaveBeenCalledWith({ query: "CAFÉ — Roadmap", page_size: 100 });
+  });
+
+  it("ranks a match that keeps diacritics above one that only matches once they are folded", async () => {
+    const page = (id: string, title: string) => ({
+      object: "page", id, url: `u-${id}`,
+      parent: { type: "workspace", workspace: true },
+      properties: { title: { type: "title", title: [{ plain_text: title }] } },
+    });
+    // Notion lists the folded-only match first each time, so only the tie-breaker can reorder them.
+    const cases: { query: string; folded: string; kept: string }[] = [
+      { query: "Мой", folded: "Мои", kept: "Мой" },
+      { query: "Їжак", folded: "Іжак", kept: "Їжак" },
+      { query: "Мой".normalize("NFD"), folded: "Мои", kept: "Мой" },
+      { query: "мой план", folded: "Мои план на неделю", kept: "Мой план на неделю" },
+      { query: "cafe", folded: "Café", kept: "Cafe" },
+      { query: "café", folded: "Cafe", kept: "Café" },
+    ];
+    for (const { query, folded, kept } of cases) {
+      notionStub.search.mockResolvedValue({
+        object: "list",
+        results: [page("folded", folded), page("kept", kept), page("other", "Unrelated")],
+        has_more: false,
+        next_cursor: null,
+      });
+      const res = (await dispatch("search_pages", { query, ranking: "title_relevance" })) as Ok;
+      expect((res.data as { results: { id: string }[] }).results.map((item) => item.id), query).toEqual(["kept", "folded", "other"]);
+    }
   });
 
   it("preserves native candidate order for equal scores, without guessing canonical status", async () => {
