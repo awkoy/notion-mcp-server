@@ -134,21 +134,58 @@ describe("dispatch — batch", () => {
     );
   });
 
-  it("dedupes batch invocations sharing the same idempotency_key", async () => {
-    const key = `key-${Date.now()}`;
+  it("dedupes identical keyed batches without rerunning side effects", async () => {
+    const key = `key-${Date.now()}-dedupe`;
     tracker.created.length = 0;
     const first = await dispatch(FAKE_BATCH_OP, {
       items: [{ value: 200 }],
       idempotency_key: key,
+      concurrency: 1,
     });
     const createdAfterFirst = tracker.created.length;
+    expect((first as any).idempotency_receipt).toEqual({ decision: "accepted" });
+
     const second = await dispatch(FAKE_BATCH_OP, {
       items: [{ value: 200 }],
       idempotency_key: key,
+      concurrency: 9,
     });
-    // Same cached result is returned and no new side effects ran.
-    expect(second).toEqual(first);
+    expect(second).toEqual({
+      ...(first as any),
+      idempotency_receipt: { decision: "deduplicated", replay_of: "original" },
+    });
     expect(tracker.created.length).toBe(createdAfterFirst);
+  });
+
+  it("rejects reuse of an idempotency key for different items or atomic mode", async () => {
+    const key = `key-${Date.now()}-conflict`;
+    await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 201 }],
+      idempotency_key: key,
+      atomic: false,
+    });
+
+    const changedItems = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 202 }],
+      idempotency_key: key,
+      atomic: false,
+    });
+    expect((changedItems as any).error.code).toBe("idempotency_conflict");
+
+    const changedAtomic = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 201 }],
+      idempotency_key: key,
+      atomic: true,
+    });
+    expect((changedAtomic as any).error.code).toBe("idempotency_conflict");
+  });
+
+  it("rejects an empty idempotency key", async () => {
+    const res = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 203 }],
+      idempotency_key: "   ",
+    });
+    expect((res as any).error.code).toBe("invalid_idempotency_key");
   });
 });
 

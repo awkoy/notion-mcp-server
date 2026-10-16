@@ -127,7 +127,7 @@ To chat with your Notion in claude.ai's web UI, use Notion's hosted connector: i
 | **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | ✅ Universal `{ items: [...] }` envelope; up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | ✅ `atomic: true` aborts on first failure, best-effort archives entities created earlier |
-| **Idempotency** | Not documented | ✅ `idempotency_key` — same key + op returns the cached result for 5 minutes |
+| **Idempotency** | Not documented | ✅ `idempotency_key` binds to operation + items + atomic mode for 5 minutes; exact retries deduplicate, conflicting reuse is rejected |
 | **Rate-limit handling** | 429s bubble up | ✅ Token-bucket limiter (3 req/s default) + exponential backoff, honors `Retry-After` |
 | **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default; `verbose: true` opts out and returns the raw shape |
 | **Database queries** | Raw `properties` bag per row | **Flattened** name → primitive map (all 20+ property types) — 16,629 → 3,143 tokens on the benchmark's 25-row query |
@@ -350,6 +350,10 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
     "idempotency_key": "rename-pass-2026-07-02"
   }
 }
+
+// The key is bound to operation + items + atomic mode for 5 minutes.
+// An exact retry is deduplicated; changing concurrency alone is allowed.
+// Reusing the key for different items or atomic mode returns idempotency_conflict.
 
 // markdown shortcut (create_page, append_blocks, update_block, update_page_markdown)
 {
