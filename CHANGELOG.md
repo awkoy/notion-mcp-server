@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-10-18
+
+### Added
+
+- **`ranking: "title_relevance"` on `search_pages`** ([#111](https://github.com/awkoy/notion-mcp-server/pull/111), [#115](https://github.com/awkoy/notion-mcp-server/pull/115); thanks @insane66613). Notion's `/v1/search` matches titles, but it can rank broad word matches ahead of the page whose title is the query. This mode fetches up to 100 candidates and re-ranks them by title. An exact title comes first, then titles that contain the query as a phrase (earlier, and at the very start, ranks higher), then titles by how many query words they contain. Notion's order breaks ties. Matching ignores case, punctuation and accents, so `cafe` finds `Café`. When folding accents makes two titles tie, the one that also matches with its marks kept wins, so for `Мой` the page `Мой` ranks above `Мои`. The result holds the top `page_size` matches (default 10) plus `candidates_considered` and `source_has_more`. The mode needs a non-empty `query`, and `sort_direction`, `start_cursor` or `paginate: true` alongside it come back as a `validation_error`. Without `ranking`, or with `ranking: "notion"`, results keep Notion's order, so existing calls are unchanged.
+
+### Changed
+
+- Dependencies: `@modelcontextprotocol/server` 2.2.0 (was 2.0.0) and `@modelcontextprotocol/node` 2.1.0 (was 2.0.0). The lockfile also pins `@notionhq/client` 5.27.0 (was 5.26.0), so the Docker image and the `.mcpb` bundle ship it. Dev-only bumps (`@modelcontextprotocol/client` 2.2.0, `source-map-js` 1.2.2) close three high-severity Dependabot alerts. Neither package ships.
+
 ## [3.1.2] - 2026-10-04
 
 ### Changed
