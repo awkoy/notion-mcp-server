@@ -21,7 +21,7 @@ In Claude Code:
 /plugin install notion-mcp-server@awkoy
 ```
 
-When you enable the plugin, Claude Code asks for:
+Claude Code asks for the options below when you install the plugin. If it doesn't ask, or you want to change them later, run `/plugin configure notion-mcp-server@awkoy`.
 
 | Option | What it does |
 | --- | --- |

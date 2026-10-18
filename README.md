@@ -36,7 +36,7 @@ npx add-mcp notion-mcp-server --env NOTION_TOKEN=ntn_paste_your_token_here
 
 > Keep the `--env` flag. Without it the entry is written without a token, and the server starts and then fails every call with an auth error.
 
-**Using Claude Code? Install it as a plugin instead.** The plugin bundles the server with a Notion workflow skill, which teaches Claude when to search, how to filter a database with `where`, and how to batch writes. Claude Code asks for the token when you enable the plugin and keeps it in your system keychain:
+**Using Claude Code? Install it as a plugin instead.** The plugin bundles the server with a Notion workflow skill, which teaches Claude when to search, how to filter a database with `where`, and how to batch writes. Claude Code asks for the token when you install it (or later with `/plugin configure notion-mcp-server@awkoy`) and keeps it in your system keychain:
 
 ```
 /plugin marketplace add awkoy/notion-mcp-server
