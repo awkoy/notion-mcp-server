@@ -23,11 +23,12 @@ Status: **draft, not submitted.** The submission is made at [claude.ai/directory
 
 ## Releasing a new version afterwards
 
-Every release changes three things together, and `tests/manifests.test.ts` fails if one is missed:
+Every release changes these together, and `tests/manifests.test.ts` fails if one is missed:
 
 - the `version` in `plugins/notion-mcp-server/.claude-plugin/plugin.json`;
 - the pin in `plugins/notion-mcp-server/.mcp.json` (`notion-mcp-server@<version>`), because the directory blocks an unpinned `npx` launcher;
-- `package.json`, which the other two follow.
+- the `version` in `.codex-plugin/plugin.json` and `.cursor-plugin/plugin.json`, and the pins in `.codex-mcp.json` and `mcp.json`, all in the same folder;
+- `package.json`, which the others follow.
 
 Claude Code updates installed plugins only when the plugin version changes, so a release that skips the bump never reaches plugin users. The pinned version must be on npm before users install it. The `v*` tag publishes to npm within minutes, so push the tag as soon as the release PR merges.
 

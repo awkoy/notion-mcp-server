@@ -33,13 +33,45 @@ Restart Claude Code, or run `/reload-plugins`, then check that `/mcp` lists the 
 
 > *Find my "Tasks" database in Notion and list everything due this week that isn't done.*
 
+## Install in Codex
+
+The same folder is also a Codex plugin with the same server and skill. Codex has no form for plugin options, so the server reads the token from the environment Codex starts in. Export it in your shell profile (`~/.zshrc` on macOS), then add the marketplace and the plugin:
+
+```bash
+export NOTION_TOKEN=ntn_your_token
+```
+
+```bash
+codex plugin marketplace add awkoy/notion-mcp-server
+```
+
+```bash
+codex plugin add notion-mcp-server@awkoy
+```
+
+The token sits in plain text in that profile file. `NOTION_PAGE_ID` and `NOTION_READ_ONLY=true` work the same way and are optional. The Codex desktop app reads your shell profile when it starts, so restart it after you add the export.
+
+## Install in Cursor
+
+The folder is also a Cursor plugin. Until it is listed in the Cursor Marketplace, install it as a local plugin by copying the folder from a clone of the repo (Cursor does not follow a symlink here), then restart Cursor:
+
+```bash
+git clone https://github.com/awkoy/notion-mcp-server.git
+```
+
+```bash
+mkdir -p ~/.cursor/plugins/local && cp -R notion-mcp-server/plugins/notion-mcp-server ~/.cursor/plugins/local/
+```
+
+To update, pull the clone and copy the folder again. The plugin declares one variable, `NOTION_TOKEN`. Set it where Cursor offers plugin settings, or export `NOTION_TOKEN` in your shell profile and restart Cursor, which then reads it from its environment. If neither is set, the server gets the literal text `${NOTION_TOKEN}` and reports an invalid token. Optional `NOTION_PAGE_ID` and `NOTION_READ_ONLY=true` are read from the same environment.
+
 ## Data and privacy
 
-The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).
+The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. In Codex or Cursor, it goes to that app's model provider under that app's terms. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).
 
 ## Other ways to install
 
-The same server installs in other clients too: Claude Desktop through the `.mcpb` bundle on the [releases page](https://github.com/awkoy/notion-mcp-server/releases/latest), or Cursor, VS Code and Gemini CLI through the [main README](https://github.com/awkoy/notion-mcp-server#quick-start). Report problems in [GitHub Issues](https://github.com/awkoy/notion-mcp-server/issues).
+The same server installs in other clients too: Claude Desktop through the `.mcpb` bundle on the [releases page](https://github.com/awkoy/notion-mcp-server/releases/latest), or Cursor (without the plugin), VS Code and Gemini CLI through the [main README](https://github.com/awkoy/notion-mcp-server#quick-start). Report problems in [GitHub Issues](https://github.com/awkoy/notion-mcp-server/issues).
 
 ## License
 
