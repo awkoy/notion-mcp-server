@@ -35,7 +35,7 @@ Restart Claude Code, or run `/reload-plugins`, then check that `/mcp` lists the 
 
 ## Data and privacy
 
-The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#-privacy).
+The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).
 
 ## Other ways to install
 

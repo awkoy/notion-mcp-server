@@ -57,7 +57,7 @@ If a longer description is asked for:
 | Is data sent anywhere other than the service it connects to? | No. The server runs locally and talks only to `api.notion.com` over HTTPS. `get_image` fetches only the signed file URLs that Notion returns for files it hosts. If the user sets `HTTPS_PROXY`, traffic goes through that proxy. There is no telemetry, no analytics, and no server operated by the author. |
 | Data retention | None on disk. While the process runs it keeps two in-memory caches: database schemas for 5 minutes, and batch results under an `idempotency_key` for 5 minutes. Both are gone when the process exits. The token is held by Claude Code in the system keychain (`sensitive` user config). |
 | Directed at users under 18? | No. |
-| Privacy policy | `https://github.com/awkoy/notion-mcp-server#-privacy` |
+| Privacy policy | `https://github.com/awkoy/notion-mcp-server#privacy` |
 
 ### Compliance contact
 

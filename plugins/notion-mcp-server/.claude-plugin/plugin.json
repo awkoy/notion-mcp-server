@@ -22,7 +22,7 @@
   "icon": "https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/logo.png",
   "documentationUrl": "https://github.com/awkoy/notion-mcp-server#readme",
   "supportUrl": "https://github.com/awkoy/notion-mcp-server/issues",
-  "privacyPolicyUrl": "https://github.com/awkoy/notion-mcp-server#-privacy",
+  "privacyPolicyUrl": "https://github.com/awkoy/notion-mcp-server#privacy",
   "userConfig": {
     "notion_token": {
       "type": "string",
