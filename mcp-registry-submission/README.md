@@ -8,19 +8,18 @@ in that repo's current format (`about:` block, pinned `source.commit`).
 ## Status
 
 Submitted as [docker/mcp-registry#4227](https://github.com/docker/mcp-registry/pull/4227) from
-`awkoy/mcp-registry:add-notion-mcp-awkoy`, slug `notion-mcp-awkoy`. Open and awaiting review since
-2026-07-03: no review and no CI run yet.
+`awkoy/mcp-registry:add-notion-mcp-awkoy`, slug `notion-mcp-awkoy`. Open since 2026-07-03, with no
+review yet.
 
-That PR still describes 2.x: "43 operations … behind 2 context-efficient tools", the `NOTION_PAGE_ID`
-parameter only, and `source.commit` pinned to `c855bd5` (three commits after v2.10.0). To bring it up
-to v3.2.0:
+On 2026-10-18 the PR branch was updated to v3.2.0 (commit `5720fd2`, which matches this folder's
+`server.yaml`), and the PR description now describes 47 operations behind three tools and the optional
+settings. Its CI (`ci.yaml` and the security review) is waiting for a maintainer to approve workflow runs
+from a fork, so it has not run yet.
 
-1. Replace `servers/notion-mcp-awkoy/server.yaml` on the PR branch with this folder's `server.yaml`.
-   It pins `cefd835f5afe7a29b418b944fb8dc4adb827470e`, the v3.2.0 release commit.
-2. Edit the PR description to match: 47 operations behind three tools (`notion_read`, `notion_write`,
-   `notion_describe`), and the optional settings listed under [Configuration](#configuration).
-3. If a reviewer asks for test credentials, the registry takes them through the form linked in its
-   CONTRIBUTING.md, never in the PR.
+- The Go validator (`go run ./cmd/validate --name notion-mcp-awkoy`) was not re-run for the v3.2.0
+  update. Prettier and the same rules, checked by hand, pass. Run it in the fork if CI reports anything.
+- If a reviewer asks for test credentials, the registry takes them through the form linked in its
+  CONTRIBUTING.md, never in the PR.
 
 The `notion` slug is taken by the official server (`makenotion/notion-mcp-server`), which is why this
 one is `notion-mcp-awkoy`.
