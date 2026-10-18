@@ -8,11 +8,11 @@ Status: **draft, not submitted.** The submission is made at [claude.ai/directory
 
 1. **Confirm the plugin name.** `notion-mcp-server` is permanent once listed: it is the install id (`notion-mcp-server@…`) and the prefix of every tool name (`mcp__plugin_notion-mcp-server_notion__notion_read`). The display name, `Notion MCP Server (community)`, can change later.
 2. **Expect a manual review, not a rejection.** The automated checks hold a plugin for a reviewer when it:
-   - runs a pinned `npx` package (`.mcp.json` runs `notion-mcp-server@3.2.0`), and
+   - runs a pinned `npx` package (`.mcp.json` runs `notion-mcp-server@3.2.1`), and
    - has a name containing a brand it doesn't own ("Notion").
 
    The display name says *community* and the description says *not made by Notion* so that the reviewer sees this at once.
-3. **Choose the branch or tag to list.** The form asks for one. `main` works, but `claude plugin tag plugins/notion-mcp-server` creates a `notion-mcp-server--v3.2.0` tag after checking that `plugin.json` and the marketplace entry agree. A tag can't move ahead of npm.
+3. **Choose the branch or tag to list.** The form asks for one. `main` works, but `claude plugin tag plugins/notion-mcp-server` creates a `notion-mcp-server--v3.2.1` tag after checking that `plugin.json` and the marketplace entry agree. A tag can't move ahead of npm.
 4. **Run the checks one last time:**
 
    ```bash
@@ -40,7 +40,7 @@ Claude Code updates installed plugins only when the plugin version changes, so a
 | --- | --- |
 | Repository | `https://github.com/awkoy/notion-mcp-server` |
 | Plugin path | `plugins/notion-mcp-server` |
-| Branch or tag | `main`, or `notion-mcp-server--v3.2.0` (see above) |
+| Branch or tag | `main`, or `notion-mcp-server--v3.2.1` (see above) |
 
 ### Listing
 

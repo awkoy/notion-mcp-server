@@ -4,7 +4,7 @@ This plugin connects Claude to your Notion workspace with a Notion token. Claude
 
 The plugin contains two things:
 
-- **An MCP server.** It runs `npx -y notion-mcp-server@3.2.0`, the published npm package pinned to this plugin version, on your own computer. It exposes three tools, `notion_read`, `notion_write` and `notion_describe`, in place of one tool per endpoint, which keeps the tool schemas small in Claude's context.
+- **An MCP server.** It runs `npx -y notion-mcp-server@3.2.1`, the published npm package pinned to this plugin version, on your own computer. It exposes three tools, `notion_read`, `notion_write` and `notion_describe`, in place of one tool per endpoint, which keeps the tool schemas small in Claude's context.
 - **The `notion-workflow` skill.** It teaches Claude to find things with `search_pages`, read them with `get_page_markdown`, filter databases with `query_database` and `where`, batch repeated writes into one call, and call `notion_describe` only for complex shapes. It also tells Claude to ask before archiving or deleting anything.
 
 ## Requirements

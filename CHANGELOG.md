@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-10-19
+
+### Added
+
+- **Claude Code plugin** ([#118](https://github.com/awkoy/notion-mcp-server/pull/118)). Install it with `/plugin marketplace add awkoy/notion-mcp-server` and `/plugin install notion-mcp-server@awkoy`. The plugin runs `npx -y notion-mcp-server` pinned to its own version, asks for the token when you install it and keeps it in the system keychain, and also offers a default parent page and a read-only switch. It bundles a `notion-workflow` skill that teaches Claude to find things with `search_pages`, filter databases with `where`, batch repeated writes into one call, and ask before archiving or deleting anything.
+- **The same plugin for Codex and Cursor** ([#120](https://github.com/awkoy/notion-mcp-server/pull/120)). Codex installs it with `codex plugin marketplace add awkoy/notion-mcp-server` and `codex plugin add notion-mcp-server@awkoy`, and reads `NOTION_TOKEN` from the environment it starts in. Cursor installs it as a local plugin for now and takes `NOTION_TOKEN` from its plugin settings or its environment. The [plugin README](plugins/notion-mcp-server/README.md) has the steps.
+
+### Changed
+
+- **README rewritten** ([#117](https://github.com/awkoy/notion-mcp-server/pull/117)) at half its old length. Configuration, the HTTP transport, what calls look like on the wire, the comparison with Notion's own servers, and the development notes moved to [docs/](docs/). This release puts the new README on npm.
+- Package metadata: the npm description and keywords name the clients the server works with (Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI). The `.mcpb` bundle's description lists the three current tools, and its privacy link points at the README's renamed privacy section.
+- No changes to the server's code.
+
 ## [3.2.0] - 2026-10-18
 
 ### Added
