@@ -22,19 +22,25 @@
     "notion-mcp-server",
     "notion-api",
     "notion-integration",
+    "notion-database",
     "mcp",
     "mcp-server",
     "modelcontextprotocol",
     "model-context-protocol",
     "claude",
+    "claude-code",
     "claude-desktop",
     "cursor",
+    "vscode",
+    "copilot",
+    "codex",
+    "gemini-cli",
     "chatgpt",
     "anthropic",
-    "ai",
     "ai-agent",
-    "agent",
-    "llm"
+    "llm",
+    "markdown",
+    "headless"
   ],
   "author": {
     "name": "Yaroslav Boiko",
@@ -42,7 +48,7 @@
     "url": "https://yaroslavboiko.com"
   },
   "license": "MIT",
-  "description": "Notion MCP server for Claude, Cursor, ChatGPT, and Claude Desktop — connect AI agents to Notion via the Model Context Protocol. Create pages, query databases, append blocks, upload files, and more in natural language.",
+  "description": "Notion MCP server with token auth: connect Claude Code, Claude Desktop, Cursor, VS Code, Codex and any MCP client to Notion. Search, create and edit pages, query databases, comment and upload files. Runs headless in CI and agents.",
   "files": [
     "build"
   ],

@@ -16,7 +16,7 @@ A Personal Access Token (PAT) is a key that lets the AI act as **you** inside No
 
 4. **Copy the token now.** Notion shows it once. It starts with `ntn_` and should be treated like a password.
 
-PATs expire a year after creation, so set yourself a reminder to rotate. No "Personal access tokens" page? Your admin disabled them — use the [Internal Integration alternative](../README.md#token-pat-or-internal-integration).
+A PAT expires after the lifetime you pick when you create it (a year at most), so set yourself a reminder to rotate. Can't create one? Your workspace limits who can (on Free and Business plans only owners can by default): ask an owner, or use the [Internal Integration alternative](../README.md#token-pat-or-internal-integration).
 
 ## Step 2 — install the server
 
