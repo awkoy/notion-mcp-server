@@ -1,0 +1,47 @@
+{
+  "name": "notion-mcp-server",
+  "displayName": "Notion MCP Server (community)",
+  "version": "3.2.0",
+  "description": "Read and write Notion with a token: search pages, query databases with typed filters, read and write pages as markdown, and batch edits. Runs the open-source notion-mcp-server locally; not made by Notion.",
+  "author": {
+    "name": "Yaroslav Boiko",
+    "email": "y.boikodeveloper@gmail.com",
+    "url": "https://yaroslavboiko.com"
+  },
+  "homepage": "https://github.com/awkoy/notion-mcp-server",
+  "repository": "https://github.com/awkoy/notion-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "notion",
+    "notes",
+    "databases",
+    "docs",
+    "productivity",
+    "knowledge-base"
+  ],
+  "icon": "https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/logo.png",
+  "documentationUrl": "https://github.com/awkoy/notion-mcp-server#readme",
+  "supportUrl": "https://github.com/awkoy/notion-mcp-server/issues",
+  "privacyPolicyUrl": "https://github.com/awkoy/notion-mcp-server#-privacy",
+  "userConfig": {
+    "notion_token": {
+      "type": "string",
+      "title": "Notion token",
+      "description": "Personal Access Token (ntn_...) or Internal Integration Secret. Create one at https://app.notion.com/developers/tokens — a PAT sees everything you can see, no per-page sharing needed.",
+      "sensitive": true,
+      "required": true
+    },
+    "notion_page_id": {
+      "type": "string",
+      "title": "Default parent page (optional)",
+      "description": "Page URL or ID used by create_page / create_database when no parent is given. Leave empty to always pass a parent.",
+      "default": ""
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only mode",
+      "description": "Turn on to disable every write operation, so the server can only search and read.",
+      "default": false
+    }
+  }
+}
