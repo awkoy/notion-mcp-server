@@ -1,0 +1,35 @@
+{
+  "name": "notion-mcp-server",
+  "version": "3.2.0",
+  "description": "Read and write Notion with a token: search pages, query databases with typed filters, read and write pages as markdown, and batch edits. Runs the open-source notion-mcp-server locally; not made by Notion.",
+  "author": {
+    "name": "Yaroslav Boiko",
+    "email": "y.boikodeveloper@gmail.com",
+    "url": "https://yaroslavboiko.com"
+  },
+  "homepage": "https://github.com/awkoy/notion-mcp-server",
+  "repository": "https://github.com/awkoy/notion-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "notion",
+    "notes",
+    "databases",
+    "docs",
+    "productivity",
+    "knowledge-base"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.codex-mcp.json",
+  "interface": {
+    "displayName": "Notion MCP Server (community)",
+    "shortDescription": "Search, query and edit Notion with a token.",
+    "developerName": "Yaroslav Boiko",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/awkoy/notion-mcp-server",
+    "privacyPolicyURL": "https://github.com/awkoy/notion-mcp-server#privacy",
+    "defaultPrompt": [
+      "Find my \"Tasks\" database in Notion and list everything due this week that isn't done."
+    ]
+  }
+}
