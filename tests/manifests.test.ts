@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { initOperations } from "../src/operations/index.js";
 import { configureOperationAccess } from "../src/operations/access.js";
 import { buildInstructions } from "../src/server/index.js";
@@ -33,6 +33,43 @@ describe("distribution manifests", () => {
     for (const url of manifest.privacy_policies) expect(url).toMatch(/^https:\/\//);
     expect(manifest.user_config.notion_token.sensitive).toBe(true);
     expect(manifest.user_config.notion_token.required).toBe(true);
+  });
+
+  describe("Claude Code plugin", () => {
+    const dir = "plugins/notion-mcp-server";
+
+    it("plugin.json carries the package version and a sensitive token option", () => {
+      const plugin = read(`${dir}/.claude-plugin/plugin.json`);
+      expect(plugin.name).toBe(pkg.name);
+      expect(plugin.version).toBe(pkg.version);
+      expect(plugin.privacyPolicyUrl).toMatch(/^https:\/\//);
+      expect(plugin.userConfig.notion_token.sensitive).toBe(true);
+      expect(plugin.userConfig.notion_token.required).toBe(true);
+    });
+
+    // The directory blocks an unpinned npx launcher, so the pin moves with
+    // every release.
+    it(".mcp.json starts the npm package pinned to this version, with the token from userConfig", () => {
+      const server = read(`${dir}/.mcp.json`).mcpServers.notion;
+      expect(server.command).toBe("npx");
+      expect(server.args).toEqual(["-y", `${pkg.name}@${pkg.version}`]);
+      expect(server.env.NOTION_TOKEN).toBe("${user_config.notion_token}");
+    });
+
+    it("the marketplace entry points at the plugin folder under the same name", () => {
+      const marketplace = read(".claude-plugin/marketplace.json");
+      const entry = marketplace.plugins.find((p: { name: string }) => p.name === pkg.name);
+      expect(entry?.source).toBe(`./${dir}`);
+    });
+
+    // Package-manager config next to an npx launcher fails the directory's
+    // pre-submission checks, which is why the plugin is not the repo root.
+    it("the plugin folder holds no package-manager files", () => {
+      const files = readdirSync(new URL(`../${dir}`, import.meta.url), { recursive: true }).map(String);
+      for (const banned of [".npmrc", "package.json", "package-lock.json", ".DS_Store"]) {
+        expect(files.filter((f) => f.split("/").pop() === banned)).toEqual([]);
+      }
+    });
   });
 });
 

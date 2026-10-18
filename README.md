@@ -34,6 +34,15 @@ Or install in one click:
 - **VS Code (Copilot agent mode):** it asks for the token and stores it as a secret.
 - **Claude Desktop:** double-click the `.mcpb` file (or drag it into Settings → Extensions) and paste your token. No Node.js needed. New to all this? The [step-by-step walkthrough](./docs/claude-desktop-walkthrough.md) assumes nothing.
 
+**Using Claude Code? Install it as a plugin instead.** The plugin bundles the server with a Notion workflow skill, which teaches Claude when to search, how to filter a database with `where`, and how to batch writes. Claude Code asks for the token when you install it (or later with `/plugin configure notion-mcp-server@awkoy`) and keeps it in your system keychain:
+
+```
+/plugin marketplace add awkoy/notion-mcp-server
+/plugin install notion-mcp-server@awkoy
+```
+
+The plugin runs the npm release that matches its own version and needs Node.js 20 or later. It also offers a default parent page and a read-only switch; [the plugin's README](./plugins/notion-mcp-server/README.md) has the details.
+
 <details>
 <summary><b>Manual setup: JSON config, Claude Code, Codex, Gemini CLI, Docker</b></summary>
 
