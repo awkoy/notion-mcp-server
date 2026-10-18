@@ -11,9 +11,10 @@ Submitted as [docker/mcp-registry#4227](https://github.com/docker/mcp-registry/p
 `awkoy/mcp-registry:add-notion-mcp-awkoy`, slug `notion-mcp-awkoy`. Open since 2026-07-03, with no
 review yet.
 
-On 2026-10-18 the PR branch was updated to v3.2.0 (commit `5720fd2`, which matches this folder's
-`server.yaml`), and the PR description now describes 47 operations behind three tools and the optional
-settings. Its CI (`ci.yaml` and the security review) is waiting for a maintainer to approve workflow runs
+On 2026-10-18 the PR branch was updated to v3.2.0 (commit `5720fd2`) and the PR description was
+rewritten for the optional settings. On 2026-10-19 both were corrected (commit `96e0f10`, which matches
+this folder's `server.yaml`): the server has 46 operations plus two aliases, not 47, and the description no
+longer contrasts the token with OAuth, since the existing `notion` entry also authenticates with a token. Its CI (`ci.yaml` and the security review) is waiting for a maintainer to approve workflow runs
 from a fork, so it has not run yet.
 
 - The Go validator (`go run ./cmd/validate --name notion-mcp-awkoy`) was not re-run for the v3.2.0

@@ -22,7 +22,7 @@ Both authenticate with a token and run locally, so this is the like-for-like com
 | --- | --- | --- |
 | **Tool surface** | 24 tools (one per endpoint), 17,163 tokens loaded into context | **3 tools**, 1,005 tokens: [94% less schema at connection](../benchmarks) |
 | **Response size** | Full Notion envelope on every read | [**82% less** reading a page's blocks](../benchmarks#part-2--the-responses), 81% on a 25-row database query, 68% on a page object, 71% on a search |
-| **Operations covered** | ~24 endpoints | **47 operations** (plus a `trash_page` alias) across pages, blocks, databases, data sources, views, templates, comments, users, files |
+| **Operations covered** | ~24 endpoints | **46 operations** (plus the `trash_page` and `get_self` aliases) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | Universal `{ items: [...] }` envelope, up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | `atomic: true` stops on the first failure and archives what the batch already created, best effort |
 | **Idempotency** | Not documented | `idempotency_key`: same key and operation return the cached result for 5 minutes |

@@ -18,7 +18,7 @@ It writes the config for whichever installed client you pick. Manual config bloc
 
 Notion's **hosted** MCP (`mcp.notion.com`) is built for interactive chat and signs in with OAuth on every plan. Business and Enterprise workspaces can also use MCP tokens, which skip the browser sign-in, but only workspace owners can create them. It has the largest tool set, including features that need Notion AI. Their **open-source** server is, in Notion's words, "no longer actively maintained", and exposes one tool per endpoint.
 
-This server authenticates with a token on any plan, so it works in CI and automation, exposes three tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. Short table: [Which Notion MCP should you use?](../README.md#which-notion-mcp-should-you-use). Full comparison: [comparison.md](./comparison.md).
+This server authenticates with a token on any plan, so it works in CI and automation, exposes three tools dispatching 46 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. Short table: [Which Notion MCP should you use?](../README.md#which-notion-mcp-should-you-use). Full comparison: [comparison.md](./comparison.md).
 
 ## Does it work on the Notion Free plan?
 
