@@ -9,6 +9,11 @@
 /docs/*
 !/docs/faq.md
 !/docs/claude-desktop-walkthrough.md
+!/docs/comparison.md
+!/docs/configuration.md
+!/docs/development.md
+!/docs/http-transport.md
+!/docs/operations.md
 .env
 .cursor
 .cursorignore
