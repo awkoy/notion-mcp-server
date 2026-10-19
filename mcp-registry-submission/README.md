@@ -35,14 +35,15 @@ one is `notion-mcp-awkoy`.
 | `allowed_operations` | `NOTION_ALLOWED_OPERATIONS` | Allowlist of operation names or groups. |
 | `blocked_operations` | `NOTION_BLOCKED_OPERATIONS` | Blocklist, same vocabulary; wins over the allowlist. |
 | `confirm_destructive` | `NOTION_CONFIRM_DESTRUCTIVE` | Asks before destructive operations. The Docker MCP gateway forwards elicitation to the client, so the client has to support it. |
-| `upload_root` | `NOTION_UPLOAD_ROOT` | Confines `upload_file`'s `path` source. In the container this is a container path, since none of the host's files are mounted. |
+| `upload_root` | `NOTION_UPLOAD_ROOT` | Confines `upload_file`'s `path` source (`/` allows any path; unset, dot-named paths and `/proc`, `/sys`, `/dev` and `/run/secrets` are refused). In the container this is a container path, since none of the host's files are mounted. |
 | `file_urls` | `NOTION_FILE_URLS` | `ref` swaps signed file URLs for short `notion-file:` refs. |
 
 Every parameter is optional, and an empty value behaves as if the variable were unset.
 
 Not exposed in the catalog entry: `NOTION_RATE_LIMIT` (the default of 3 requests per second is Notion's
 limit), `NOTION_DAILY_LOG_PAGE_ID` (used only by one MCP prompt), `HTTPS_PROXY` / `HTTP_PROXY`
-(Docker has its own proxy settings), and the HTTP transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`,
+(Docker has its own proxy settings), the upload limits `NOTION_UPLOAD_MAX_BYTES`,
+`NOTION_UPLOAD_URL_TIMEOUT_MS` and `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` (the defaults suit the catalog), and the HTTP transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`,
 `MCP_AUTH_TOKEN`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`), because the catalog runs the image over
 stdio. The full list is in `notion-mcp-server --help` and the main README.
 

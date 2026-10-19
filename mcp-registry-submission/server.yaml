@@ -78,7 +78,7 @@ config:
         description: Ask before each destructive operation (archive, trash, delete) runs. Needs an MCP client that supports elicitation.
       upload_root:
         type: string
-        description: Confine upload_file's local path source to this directory inside the container. URL and base64 uploads are not affected.
+        description: Confine upload_file's local path source to this directory inside the container; "/" allows any path. Unset, paths through dot-named files or directories, and paths under /proc, /sys, /dev or /run/secrets, are refused. URL and base64 uploads are not affected.
       file_urls:
         type: string
         description: Set to "ref" to replace Notion's long signed file URLs in responses with short notion-file refs. Default is full URLs.

@@ -37,7 +37,7 @@ Both authenticate with a token and run locally, so this is the like-for-like com
 | **Markdown** | Page-level markdown tools | Accepted by `create_page`, `append_blocks`, `update_block` and comments, plus a full round trip (`get_page_markdown` / `update_page_markdown`), GFM included |
 | **Templates** | — | `create_page` from a Notion template, with `list_data_source_templates` to find them |
 | **Database views** | — | List, get, query, create, update, delete. `query_view` runs a view's stored filters and sorts and returns hydrated rows. |
-| **File uploads** | Not in the documented tool surface | Single- and multi-part (5 MB parts), MIME type inferred |
+| **File uploads** | Not in the documented tool surface | Single- and multi-part, picked by size; MIME type inferred; local paths and URLs guarded |
 | **Validation errors** | Plain error string | `{ code, message, path, issues, schema, example, fix }`, usually corrected in one round trip |
 | **Notion API version** | — | Pinned `2026-03-11` (data sources, views, templates) |
 

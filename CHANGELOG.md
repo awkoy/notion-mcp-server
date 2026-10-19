@@ -11,11 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
 - **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
+- **`upload_file` knows more file types.** `html`/`htm`, and CAD and 3D formats (`dwg`, `dxf`, `step`/`stp`, `stl`, `obj`, `glb`, `gltf`), get their MIME type from the extension. CAD and 3D files attach as file blocks.
+- **Upload limits are configurable:** `NOTION_UPLOAD_MAX_BYTES` (default 1 GiB), `NOTION_UPLOAD_URL_TIMEOUT_MS` (default 30000) and `NOTION_UPLOAD_ALLOW_PRIVATE_URLS`. See [docs/configuration.md](docs/configuration.md#uploads).
+
+### Changed
+
+- **`upload_file` sends an unknown extension as `application/octet-stream`** instead of refusing the file. Notion has resolved the type from the file name since 2026-09-22, so the old error message, which said Notion rejects octet-stream, was wrong. A file name with no extension still needs `content_type`.
+- **`upload_file` picks `mode` from the size when it is omitted:** single-part up to 20 MiB, multi-part above. Before, an omitted `mode` meant single-part, and a large file failed at Notion. An explicit `mode: "single"` over 20 MiB is now refused before anything is sent.
 
 ### Fixed
 
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
 - The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
+
+### Security
+
+`upload_file` reads the sources a model hands it, so a prompt injection in a page could steer it at the server's own files or network. Both sources are now guarded. **⚠️ Possibly breaking:** calls that used to work can now be refused; each item below says how to get the old behaviour back.
+
+- **Local paths over HTTP need `NOTION_UPLOAD_ROOT`.** With `MCP_TRANSPORT=http` and no root, a `path` source is refused with `path_not_allowed`: the caller is remote and could otherwise read any file the server can. Base64 and URL sources still work. Set `NOTION_UPLOAD_ROOT` to the directory uploads come from, or `/` to allow any path.
+- **Over stdio without a root, dot-named paths and system and app-data folders are refused.** A path whose real location, after symlinks, goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`, `.git`, `~/.config`) gets `path_not_allowed`. So does one under `/proc`, `/sys`, `/dev`, `/run/secrets` or `/var/run/secrets`; macOS `~/Library`, except iCloud Drive (`~/Library/Mobile Documents`) and `~/Library/CloudStorage`; Windows `~\AppData`, `%APPDATA%` and `%LOCALAPPDATA%`; and `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` when they are set. MCP clients keep their config there, this server's `NOTION_TOKEN` included (`~/Library/Application Support/Claude/claude_desktop_config.json`, `%APPDATA%\Claude\claude_desktop_config.json`), and `/proc/self/environ` holds the server's own environment. This is a heuristic that catches the usual credential stores, not a sandbox, and it also catches legitimate files under, say, `~/.local`, a `.claude/worktrees` checkout or an app's folder in `~/Library`. `NOTION_UPLOAD_ROOT` lifts it (dot names are allowed inside a root), and `NOTION_UPLOAD_ROOT=/` restores the old behaviour.
+- **A path must be a regular file within the size limit.** The file is stat'ed before it is read and opened non-blocking, so a directory, `/dev/zero` or a FIFO is refused instead of hanging the server or filling its memory. It is opened with `O_NOFOLLOW` where the platform has it, and the open handle must be the same file (device and inode) that was checked, so a file or symlink swapped in between the check and the open is refused. A dangling symlink on the way to the file is reported as missing instead of being passed over, so a target created later can't be read through it.
+- **URL sources can't reach private addresses.** Only `http` and `https`. Every address the host resolves to must be public: loopback, RFC 1918, carrier-grade NAT, link-local (cloud metadata included), multicast, reserved ranges and IPv6 forms carrying any of those are refused with `url_refused`. Without a proxy the connection is pinned to the checked addresses, so a DNS answer can't change between the check and the request. Redirects are followed by hand, at most five, and each hop is checked again. Set `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` for an intranet host.
+- **Behind a proxy, the server has to resolve names itself.** The private-address check runs on the server's own DNS answer, even when `HTTPS_PROXY` makes the connection. Where only the proxy can resolve names (a network whose only way out is the proxy), every URL upload now fails with `fetch_failed`. `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` skips the check and the lookup with it.
+- **URL fetches have a timeout and a size cap.** One `NOTION_UPLOAD_URL_TIMEOUT_MS` budget (30 s) covers DNS, the redirects and the body; the body is streamed and the fetch stops once it passes `NOTION_UPLOAD_MAX_BYTES`. Before, a slow or endless response could hold the call open forever and fill memory.
+- **All sources share the size cap.** `NOTION_UPLOAD_MAX_BYTES` (1 GiB by default) applies to base64, path and URL sources alike, checked before the bytes are read where the size is known up front.
+- **Refusals have their own error codes.** `path_not_allowed`, `url_refused`, `too_large`, `timeout` and `fetch_failed`, each with a `fix`, where a refused path or a failed fetch used to come back as `internal_error`. A path that can't be read (missing, not permitted, a symlink loop) is now a `validation_error` with a fix, too.
 
 ## [3.2.1] - 2026-10-19
 

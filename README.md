@@ -138,7 +138,10 @@ Both go in the same `NOTION_TOKEN` env var; only where you get them differs.
 | `NOTION_READ_ONLY` | — | — | `true` disables every write operation |
 | `NOTION_ALLOWED_OPERATIONS` / `NOTION_BLOCKED_OPERATIONS` | — | — | Allowlist / blocklist of operations, see [Restricting operations](#restricting-operations) |
 | `NOTION_CONFIRM_DESTRUCTIVE` | — | — | `true` asks you before a destructive operation runs |
-| `NOTION_UPLOAD_ROOT` | — | — | Confines `upload_file`'s local `path` source to one directory, see [Files](#files) |
+| `NOTION_UPLOAD_ROOT` | — | — | Directory `upload_file`'s local `path` source is confined to (`/` for no limit). Unset: refused over HTTP, dot-named paths and system and app-data folders refused over stdio, see [Files](#files) |
+| `NOTION_UPLOAD_MAX_BYTES` | — | `1073741824` (1 GiB) | Largest file `upload_file` accepts from any source |
+| `NOTION_UPLOAD_URL_TIMEOUT_MS` | — | `30000` | Time limit for fetching a `url` source, redirects and body included |
+| `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` | — | — | `true` lets a `url` source reach private, loopback and link-local addresses |
 | `NOTION_FILE_URLS` | — | `full` | `ref` swaps Notion's long signed file URLs for short refs, see [Files](#files) |
 | `HTTPS_PROXY` / `HTTP_PROXY` | — | — | Send all outbound traffic through a proxy |
 | `NOTION_DAILY_LOG_PAGE_ID` | — | — | Only used by the daily-log MCP prompt |
@@ -161,7 +164,10 @@ To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a 
 
 ### Files
 
-`upload_file` accepts base64, a public URL or a local path. A local path can be any file the server can read, so set `NOTION_UPLOAD_ROOT` to confine it to one directory when the model picks the path.
+`upload_file` accepts base64, a public URL or a local path, up to `NOTION_UPLOAD_MAX_BYTES` (1 GiB by default). Since the model picks the source, the server guards the two it reads itself:
+
+- **Local paths.** Set `NOTION_UPLOAD_ROOT` to the directory uploads may come from; paths outside it are refused, symlinks included. Without it, path sources are off over HTTP, and over stdio a path is refused when it goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`) or lies under a system or app-data folder (`/proc`, `/dev`, `~/Library`, `%APPDATA%`), where MCP clients keep your token. `NOTION_UPLOAD_ROOT=/` turns the limit off. Inside a root every file is readable, `.env` and `.git` included, so over HTTP pick a root that holds only files you would hand to whoever can call the server.
+- **URLs.** http and https only. Every hop, redirects included, must resolve to a public address, so loopback, private networks and cloud metadata endpoints are refused; `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` lifts that for an intranet. The fetch stops after `NOTION_UPLOAD_URL_TIMEOUT_MS` (30 s) or once the body passes the size limit.
 
 Notion's signed file URLs are about 500 tokens each and expire within an hour. `NOTION_FILE_URLS=ref` replaces them in responses with short `notion-file:` refs that `get_file_url` and `get_image` resolve on demand. [How refs work →](./docs/configuration.md#files)
 
@@ -184,6 +190,8 @@ MCP_TRANSPORT=http PORT=3000 NOTION_TOKEN=ntn_xxx npx -y notion-mcp-server
 | `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for the browser `Origin` allowlist |
 
 > ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback, the default, that means local processes only. Before binding a non-loopback `HOST`, set `MCP_AUTH_TOKEN` and put an authenticating reverse proxy in front.
+
+Over HTTP, `upload_file` takes no local paths unless `NOTION_UPLOAD_ROOT` is set, since the caller may not be on the server's machine. Base64 and URL sources work as usual, see [Files](#files).
 
 ```bash
 claude mcp add --transport http notion https://your-host/mcp \
@@ -240,7 +248,7 @@ Still stuck? Check the [FAQ](./docs/faq.md) or open a [GitHub issue](https://git
 
 ## Privacy
 
-The server runs on your machine or your own host and talks only to `api.notion.com`, over HTTPS, with the token you configure (or through your proxy when `HTTPS_PROXY` is set). No telemetry, no analytics, no server of ours in the path. The token stays where your MCP client keeps it. `get_image` fetches only the signed URLs Notion returns for files it hosts, and `upload_file` reads a local file only when asked to. Notion's own handling of your data is covered by [Notion's privacy policy](https://www.notion.com/privacy).
+The server runs on your machine or your own host and talks only to `api.notion.com`, over HTTPS, with the token you configure (or through your proxy when `HTTPS_PROXY` is set). No telemetry, no analytics, no server of ours in the path. The token stays where your MCP client keeps it. `get_image` fetches only the signed URLs Notion returns for files it hosts. `upload_file` reads a local file or fetches a URL only when asked to, and refuses URLs that resolve to private or loopback addresses. Notion's own handling of your data is covered by [Notion's privacy policy](https://www.notion.com/privacy).
 
 ## Development
 
