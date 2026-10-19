@@ -268,13 +268,15 @@ export const LAST_EDITED_BY_DB_PROPERTY_SCHEMA = z.object({
 export const STATUS_GROUP_NAME_SCHEMA = z.enum(["To-do", "In progress", "Complete"]);
 
 // Notion's update request takes an option by name, or by id with the name
-// optional (dataSources.update); a create request has no id.
+// optional (dataSources.update); a create request has no id. Sent with an id,
+// the option keeps its name even when another one is given: the API cannot
+// rename a status option. The options list replaces the property's options.
 export const STATUS_OPTION_SCHEMA = z
   .object({
     id: z
       .string()
       .optional()
-      .describe("ID of an existing status option, to rename or recolor it on update_data_source. With an id, name is optional."),
+      .describe("ID of an existing status option on update_data_source, to recolor it or move it to another group. Notion keeps the option's name, so a status option can't be renamed through the API. With an id, name is optional."),
     name: z
       .string()
       .optional()
@@ -296,7 +298,7 @@ export const STATUS_DB_PROPERTY_SCHEMA = z.object({
       options: z
         .array(STATUS_OPTION_SCHEMA)
         .optional()
-        .describe("Status options. Omit for Notion's defaults: Not started, In progress, Done."),
+        .describe("Status options. Omit for Notion's defaults: Not started, In progress, Done. On update_data_source the list replaces the property's options: list every option to keep, since one left out is removed."),
     })
     .default({})
     .describe("Status property configuration"),

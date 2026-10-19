@@ -60,7 +60,8 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
 
 // a status property: `status: {}` gives Notion's defaults (Not started, In progress, Done);
 // each option joins one of the fixed groups To-do, In progress or Complete;
-// on update, { "id": "<option-id>", "color": "red" } renames or recolors an existing option
+// on update, { "id": "<option-id>", "color": "red" } recolors an existing option (Notion keeps its name);
+// the list replaces the property's options, so list every option to keep
 {
   "operation": "update_data_source",
   "payload": {

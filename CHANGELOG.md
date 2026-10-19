@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
 - **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
-- **Status properties in `create_database` and `update_data_source`.** A definition takes `status: {}` for Notion's default options, or `options` with a `name`, `color`, `description` and `group` (`To-do`, `In progress` or `Complete`). On `update_data_source` an option can be named by its `id` alone, to rename or recolor it. The schema was in the code but not in the list of property types, so a status definition failed validation.
+- **Status properties in `create_database` and `update_data_source`.** A definition takes `status: {}` for Notion's default options, or `options` with a `name`, `color`, `description` and `group` (`To-do`, `In progress` or `Complete`). On `update_data_source` an option can be named by its `id` alone, to recolor it or move it to another group (Notion keeps an option's name, so the API can't rename one), and the list replaces the property's options, so an option left out is removed. The schema was in the code but not in the list of property types, so a status definition failed validation.
 
 ### Fixed
 
