@@ -328,7 +328,7 @@ v1 had five separate batch tools/actions. v2 has one shape that applies to every
     ],
     "atomic": false,            // default false; true aborts + rolls back on first failure
     "concurrency": 3,           // 1..10, default 3
-    "idempotency_key": "..."    // optional; same key = cached batch result for 5 min
+    "idempotency_key": "..."    // optional; same key + same batch = cached result for 5 min
   }
 }
 ```

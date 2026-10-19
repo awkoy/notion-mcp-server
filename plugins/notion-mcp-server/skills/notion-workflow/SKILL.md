@@ -81,7 +81,7 @@ When the same write applies to more than one item (rename 30 pages, tick off 12 
 
 - The result has one entry per item. Report the items that failed; don't assume the whole batch worked.
 - `atomic: true` stops at the first failure and archives what the batch already created. Use it when a half-finished result would be worse than none.
-- `idempotency_key` makes a retry safe: the same key and operation return the cached result for five minutes instead of writing twice.
+- `idempotency_key` makes a retry safe: the same batch under the same key returns the cached result for five minutes instead of writing twice. Use a new key for a different batch; reusing one fails with `idempotency_conflict`.
 - `concurrency` defaults to 3 and goes up to 10. Atomic batches always run one item at a time. The server rate-limits and retries on its own.
 
 ## 6. When to call notion_describe

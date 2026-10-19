@@ -25,7 +25,7 @@ Both authenticate with a token and run locally, so this is the like-for-like com
 | **Operations covered** | ~24 endpoints | **46 operations** (plus the `trash_page` and `get_self` aliases) across pages, blocks, databases, data sources, views, templates, comments, users, files |
 | **Batch mutations** | Not documented | Universal `{ items: [...] }` envelope, up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | `atomic: true` stops on the first failure and archives what the batch already created, best effort |
-| **Idempotency** | Not documented | `idempotency_key`: same key and operation return the cached result for 5 minutes |
+| **Idempotency** | Not documented | `idempotency_key` binds to the operation, the items and atomic mode for 5 minutes: an exact retry gets the cached result, reuse for a different batch is rejected |
 | **Rate-limit handling** | 429s bubble up | Token-bucket limiter (3 req/s default) and exponential backoff that honors `Retry-After` |
 | **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default. `verbose: true` returns the raw shape, within 4 tokens of what the official server returns. |
 | **Database queries** | Raw `properties` bag per row | **Flattened** name → value map (all 20+ property types): 16,629 → 3,143 tokens on the benchmark's 25-row query |

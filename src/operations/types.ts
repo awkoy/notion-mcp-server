@@ -77,11 +77,19 @@ export type BatchItemResult<T = unknown> =
   | { index: number; ok: true; data: T; warnings?: string[] }
   | { index: number; ok: false; error: OperationError };
 
+export type IdempotencyReceipt = {
+  decision: "accepted" | "deduplicated";
+  /** Present on a deduplicated retry; points back to the original accepted attempt. */
+  replay_of?: "original";
+};
+
 export type BatchResult<T = unknown> = {
   ok: boolean;
   summary: { total: number; succeeded: number; failed: number };
   results: BatchItemResult<T>[];
   rolled_back?: number;
+  /** Additive metadata for a keyed batch; omitted for unkeyed batches. */
+  idempotency_receipt?: IdempotencyReceipt;
   /** Non-fatal notes about the envelope, e.g. an unknown top-level field that was ignored. */
   warnings?: string[];
 };

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
 - **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
 
+### Changed
+
+- **An idempotency key is bound to its batch** ([#109](https://github.com/awkoy/notion-mcp-server/pull/109), thanks @insane66613). The key used to cache by operation and key alone, so a different batch sent under a reused key got the first batch's result back and never ran. Now the key is bound to the operation, the items and `atomic` (not `concurrency`) for 5 minutes.
+  - An exact retry gets the cached result, with `idempotency_receipt: { decision: "deduplicated" }`. The first call's result carries `{ decision: "accepted" }`.
+  - Anything else under the same key fails with `idempotency_conflict`, including the same items sent to another operation: keys are now global, not per operation.
+  - A retry that arrives while the first call is still running fails with `idempotency_in_progress` instead of running a second copy.
+  - An empty or non-string key fails with `invalid_idempotency_key`; `null` still means no key.
+  - A batch in which no item passed validation is not cached, so the corrected batch can reuse the key.
+
 ### Fixed
 
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
