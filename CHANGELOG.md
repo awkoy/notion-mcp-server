@@ -11,9 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
 - **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
+- **Status properties in `create_database` and `update_data_source`.** A definition takes `status: {}` for Notion's default options, or `options` with a `name`, `color`, `description` and `group` (`To-do`, `In progress` or `Complete`). On `update_data_source` an option can be named by its `id` alone, to recolor it or move it to another group (Notion keeps an option's name, so the API can't rename one), and the list replaces the property's options, so an option left out is removed. The schema was in the code but not in the list of property types, so a status definition failed validation.
 
 ### Fixed
 
+- **`get_page_markdown` says when the page is incomplete.** It returns Notion's `truncated` and `unknown_block_ids`, and warns against replacing such a page with `update_page_markdown`, which would delete the blocks missing from the markdown. The `notion://page` resource starts such a page with an HTML comment.
+- **Relation and people values past 25.** `get_page` with `include_properties: true` reads the whole list (up to 1,000 values) instead of the 25 a page object holds. Each of those reads takes its own rate-limit slot; if Notion refuses one, the property keeps the 25 values, is named in `truncated_properties` and gets a warning with Notion's error. `query_database` and `query_view` rows name cut properties in `truncated_properties` and add a warning, rather than an extra call per row.
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
 - The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
 

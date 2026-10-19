@@ -21,7 +21,10 @@ export async function readNotionResource(
     const result = await dispatch("get_page_markdown", { page_id: id });
     if (result.ok && "data" in result) {
       const data = result.data as { markdown?: string };
-      return { mimeType: "text/markdown", text: data.markdown ?? "" };
+      // A resource body has no room for warnings, so an incomplete page says
+      // so in a comment ahead of the markdown, where the reader sees it first.
+      const notes = result.warnings?.map((w) => `<!-- notion-mcp-server: ${w} -->\n`).join("") ?? "";
+      return { mimeType: "text/markdown", text: notes + (data.markdown ?? "") };
     }
     return errorContent(result);
   }

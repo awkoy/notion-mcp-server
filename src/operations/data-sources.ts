@@ -147,10 +147,20 @@ register({
   example: {
     data_source_id: "<data-source-id>",
     properties: {
-      // The API cannot create `status` property schemas; use select/multi_select.
       Priority: {
         type: "select",
         select: { options: [{ name: "High", color: "red" }, { name: "Low", color: "gray" }] },
+      },
+      // `status: {}` alone gives Not started / In progress / Done.
+      Stage: {
+        type: "status",
+        status: {
+          options: [
+            { name: "Backlog", color: "gray", group: "To-do" },
+            { name: "Building", color: "blue", group: "In progress" },
+            { name: "Shipped", color: "green", group: "Complete" },
+          ],
+        },
       },
     },
   },
