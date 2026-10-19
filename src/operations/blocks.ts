@@ -99,8 +99,8 @@ register({
 
 /**
  * Content past Notion's per-request limits goes in several requests, so an
- * append can stop part way. Say how far it got, since a retry would repeat
- * the part already written.
+ * append can stop part way. Say how far it got and where the rest goes;
+ * dispatch adds that the call was partly applied.
  */
 function partialAppendError(error: PartialWriteError, total: number): OperationResult {
   const envelope = toErrorEnvelope(error.failure);
@@ -110,7 +110,7 @@ function partialAppendError(error: PartialWriteError, total: number): OperationR
     error: {
       ...envelope,
       message: `${envelope.message} The content was too large or too deeply nested for one request, so it went in several, and ${error.written.length} of its ${total} top-level blocks were appended before one failed; the last one appended is ${last.id}.`,
-      fix: `${envelope.fix ? `${envelope.fix} ` : ""}Read what landed with get_block_children, then append the rest with after: "${last.id}".`,
+      fix: `${envelope.fix ? `${envelope.fix} ` : ""}Append the blocks after the first ${error.written.length} with after: "${last.id}".`,
     },
   };
 }

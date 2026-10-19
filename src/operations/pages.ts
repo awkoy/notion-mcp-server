@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isFullPage, type PageObjectResponse } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
+import { clearWrite } from "../services/call-context.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { toErrorEnvelope } from "../utils/error.js";
@@ -250,6 +251,8 @@ async function abandonPartialPage(
       () => true,
       () => false
     );
+  // A trashed page is the whole of what the call wrote, so a retry is safe.
+  if (trashed) clearWrite();
   return {
     ok: false,
     error: {

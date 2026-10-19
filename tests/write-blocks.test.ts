@@ -10,6 +10,7 @@ vi.mock("../src/services/notion.js", () => ({ getClient: async () => notionStub 
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
+import { markWrite } from "../src/services/call-context.js";
 import {
   MAX_BLOCKS_PER_ARRAY,
   MAX_BLOCKS_PER_REQUEST,
@@ -64,6 +65,8 @@ function appendSucceeds(failOnCall?: number) {
   notionStub.blocks.children.append.mockImplementation(async (args: AppendArgs) => {
     appends.push(args);
     if (appends.length === failOnCall) throw validationError("body failed validation");
+    // What the real client does for a write that succeeds.
+    markWrite();
     return {
       results: args.children.map((b) => ({ object: "block", id: `${args.block_id}/${n++}`, type: b.type })),
     };
@@ -168,6 +171,8 @@ describe("append_blocks past Notion's per-request limits", () => {
     expect(res.ok).toBe(false);
     expect(res.error.code).toBe("validation_error");
     expect(res.error.message).toContain("100 of its 150 top-level blocks were appended");
+    expect(res.error.message).toContain("Part of this call was already applied");
+    expect(res.error.fix).toMatch(/^Read the target back/);
     expect(res.error.fix).toContain('after: "page/99"');
   });
 
@@ -179,6 +184,7 @@ describe("append_blocks past Notion's per-request limits", () => {
     })) as { ok: boolean; error: { message: string } };
     expect(res.ok).toBe(false);
     expect(res.error.message).not.toContain("top-level blocks were appended");
+    expect(res.error.message).not.toContain("Part of this call");
   });
 });
 
@@ -186,7 +192,10 @@ describe("create_page past Notion's per-request limits", () => {
   const parent = { type: "page_id", page_id: "parent" };
 
   beforeEach(() => {
-    notionStub.pages.create.mockImplementation(async () => ({ object: "page", id: "new", properties: {} }));
+    notionStub.pages.create.mockImplementation(async () => {
+      markWrite();
+      return { object: "page", id: "new", properties: {} };
+    });
   });
 
   it("sends small content with the page in one request", async () => {
@@ -234,6 +243,22 @@ describe("create_page past Notion's per-request limits", () => {
     expect(res.ok).toBe(false);
     expect(res.error.code).toBe("validation_error");
     expect(res.error.message).toContain("moved to trash");
+    // The page is in the trash, so nothing is left to read back.
+    expect(res.error.message).not.toContain("Part of this call");
     expect(notionStub.pages.update).toHaveBeenCalledWith({ page_id: "new", in_trash: true });
+  });
+
+  it("says the page is left when trashing it fails too", async () => {
+    appendSucceeds(1);
+    notionStub.pages.update.mockRejectedValue(validationError("cannot trash"));
+    const res = (await dispatch("create_page", {
+      parent,
+      title: "T",
+      children: paragraphs(150),
+    })) as { ok: boolean; error: { message: string; fix: string } };
+    expect(res.ok).toBe(false);
+    expect(res.error.message).toContain("page new is left with part of its content");
+    expect(res.error.message).toContain("Part of this call was already applied");
+    expect(res.error.fix).toContain("Trash page new with trash_page");
   });
 });
