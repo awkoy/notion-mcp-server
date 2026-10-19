@@ -1,6 +1,6 @@
 {
   "name": "notion-mcp-server",
-  "version": "3.1.0",
+  "version": "3.2.1",
   "mcpName": "io.github.awkoy/notion-mcp-server",
   "type": "module",
   "bin": {
@@ -22,29 +22,39 @@
     "notion-mcp-server",
     "notion-api",
     "notion-integration",
+    "notion-database",
     "mcp",
     "mcp-server",
     "modelcontextprotocol",
     "model-context-protocol",
     "claude",
+    "claude-code",
     "claude-desktop",
     "cursor",
+    "vscode",
+    "copilot",
+    "codex",
+    "gemini-cli",
     "chatgpt",
     "anthropic",
-    "ai",
     "ai-agent",
-    "agent",
-    "llm"
+    "llm",
+    "markdown",
+    "headless"
   ],
-  "author": "Yaroslav Boiko <y.boikodeveloper@gmail.com>",
+  "author": {
+    "name": "Yaroslav Boiko",
+    "email": "y.boikodeveloper@gmail.com",
+    "url": "https://yaroslavboiko.com"
+  },
   "license": "MIT",
-  "description": "Notion MCP server for Claude, Cursor, ChatGPT, and Claude Desktop — connect AI agents to Notion via the Model Context Protocol. Create pages, query databases, append blocks, upload files, and more in natural language.",
+  "description": "Notion MCP server with token auth: connect Claude Code, Claude Desktop, Cursor, VS Code, Codex and any MCP client to Notion. Search, create and edit pages, query databases, comment and upload files. Runs headless in CI and agents.",
   "files": [
     "build"
   ],
   "dependencies": {
-    "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/node": "2.1.0",
+    "@modelcontextprotocol/server": "2.2.0",
     "@notionhq/client": "^5.22.0",
     "https-proxy-agent": "9.1.0",
     "node-fetch": "3.3.2",
@@ -54,7 +64,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.2.0",
     "@types/mdast": "^4.0.4",
     "@types/node": "^26.0.0",
     "shx": "^0.4.0",

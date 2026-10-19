@@ -16,9 +16,17 @@ It writes the config for whichever installed client you pick. Manual config bloc
 
 ## What's the difference between this and Notion's official MCP?
 
-Notion's **hosted** MCP (`mcp.notion.com`) is OAuth-only and built for interactive chat, so it can't run headless; Notion says non-interactive authorization is in the works. Their **open-source** server is, in Notion's words, "no longer actively maintained", and exposes one tool per endpoint.
+Notion's **hosted** MCP (`mcp.notion.com`) is built for interactive chat and signs in with OAuth on every plan. Business and Enterprise workspaces can also use MCP tokens, which skip the browser sign-in, but only workspace owners can create them. It has the largest tool set, including features that need Notion AI. Their **open-source** server is, in Notion's words, "no longer actively maintained", and exposes one tool per endpoint.
 
-This server authenticates with a token, so it works in CI and automation, exposes three tools dispatching 47 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. Full table: [Which Notion MCP should you use?](../README.md#which-notion-mcp-should-you-use)
+This server authenticates with a token on any plan, so it works in CI and automation, exposes three tools dispatching 46 operations, batches mutations with idempotency and retries, and slims responses to cut token cost. Short table: [Which Notion MCP should you use?](../README.md#which-notion-mcp-should-you-use). Full comparison: [comparison.md](./comparison.md).
+
+## Does it work on the Notion Free plan?
+
+Yes. On a Free workspace only owners can create a Personal Access Token, so if you're a member, ask the owner for one or for an [Internal Integration](../README.md#token-pat-or-internal-integration) token. Nothing in the server depends on the plan.
+
+## Is there a Notion MCP server that doesn't need OAuth?
+
+This one: it reads a token from `NOTION_TOKEN` and never opens a browser, so it runs in CI, cron jobs and background agents. Notion's hosted MCP skips OAuth only with an MCP token, which needs a Business or Enterprise plan and a workspace owner to create it.
 
 ## Can I use it with Cursor, VS Code, ChatGPT or Cline?
 

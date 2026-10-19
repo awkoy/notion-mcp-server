@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "../utils/stable-json.js";
 
+// A pending entry has no expiry: it is the only thing stopping a second copy
+// of a batch that is still running, so neither the TTL sweep nor the size cap
+// may drop it. It leaves the map through complete() or release().
 type PendingEntry = {
   state: "pending";
   fingerprint: string;
-  expiresAt: number;
 };
 
 type CompletedEntry = {
@@ -28,51 +31,22 @@ const cache = new Map<string, CacheEntry>();
 
 function evictExpired(now: number): void {
   for (const [key, entry] of cache) {
-    if (entry.expiresAt <= now) cache.delete(key);
+    if (entry.state === "completed" && entry.expiresAt <= now) cache.delete(key);
   }
   if (cache.size <= MAX_ENTRIES) return;
+  // Oldest completed entries first (Map iteration is insertion order, and
+  // complete() re-inserts).
   let overflow = cache.size - MAX_ENTRIES;
-  for (const key of cache.keys()) {
-    if (overflow-- <= 0) break;
+  for (const [key, entry] of cache) {
+    if (overflow <= 0) break;
+    if (entry.state !== "completed") continue;
     cache.delete(key);
+    overflow--;
   }
-}
-
-function canonicalize(value: unknown): unknown {
-  if (
-    value === null ||
-    typeof value === "boolean" ||
-    typeof value === "string"
-  ) {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : String(value);
-  }
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value).sort()) {
-      const member = (value as Record<string, unknown>)[key];
-      if (
-        member === undefined ||
-        typeof member === "function" ||
-        typeof member === "symbol"
-      ) {
-        continue;
-      }
-      out[key] = canonicalize(member);
-    }
-    return out;
-  }
-  return String(value);
 }
 
 function fingerprint(operation: string, items: unknown[], atomic: boolean): string {
-  const canonical = JSON.stringify(canonicalize({ operation, items, atomic }));
-  return createHash("sha256").update(canonical).digest("hex");
+  return createHash("sha256").update(stableStringify({ operation, items, atomic })).digest("hex");
 }
 
 export function begin(
@@ -81,17 +55,12 @@ export function begin(
   items: unknown[],
   atomic: boolean
 ): IdempotencyAdmission {
-  const now = Date.now();
-  evictExpired(now);
+  evictExpired(Date.now());
 
   const requestFingerprint = fingerprint(operation, items, atomic);
   const existing = cache.get(idempotencyKey);
   if (!existing) {
-    cache.set(idempotencyKey, {
-      state: "pending",
-      fingerprint: requestFingerprint,
-      expiresAt: now + TTL_MS,
-    });
+    cache.set(idempotencyKey, { state: "pending", fingerprint: requestFingerprint });
     return {
       action: "execute",
       key: idempotencyKey,
@@ -108,15 +77,14 @@ export function begin(
   return { action: "deduplicated", result: existing.result };
 }
 
-export function complete(key: string, requestFingerprint: string, result: unknown): void {
+function ownsPending(key: string, requestFingerprint: string): boolean {
   const current = cache.get(key);
-  if (
-    !current ||
-    current.state !== "pending" ||
-    current.fingerprint !== requestFingerprint
-  ) {
-    return;
-  }
+  return current?.state === "pending" && current.fingerprint === requestFingerprint;
+}
+
+export function complete(key: string, requestFingerprint: string, result: unknown): void {
+  if (!ownsPending(key, requestFingerprint)) return;
+  cache.delete(key);
   cache.set(key, {
     state: "completed",
     fingerprint: requestFingerprint,
@@ -125,4 +93,9 @@ export function complete(key: string, requestFingerprint: string, result: unknow
   });
 }
 
-export const _internal = { canonicalize, fingerprint };
+/** Drop a pending entry without caching a result, so the same key can run again. */
+export function release(key: string, requestFingerprint: string): void {
+  if (ownsPending(key, requestFingerprint)) cache.delete(key);
+}
+
+export const _internal = { fingerprint, evictExpired, cache, MAX_ENTRIES, TTL_MS };

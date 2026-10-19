@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24" # ships with npm >= 11.5 (required for Trusted Publishing)
           registry-url: "https://registry.npmjs.org"
@@ -75,13 +75,18 @@ jobs:
           fi
 
       - name: Sync server.json version with package.json
+        # The registry rejects a `version` field on an OCI package, so the
+        # Docker image carries its version as the tag in `identifier`.
         run: |
           node -e "
             const fs = require('fs');
             const { version } = require('./package.json');
             const s = JSON.parse(fs.readFileSync('server.json', 'utf8'));
             s.version = version;
-            for (const p of s.packages) p.version = version;
+            for (const p of s.packages) {
+              if (p.registryType === 'oci') p.identifier = p.identifier.replace(/:[^:/]+$/, ':' + version);
+              else p.version = version;
+            }
             fs.writeFileSync('server.json', JSON.stringify(s, null, 2) + '\n');
           "
 
@@ -109,6 +114,25 @@ jobs:
             sleep 30
           done
           echo "::error::npm did not serve $NAME@$VERSION within 20 minutes."
+          exit 1
+
+      - name: Wait for GHCR to serve the Docker image
+        # server.json also lists the Docker image, which publish-docker.yml
+        # builds from the same tag in parallel with this run. The registry
+        # checks that the image tag exists and carries the
+        # io.modelcontextprotocol.server.name label, so registering before that
+        # push finishes fails.
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          IMAGE="ghcr.io/awkoy/notion-mcp-server:$VERSION"
+          for i in $(seq 1 40); do
+            if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "GHCR serves $IMAGE (after $(( (i - 1) * 30 ))s)."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::GHCR did not serve $IMAGE within 20 minutes."
           exit 1
 
       - name: Publish to MCP Registry

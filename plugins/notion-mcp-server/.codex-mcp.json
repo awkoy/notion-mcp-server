@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "notion-mcp-server@3.2.1"],
+      "env_vars": ["NOTION_TOKEN", "NOTION_PAGE_ID", "NOTION_READ_ONLY"]
+    }
+  }
+}

@@ -87,15 +87,22 @@ async function withProxyEnv(
   fn: () => Promise<void>
 ): Promise<void> {
   const saved = new Map(PROXY_VARS.map((k) => [k, process.env[k]] as const));
-  const apply = (k: ProxyVar, v: string | undefined) => {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
+  const clearAll = () => {
+    for (const k of PROXY_VARS) delete process.env[k];
+  };
+  const applyDefined = (values: Partial<Record<ProxyVar, string | undefined>>) => {
+    for (const k of PROXY_VARS) {
+      const value = values[k];
+      if (value !== undefined) process.env[k] = value;
+    }
   };
   try {
-    for (const k of PROXY_VARS) apply(k, vars[k]);
+    clearAll();
+    applyDefined(vars);
     await fn();
   } finally {
-    for (const k of PROXY_VARS) apply(k, saved.get(k));
+    clearAll();
+    applyDefined(Object.fromEntries(saved) as Partial<Record<ProxyVar, string>>);
   }
 }
 

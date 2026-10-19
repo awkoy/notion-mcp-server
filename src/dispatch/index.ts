@@ -7,7 +7,7 @@ import type {
   OperationError,
   OperationResult,
 } from "../operations/types.js";
-import { begin, complete } from "./idempotency.js";
+import { begin, complete, release } from "./idempotency.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import { rateLimiter } from "./rate-limit.js";
 import { isRetryableErrorCode, withRetry } from "./retry.js";
@@ -188,51 +188,77 @@ async function runBatch(
 ): Promise<BatchResult | OperationResult> {
   const atomic = payload.atomic === true;
   const rawIdempotencyKey = payload.idempotency_key as unknown;
-  let idempotency: { key: string; fingerprint: string } | undefined;
+  // Clients that fill every optional field send null for "no key"; before
+  // keys were validated, null meant exactly that.
+  if (rawIdempotencyKey == null) return (await runItems(def, payload, atomic)).result;
 
-  if (rawIdempotencyKey !== undefined) {
-    if (typeof rawIdempotencyKey !== "string" || rawIdempotencyKey.trim() === "") {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_idempotency_key",
-          message: "idempotency_key must be a non-empty string.",
-          fix: "Use a stable non-empty string for retries of the same batch, or omit idempotency_key.",
-        },
-      };
-    }
-
-    const admission = begin(def.name, rawIdempotencyKey, payload.items, atomic);
-    if (admission.action === "deduplicated") {
-      return {
-        ...(admission.result as BatchResult),
-        idempotency_receipt: { decision: "deduplicated", replay_of: "original" },
-      };
-    }
-    if (admission.action === "conflict") {
-      return {
-        ok: false,
-        error: {
-          code: "idempotency_conflict",
-          message:
-            "The idempotency key is already bound to a different operation, items payload, or atomic mode.",
-          fix: "Retry the original request unchanged, or use a new idempotency key for a different mutation.",
-        },
-      };
-    }
-    if (admission.action === "pending") {
-      return {
-        ok: false,
-        error: {
-          code: "idempotency_in_progress",
-          message: "A request with this idempotency key and payload is already in progress.",
-          fix: "Wait for the in-flight request to finish, then retry the same request.",
-        },
-      };
-    }
-    idempotency = { key: admission.key, fingerprint: admission.fingerprint };
+  if (typeof rawIdempotencyKey !== "string" || rawIdempotencyKey.trim() === "") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_idempotency_key",
+        message: "idempotency_key must be a non-empty string.",
+        fix: "Use a stable non-empty string for retries of the same batch, or omit idempotency_key.",
+      },
+    };
   }
 
+  const admission = begin(def.name, rawIdempotencyKey, payload.items, atomic);
+  if (admission.action === "deduplicated") {
+    return {
+      ...(admission.result as BatchResult),
+      idempotency_receipt: { decision: "deduplicated", replay_of: "original" },
+    };
+  }
+  if (admission.action === "conflict") {
+    return {
+      ok: false,
+      error: {
+        code: "idempotency_conflict",
+        message:
+          "The idempotency key is already bound to a different operation, items payload, or atomic mode.",
+        fix: "Retry the original request unchanged, or use a new idempotency key for a different mutation.",
+      },
+    };
+  }
+  if (admission.action === "pending") {
+    return {
+      ok: false,
+      error: {
+        code: "idempotency_in_progress",
+        message: "A request with this idempotency key and payload is already in progress.",
+        fix: "Wait for the in-flight request to finish, then retry the same request.",
+      },
+    };
+  }
+
+  // Until complete() runs, the key is pending and blocks every retry; release
+  // it on any other way out so a throw or an all-invalid batch can be retried.
+  let completed = false;
+  try {
+    const { result, ran } = await runItems(def, payload, atomic);
+    // No item reached Notion (every one failed validation): there is no side
+    // effect to protect, and caching the failure would make the corrected
+    // retry need a new key.
+    if (!ran) return result;
+    const acceptedResult: BatchResult = {
+      ...result,
+      idempotency_receipt: { decision: "accepted" },
+    };
+    complete(admission.key, admission.fingerprint, acceptedResult);
+    completed = true;
+    return acceptedResult;
+  } finally {
+    if (!completed) release(admission.key, admission.fingerprint);
+  }
+}
+
+/** Run a batch's items; `ran` says whether any of them reached its handler. */
+async function runItems(
+  def: OperationDef,
+  payload: BatchPayload,
+  atomic: boolean
+): Promise<{ result: BatchResult; ran: boolean }> {
   // Atomic mode requires serial execution: with concurrency > 1, the `aborted`
   // flag is set only after the first failure resolves, but other workers have
   // already started in-flight requests, so later items execute when they
@@ -243,6 +269,7 @@ async function runBatch(
   const createdForRollback: { item: BatchItemResult }[] = [];
 
   let aborted = false;
+  let ran = false;
   const results = await mapWithConcurrency(items, concurrency, async (item, index) => {
     if (aborted) {
       return {
@@ -266,6 +293,7 @@ async function runBatch(
       return failure;
     }
 
+    ran = true;
     try {
       const result = await runHandlerWithLimitAndRetry(def, parsed.data);
       if (result.ok) {
@@ -330,14 +358,7 @@ async function runBatch(
       : {}),
   };
 
-  if (!idempotency) return batchResult;
-
-  const acceptedResult: BatchResult = {
-    ...batchResult,
-    idempotency_receipt: { decision: "accepted" },
-  };
-  complete(idempotency.key, idempotency.fingerprint, acceptedResult);
-  return acceptedResult;
+  return { result: batchResult, ran };
 }
 
 export const BATCH_ENVELOPE_HELP = `Batch mode: pass { items: [...], atomic?: boolean, idempotency_key?: string, concurrency?: 1-10 }. Each item is validated independently; failures are reported per-item. atomic:true forces serial execution (concurrency=1) and triggers best-effort rollback of created entities on first failure; subsequent items are skipped with code:"aborted".`;

@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
+- **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
+
+### Changed
+
+- **An idempotency key is bound to its batch** ([#109](https://github.com/awkoy/notion-mcp-server/pull/109), thanks @insane66613). The key used to cache by operation and key alone, so a different batch sent under a reused key got the first batch's result back and never ran. Now the key is bound to the operation, the items and `atomic` (not `concurrency`) for 5 minutes.
+  - An exact retry gets the cached result, with `idempotency_receipt: { decision: "deduplicated" }`. The first call's result carries `{ decision: "accepted" }`.
+  - Anything else under the same key fails with `idempotency_conflict`, including the same items sent to another operation: keys are now global, not per operation.
+  - A retry that arrives while the first call is still running fails with `idempotency_in_progress` instead of running a second copy.
+  - An empty or non-string key fails with `invalid_idempotency_key`; `null` still means no key.
+  - A batch in which no item passed validation is not cached, so the corrected batch can reuse the key.
+
+### Fixed
+
+- **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
+- The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
+
+## [3.2.1] - 2026-10-19
+
+### Added
+
+- **Claude Code plugin** ([#118](https://github.com/awkoy/notion-mcp-server/pull/118)). Install it with `/plugin marketplace add awkoy/notion-mcp-server` and `/plugin install notion-mcp-server@awkoy`. The plugin runs `npx -y notion-mcp-server` pinned to its own version, asks for the token when you install it and keeps it in the system keychain, and also offers a default parent page and a read-only switch. It bundles a `notion-workflow` skill that teaches Claude to find things with `search_pages`, filter databases with `where`, batch repeated writes into one call, and ask before archiving or deleting anything.
+- **The same plugin for Codex and Cursor** ([#120](https://github.com/awkoy/notion-mcp-server/pull/120)). Codex installs it with `codex plugin marketplace add awkoy/notion-mcp-server` and `codex plugin add notion-mcp-server@awkoy`, and reads `NOTION_TOKEN` from the environment it starts in. Cursor installs it as a local plugin for now and takes `NOTION_TOKEN` from its plugin settings or its environment. The [plugin README](plugins/notion-mcp-server/README.md) has the steps.
+
+### Changed
+
+- **README rewritten** ([#117](https://github.com/awkoy/notion-mcp-server/pull/117)) at half its old length. Configuration, the HTTP transport, what calls look like on the wire, the comparison with Notion's own servers, and the development notes moved to [docs/](docs/). This release puts the new README on npm.
+- Package metadata: the npm description and keywords name the clients the server works with (Claude Code, Claude Desktop, Cursor, VS Code, Codex, Gemini CLI). The `.mcpb` bundle's description lists the three current tools, and its privacy link points at the README's renamed privacy section.
+- No changes to the server's code.
+
+## [3.2.0] - 2026-10-18
+
+### Added
+
+- **`ranking: "title_relevance"` on `search_pages`** ([#111](https://github.com/awkoy/notion-mcp-server/pull/111), [#115](https://github.com/awkoy/notion-mcp-server/pull/115); thanks @insane66613). Notion's `/v1/search` matches titles, but it can rank broad word matches ahead of the page whose title is the query. This mode fetches up to 100 candidates and re-ranks them by title. An exact title comes first, then titles that contain the query as a phrase (earlier, and at the very start, ranks higher), then titles by how many query words they contain. Notion's order breaks ties. Matching ignores case, punctuation and accents, so `cafe` finds `Café`. When folding accents makes two titles tie, the one that also matches with its marks kept wins, so for `Мой` the page `Мой` ranks above `Мои`. The result holds the top `page_size` matches (default 10) plus `candidates_considered` and `source_has_more`. The mode needs a non-empty `query`, and `sort_direction`, `start_cursor` or `paginate: true` alongside it come back as a `validation_error`. Without `ranking`, or with `ranking: "notion"`, results keep Notion's order, so existing calls are unchanged.
+
+### Changed
+
+- Dependencies: `@modelcontextprotocol/server` 2.2.0 (was 2.0.0) and `@modelcontextprotocol/node` 2.1.0 (was 2.0.0). The lockfile also pins `@notionhq/client` 5.27.0 (was 5.26.0), so the Docker image and the `.mcpb` bundle ship it. Dev-only bumps (`@modelcontextprotocol/client` 2.2.0, `source-map-js` 1.2.2) close three high-severity Dependabot alerts. Neither package ships.
+
+## [3.1.2] - 2026-10-04
+
+### Changed
+
+- Dependencies: the lockfile now pins `hono` 4.13.12 (was 4.13.5), so the Docker image and the `.mcpb` bundle ship it. The server doesn't use `serveStatic`, so the GHSA-5r4p-p66f-jhc7 fix in 4.13.11 doesn't affect it. npm installs resolve their own dependency tree and are unchanged. No code changes.
+
+## [3.1.1] - 2026-10-01
+
+### Changed
+
+- Package metadata: `author` now includes the author's website. README links to the post on the server's tool design. No code changes.
+
 ## [3.1.0] — 2026-09-16
 
 ### Added
@@ -151,7 +207,7 @@ Distribution release — no runtime changes to the server itself.
 
 ### Added
 
-- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-47-ops-plus-one-alias).
+- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-46-ops-plus-two-aliases).
 
 ### Changed
 

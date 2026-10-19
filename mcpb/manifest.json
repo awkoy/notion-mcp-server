@@ -4,7 +4,7 @@
   "display_name": "Notion MCP Server",
   "version": "0.0.0",
   "description": "Connect Claude to Notion: create pages, query databases, append blocks, comment, and upload files.",
-  "long_description": "Token-auth Notion MCP server. 47 operations behind 2 context-efficient tools: pages, databases, blocks, comments, users, files, and templates — with batched mutations, automatic retry on rate limits, and full markdown round-trip. Paste a Notion Personal Access Token (create one at https://app.notion.com/developers/tokens) and everything you can see in Notion, Claude can work with.",
+  "long_description": "Token-auth Notion MCP server. 46 operations behind 3 context-efficient tools (read, write, describe): pages, databases, views, blocks, comments, users, files, and templates — with batched mutations, automatic retry on rate limits, and full markdown round-trip. Paste a Notion Personal Access Token (create one at https://app.notion.com/developers/tokens) and everything you can see in Notion, Claude can work with.",
   "author": {
     "name": "Yaroslav Boiko",
     "email": "y.boikodeveloper@gmail.com",
@@ -16,7 +16,7 @@
   },
   "homepage": "https://github.com/awkoy/notion-mcp-server",
   "documentation": "https://github.com/awkoy/notion-mcp-server#readme",
-  "privacy_policies": ["https://github.com/awkoy/notion-mcp-server#-privacy"],
+  "privacy_policies": ["https://github.com/awkoy/notion-mcp-server#privacy"],
   "license": "MIT",
   "keywords": ["notion", "notion-api", "productivity", "pages", "databases", "markdown"],
   "server": {
@@ -31,6 +31,20 @@
       }
     }
   },
+  "tools": [
+    {
+      "name": "notion_read",
+      "description": "Run one Notion read operation by name: search, read pages as markdown, query databases with filters, list blocks, comments, users and views. Nothing is modified."
+    },
+    {
+      "name": "notion_write",
+      "description": "Run one Notion write operation by name: create and edit pages and database rows, append blocks as markdown, comment and upload files. Repeated writes batch into one call."
+    },
+    {
+      "name": "notion_describe",
+      "description": "Return one operation's JSON Schema and a working example, plus which tool runs it."
+    }
+  ],
   "user_config": {
     "notion_token": {
       "type": "string",

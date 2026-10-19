@@ -1,0 +1,34 @@
+{
+  "name": "notion-mcp-server",
+  "version": "3.2.1",
+  "description": "Read and write Notion with a token: search pages, query databases with typed filters, read and write pages as markdown, and batch edits. Runs the open-source notion-mcp-server locally; not made by Notion.",
+  "author": {
+    "name": "Yaroslav Boiko",
+    "email": "y.boikodeveloper@gmail.com"
+  },
+  "homepage": "https://github.com/awkoy/notion-mcp-server",
+  "repository": "https://github.com/awkoy/notion-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "notion",
+    "notes",
+    "databases",
+    "docs",
+    "productivity",
+    "knowledge-base"
+  ],
+  "logo": "https://raw.githubusercontent.com/awkoy/notion-mcp-server/main/assets/logo.png",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "NOTION_TOKEN": {
+        "type": "string",
+        "title": "Notion token",
+        "description": "Personal Access Token (ntn_...) or Internal Integration Secret. Create one at https://app.notion.com/developers/tokens."
+      }
+    },
+    "required": ["NOTION_TOKEN"]
+  }
+}
