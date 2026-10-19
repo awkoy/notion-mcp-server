@@ -26,12 +26,12 @@ describe("distribution manifests", () => {
     expect(server.packages.map((p: { registryType: string }) => p.registryType)).toEqual(["npm", "oci"]);
   });
 
-  it("gemini-extension.json carries the package version and starts the npm package", () => {
+  it("gemini-extension.json carries the package version and starts the npm package pinned to it", () => {
     const ext = read("gemini-extension.json");
     expect(ext.name).toBe(pkg.name);
     expect(ext.version).toBe(pkg.version);
     expect(ext.mcpServers.notion.command).toBe("npx");
-    expect(ext.mcpServers.notion.args).toContain(`${pkg.name}@latest`);
+    expect(ext.mcpServers.notion.args).toEqual(["-y", `${pkg.name}@${pkg.version}`]);
     const envVars = ext.settings.map((s: { envVar: string }) => s.envVar);
     expect(envVars).toContain("NOTION_TOKEN");
     expect(ext.settings.find((s: { envVar: string }) => s.envVar === "NOTION_TOKEN").sensitive).toBe(true);

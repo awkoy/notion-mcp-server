@@ -29,6 +29,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Run tests
+        # The .mcpb ships build/ as is; test it before it reaches a release.
+        run: npm test
+
       - name: Pack .mcpb
         run: node scripts/build-mcpb.mjs
 

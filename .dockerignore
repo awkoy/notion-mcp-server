@@ -21,7 +21,6 @@ tmp
 docs
 *.md
 !README.md
-LICENSE
 *.png
 *.jpg
 *.jpeg
@@ -29,5 +28,4 @@ LICENSE
 Dockerfile
 docker-compose.yml
 .dockerignore
-smithery.yaml
 mcp-registry-submission
