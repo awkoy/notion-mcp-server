@@ -1,6 +1,7 @@
 import { APIResponseError } from "@notionhq/client";
 import { AuthError } from "../services/auth.js";
 import type { OperationError } from "../operations/types.js";
+import { readRetryAfterMs } from "./retry-after.js";
 
 /**
  * Error codes from Notion API
@@ -28,24 +29,52 @@ export enum NotionErrorCode {
   ServiceUnavailable = "service_unavailable",
   GatewayTimeout = "gateway_timeout",
   DatabaseConnectionUnavailable = "database_connection_unavailable",
+  ServiceOverload = "service_overload",
 }
 
 /**
- * Codes that indicate a transient failure — the request either never ran or
- * the server is asking us to back off. Safe to retry with exponential backoff.
+ * Codes that indicate a transient failure, where trying again may succeed.
+ * Only 429 and 529 mean Notion turned the request away without running it.
+ * A 500, 503 or 504 does not: the request may have run, and Notion's docs say
+ * a write "may still have been saved". So these are safe to retry only for
+ * reads; writes retry on RETRYABLE_WRITE_CODES alone.
  * Shared by the dispatch retry wrapper and any caller that wants to classify
  * an error envelope without re-encoding the same rules.
  */
 export const RETRYABLE_NOTION_CODES: ReadonlySet<NotionErrorCode> = new Set([
   NotionErrorCode.RateLimited,
+  NotionErrorCode.ServiceOverload,
   NotionErrorCode.InternalServerError,
   NotionErrorCode.ServiceUnavailable,
   NotionErrorCode.GatewayTimeout,
   NotionErrorCode.DatabaseConnectionUnavailable,
 ]);
 
+/**
+ * Codes where Notion did not run the request and asks the caller to come back
+ * later. Notion's docs say to retry them for any request, so a write retries
+ * on these and nothing else.
+ */
+export const RETRYABLE_WRITE_CODES: ReadonlySet<NotionErrorCode> = new Set([
+  NotionErrorCode.RateLimited,
+  NotionErrorCode.ServiceOverload,
+]);
+
 export function isRetryableNotionCode(code: string | undefined): boolean {
   return code !== undefined && (RETRYABLE_NOTION_CODES as ReadonlySet<string>).has(code);
+}
+
+export function isRetryableWriteCode(code: string | undefined): boolean {
+  return code !== undefined && (RETRYABLE_WRITE_CODES as ReadonlySet<string>).has(code);
+}
+
+// The wait Notion asked for on the error an envelope was built from. Kept
+// beside the envelope rather than on it, because the envelope goes to the
+// model as-is; dispatch reads it to time the next attempt.
+const retryAfterByEnvelope = new WeakMap<OperationError, number>();
+
+export function envelopeRetryAfterMs(error: OperationError): number | null {
+  return retryAfterByEnvelope.get(error) ?? null;
 }
 
 type ErrorEntry = { message: string; fix?: string };
@@ -113,18 +142,22 @@ const ERROR_MESSAGES: Record<string, ErrorEntry> = {
   },
   [NotionErrorCode.InternalServerError]: {
     message: "An unexpected error occurred on the Notion servers.",
-    fix: "Retry the operation; if it persists, check status.notion.so.",
+    fix: "Retry the operation; if it persists, check status.notion.so. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.ServiceUnavailable]: {
     message: "The Notion service is unavailable.",
-    fix: "Retry later with exponential backoff.",
+    fix: "Retry later with exponential backoff. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.GatewayTimeout]: {
     message: "The Notion gateway timed out before the request could complete.",
-    fix: "Retry later with exponential backoff.",
+    fix: "Retry later with exponential backoff. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.DatabaseConnectionUnavailable]: {
     message: "The database connection is unavailable.",
+    fix: "Retry later with exponential backoff.",
+  },
+  [NotionErrorCode.ServiceOverload]: {
+    message: "Notion is overloaded and did not run the request.",
     fix: "Retry later with exponential backoff.",
   },
 };
@@ -137,7 +170,7 @@ export function toErrorEnvelope(error: unknown): OperationError {
   if (error instanceof APIResponseError) {
     const entry = lookup(error.code);
     const body = (error as APIResponseError & { body?: unknown }).body;
-    return {
+    const envelope: OperationError = {
       code: error.code,
       message: entry.message + (error.message && error.message !== entry.message ? ` (${error.message})` : ""),
       ...(entry.fix ? { fix: entry.fix } : {}),
@@ -145,6 +178,9 @@ export function toErrorEnvelope(error: unknown): OperationError {
         ? { path: extractValidationPath(body) }
         : {}),
     };
+    const retryAfterMs = readRetryAfterMs(error);
+    if (retryAfterMs !== null) retryAfterByEnvelope.set(envelope, retryAfterMs);
+    return envelope;
   }
   if (error instanceof AuthError) {
     return {

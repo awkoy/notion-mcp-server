@@ -9,8 +9,8 @@ import type {
 } from "../operations/types.js";
 import { buildKey, lookup, store } from "./idempotency.js";
 import { mapWithConcurrency } from "./concurrency.js";
-import { rateLimiter } from "./rate-limit.js";
-import { isRetryableErrorCode, withRetry } from "./retry.js";
+import { retryPolicy, withRetry } from "./retry.js";
+import { withWriteLog } from "../services/write-log.js";
 import { buildValidationError } from "../utils/learning-error.js";
 import { toErrorEnvelope } from "../utils/error.js";
 import {
@@ -150,19 +150,16 @@ export async function dispatch(
   return runSingle(def, payload);
 }
 
-// Run the handler under the shared rate limiter, retrying on transient SDK
-// failures. Token is acquired inside withRetry so each retry attempt counts
-// against the per-second budget instead of bursting on retry storms.
+// Run the handler, retrying transient failures as retryPolicy allows for the
+// operation's access (writes only on 429/529, and only before anything was
+// written). The shared rate limiter paces each Notion request the handler
+// sends, retries included (see PacedClient in services/notion.ts).
 function runHandlerWithLimitAndRetry(
   def: OperationDef,
   params: unknown
 ): Promise<OperationResult> {
-  return withRetry(
-    async () => {
-      await rateLimiter.acquire();
-      return def.handler(params);
-    },
-    { isRetryableResult: (r) => r.ok === false && isRetryableErrorCode(r.error.code) }
+  return withWriteLog((writes) =>
+    withRetry(() => def.handler(params), retryPolicy(def.access, writes))
   );
 }
 

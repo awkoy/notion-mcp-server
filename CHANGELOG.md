@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Writes are no longer retried after a 5xx.** A 500, 503 or 504 can come back after Notion saved the write, so retrying created duplicate blocks, rows and comments. A write operation now retries only on 429 (`rate_limited`) and 529 (`service_overload`), where Notion did not run the request, and only while none of its requests has been written yet. A `batch_mixed_blocks` call that appended and then hit a 429 returns the error instead of appending again. Reads still retry on 429, 529 and 5xx. The fix text on 500, 503 and 504 errors now tells the model to read the target back before repeating a write.
+- **One retry layer.** The Notion SDK's built-in retries are off; dispatch decides. Before, the SDK retried up to twice under each of dispatch's five attempts, so a failing GET could send 15 requests, and it retried a DELETE on a 500.
+- **`NOTION_RATE_LIMIT` paces every request.** The limiter took one token per handler call, so operations that send several requests (`batch_mixed_blocks`, multi-part uploads, markdown page reads) could exceed it. Every Notion HTTP request now takes a token, retries included.
+
 ### Added
 
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
@@ -14,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Retry-After` is honoured.** The reader never found the header on the SDK's responses (node-fetch's `Headers` is not the global class), so every retry used plain backoff. It now reads the header or, failing that, `additional_data.retry_after` in the error body, and waits the time Notion asked for even past the 8 s backoff cap. A wait longer than 60 s returns the error instead of holding the call. The value never appears in the error the model sees.
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
 - The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
 
