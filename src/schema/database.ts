@@ -267,15 +267,27 @@ export const LAST_EDITED_BY_DB_PROPERTY_SCHEMA = z.object({
 // `group` keeps its group, and a new one lands in To-do.
 export const STATUS_GROUP_NAME_SCHEMA = z.enum(["To-do", "In progress", "Complete"]);
 
-export const STATUS_OPTION_SCHEMA = z.object({
-  id: z.string().optional().describe("ID of an existing status option, to rename or recolor it on update"),
-  name: z.string().describe("Name of the status option. Unique regardless of case; no commas."),
-  color: SELECT_COLOR_SCHEMA.optional().describe("Color of the status option"),
-  description: z.string().nullable().optional().describe("Description of the status option"),
-  group: STATUS_GROUP_NAME_SCHEMA.optional().describe(
-    "Group the option belongs to. Omitted: an existing option keeps its group, a new one goes to To-do."
-  ),
-});
+// Notion's update request takes an option by name, or by id with the name
+// optional (dataSources.update); a create request has no id.
+export const STATUS_OPTION_SCHEMA = z
+  .object({
+    id: z
+      .string()
+      .optional()
+      .describe("ID of an existing status option, to rename or recolor it on update_data_source. With an id, name is optional."),
+    name: z
+      .string()
+      .optional()
+      .describe("Name of the status option. Unique regardless of case; no commas. Required unless id is set."),
+    color: SELECT_COLOR_SCHEMA.optional().describe("Color of the status option"),
+    description: z.string().nullable().optional().describe("Description of the status option"),
+    group: STATUS_GROUP_NAME_SCHEMA.optional().describe(
+      "Group the option belongs to. Omitted: an existing option keeps its group, a new one goes to To-do."
+    ),
+  })
+  .refine((option) => option.name !== undefined || option.id !== undefined, {
+    message: "A status option needs a name, or the id of an existing option on update_data_source.",
+  });
 
 export const STATUS_DB_PROPERTY_SCHEMA = z.object({
   type: z.literal("status").describe("Status property type"),

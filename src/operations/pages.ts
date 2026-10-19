@@ -3,6 +3,9 @@ import { isFullPage, type PageObjectResponse } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
+import { toErrorEnvelope } from "../utils/error.js";
+import { rateLimiter } from "../dispatch/rate-limit.js";
+import { withRetry } from "../dispatch/retry.js";
 import {
   incompleteListProperties,
   isIncompleteListProperty,
@@ -640,29 +643,35 @@ register({
       return withWarnings(
         { ok: true, data: response },
         cut.length
-          ? [`The raw page object holds at most ${PAGE_PROPERTY_REFERENCE_LIMIT} values per relation or people property, and ${propertiesPhrase(cut)} more. Call get_page with include_properties:true and without verbose for the full list.`]
+          ? [`The raw page object holds at most ${PAGE_PROPERTY_REFERENCE_LIMIT} values per relation or people property, and ${propertiesLabel(cut)} may hold more. Call get_page with include_properties:true and without verbose for the full list.`]
           : []
       );
     }
+    let unread = new Map<string, string>();
     if (include_properties && isFullPage(response)) {
-      response = await withFullListProperties(notion, response);
+      ({ page: response, unread } = await withFullListProperties(notion, response));
     }
-    const cut = include_properties ? incompleteListProperties(response) : [];
-    return withWarnings(
-      { ok: true, data: slimPage(response, false, include_properties ?? false) },
-      cut.length
-        ? [`The ${propertiesPhrase(cut)} more than ${LIST_PROPERTY_PAGE_LIMIT * 100} values, and only the first ${LIST_PROPERTY_PAGE_LIMIT * 100} were read. Do not write such a list back with set_page_property: it replaces the whole list and would drop the rest.`]
-        : []
-    );
+    const capped = include_properties ? incompleteListProperties(response).filter((n) => !unread.has(n)) : [];
+    const keepWhole = "Do not write such a list back with set_page_property: it replaces the whole list and would drop the rest.";
+    return withWarnings({ ok: true, data: slimPage(response, false, include_properties ?? false) }, [
+      ...(capped.length
+        ? [`The ${propertiesLabel(capped)} ${capped.length === 1 ? "holds" : "hold"} more than ${LIST_PROPERTY_VALUE_LIMIT} values, and only the first ${LIST_PROPERTY_VALUE_LIMIT} were read. ${keepWhole}`]
+        : []),
+      ...[...unread].map(
+        ([name, reason]) =>
+          `The full list of property "${name}" could not be read (${reason}), so it shows the ${PAGE_PROPERTY_REFERENCE_LIMIT} values the page object carries and may hold more. ${keepWhole}`
+      ),
+    ]);
   }),
 });
 
 const LIST_PROPERTY_PAGE_LIMIT = DEFAULT_PAGE_LIMIT;
+const LIST_PROPERTY_PAGE_SIZE = 100;
+const LIST_PROPERTY_VALUE_LIMIT = LIST_PROPERTY_PAGE_LIMIT * LIST_PROPERTY_PAGE_SIZE;
 
-// `property "A" holds` / `properties "A", "B" hold`
-function propertiesPhrase(names: readonly string[]): string {
-  const quoted = names.map((n) => `"${n}"`).join(", ");
-  return names.length === 1 ? `property ${quoted} holds` : `properties ${quoted} hold`;
+// `property "A"` / `properties "A", "B"`
+function propertiesLabel(names: readonly string[]): string {
+  return `${names.length === 1 ? "property" : "properties"} ${names.map((n) => `"${n}"`).join(", ")}`;
 }
 
 /**
@@ -671,36 +680,62 @@ function propertiesPhrase(names: readonly string[]): string {
  * replaces a whole list, so a read-modify-write on the cut value would delete
  * every reference past the 25th. A list longer than the walk cap keeps
  * `has_more: true`, which slimPage reports in `truncated_properties`.
+ *
+ * Dispatch paid one rate-limit token for the handler, which covers
+ * pages.retrieve, so each property call takes its own token and retries on
+ * its own: a 429 here must not re-run the whole handler. A property whose
+ * walk fails keeps the page object's values, flagged as cut, and its reason
+ * goes in `unread`, so the page read still succeeds.
  */
 async function withFullListProperties(
   notion: Awaited<ReturnType<typeof getClient>>,
   page: PageObjectResponse
-): Promise<PageObjectResponse> {
+): Promise<{ page: PageObjectResponse; unread: Map<string, string> }> {
   const properties = { ...page.properties };
+  const unread = new Map<string, string>();
   for (const [name, prop] of Object.entries(page.properties)) {
     if (!isIncompleteListProperty(prop)) continue;
-    const { results, truncated } = await paginateAll(
-      async (cursor) => {
-        const r = await notion.pages.properties.retrieve({
-          page_id: page.id,
-          property_id: prop.id,
-          page_size: 100,
-          ...(cursor ? { start_cursor: cursor } : {}),
-        });
-        return r.object === "list"
-          ? { results: r.results, has_more: r.has_more, next_cursor: r.next_cursor }
-          : { results: [r], has_more: false, next_cursor: null };
-      },
-      { limit: LIST_PROPERTY_PAGE_LIMIT }
-    );
-    const values = results.flatMap((item) =>
-      item.type === "relation" ? [item.relation] : item.type === "people" ? [item.people] : []
-    );
     // The SDK types leave has_more off the page value; Notion sends it on a relation.
-    const full: Record<string, unknown> = { ...prop, [prop.type]: values, has_more: truncated };
+    let full: Record<string, unknown>;
+    try {
+      const { values, truncated } = await walkListProperty(notion, page.id, prop.id);
+      full = { ...prop, [prop.type]: values, has_more: truncated };
+    } catch (error) {
+      const { code, message } = toErrorEnvelope(error);
+      unread.set(name, `${code}: ${message}`);
+      full = { ...prop, has_more: true };
+    }
     properties[name] = full as unknown as typeof prop;
   }
-  return { ...page, properties };
+  return { page: { ...page, properties }, unread };
+}
+
+async function walkListProperty(
+  notion: Awaited<ReturnType<typeof getClient>>,
+  pageId: string,
+  propertyId: string
+): Promise<{ values: unknown[]; truncated: boolean }> {
+  const { results, truncated } = await paginateAll(
+    async (cursor) => {
+      const r = await withRetry(async () => {
+        await rateLimiter.acquire();
+        return notion.pages.properties.retrieve({
+          page_id: pageId,
+          property_id: propertyId,
+          page_size: LIST_PROPERTY_PAGE_SIZE,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        });
+      });
+      return r.object === "list"
+        ? { results: r.results, has_more: r.has_more, next_cursor: r.next_cursor }
+        : { results: [r], has_more: false, next_cursor: null };
+    },
+    { limit: LIST_PROPERTY_PAGE_LIMIT }
+  );
+  const values = results.flatMap((item) =>
+    item.type === "relation" ? [item.relation] : item.type === "people" ? [item.people] : []
+  );
+  return { values, truncated };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

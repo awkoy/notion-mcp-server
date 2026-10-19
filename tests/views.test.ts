@@ -230,6 +230,84 @@ describe("query_view", () => {
     expect(res.data.pages_walked).toBe(2);
     expect(notionStub.views.queries.delete).toHaveBeenCalled();
   });
+
+  describe("rows whose relation or people lists may be cut", () => {
+    const refs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `r-${i}` }));
+    const rowPage = (page_id: string) => ({
+      object: "page",
+      id: page_id,
+      properties: {
+        Name: { id: "title", type: "title", title: [{ plain_text: page_id }] },
+        Tasks:
+          page_id === "p-cut"
+            ? { id: "t", type: "relation", relation: refs(25), has_more: true }
+            : { id: "t", type: "relation", relation: refs(2), has_more: false },
+      },
+      url: `https://n/${page_id}`,
+      parent: { type: "data_source_id", data_source_id: "ds" },
+    });
+
+    beforeEach(() => {
+      notionStub.pages.retrieve.mockImplementation(async ({ page_id }) => rowPage(page_id));
+    });
+
+    it("warns about them on the first page", async () => {
+      notionStub.views.queries.create.mockResolvedValue({
+        object: "view_query",
+        id: "q-5",
+        view_id: "v-1",
+        results: [{ id: "p-cut" }, { id: "p-whole" }],
+        has_more: false,
+        next_cursor: null,
+      });
+      const res = (await dispatch("query_view", { view_id: "v-1" })) as { ok: boolean; data: any; warnings?: string[] };
+      expect(res.ok).toBe(true);
+      expect(res.data.results[0].truncated_properties).toEqual(["Tasks"]);
+      expect(res.data.results[1]).not.toHaveProperty("truncated_properties");
+      expect(res.warnings).toEqual([expect.stringContaining('1 row(s) may hold more relation or people values')]);
+      expect(res.warnings?.[0]).toContain('"Tasks"');
+    });
+
+    it("warns about them when paginate:true", async () => {
+      notionStub.views.queries.create.mockResolvedValue({
+        object: "view_query",
+        id: "q-6",
+        view_id: "v-1",
+        results: [{ id: "p-whole" }],
+        has_more: true,
+        next_cursor: "c1",
+      });
+      notionStub.views.queries.results.mockResolvedValue({
+        object: "view_query",
+        id: "q-6",
+        view_id: "v-1",
+        results: [{ id: "p-cut" }],
+        has_more: false,
+        next_cursor: null,
+      });
+      const res = (await dispatch("query_view", { view_id: "v-1", paginate: true })) as {
+        ok: boolean;
+        data: any;
+        warnings?: string[];
+      };
+      expect(res.data.results.map((r: any) => r.id)).toEqual(["p-whole", "p-cut"]);
+      expect(res.warnings).toEqual([expect.stringContaining('1 row(s) may hold more relation or people values')]);
+    });
+
+    it("adds no warning when every list is whole", async () => {
+      notionStub.views.queries.create.mockResolvedValue({
+        object: "view_query",
+        id: "q-7",
+        view_id: "v-1",
+        results: [{ id: "p-whole" }],
+        has_more: false,
+        next_cursor: null,
+      });
+      const res = (await dispatch("query_view", { view_id: "v-1" })) as { ok: boolean; warnings?: string[] };
+      expect(res.ok).toBe(true);
+      expect(res.warnings ?? []).toEqual([]);
+    });
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────

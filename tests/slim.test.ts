@@ -594,7 +594,7 @@ describe("relation and people values cut at 25", () => {
     const whole = row({ Tasks: { type: "relation", relation: refs(1), has_more: false } }, "p2");
     const slim = [slimPage(cut, false, true), slimPage(whole, false, true)];
 
-    expect(truncatedRowWarnings(slim).warnings).toEqual([expect.stringContaining('1 row(s) hold more relation or people values')]);
+    expect(truncatedRowWarnings(slim).warnings).toEqual([expect.stringContaining('1 row(s) may hold more relation or people values')]);
     expect(truncatedRowWarnings([cut, whole]).warnings?.[0]).toContain('"Tasks"');
     expect(truncatedRowWarnings([whole])).toEqual({});
     expect(truncatedRowWarnings([])).toEqual({});

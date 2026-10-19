@@ -191,7 +191,7 @@ export function truncatedRowWarnings(rows: readonly unknown[]): { warnings?: str
   const list = [...names].map((n) => `"${n}"`).join(", ");
   return {
     warnings: [
-      `${count} row(s) hold more relation or people values than a query returns (at most ${PAGE_PROPERTY_REFERENCE_LIMIT} per property): ${list}. Read the row with get_page include_properties:true for the full list before writing the property back with set_page_property, which replaces the whole list.`,
+      `${count} row(s) may hold more relation or people values than a query returns (at most ${PAGE_PROPERTY_REFERENCE_LIMIT} per property): ${list}. Read the row with get_page include_properties:true for the full list before writing the property back with set_page_property, which replaces the whole list.`,
     ],
   };
 }

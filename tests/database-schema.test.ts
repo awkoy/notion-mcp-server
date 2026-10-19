@@ -45,10 +45,16 @@ describe("status database property schema", () => {
           { name: "Review", description: "Waiting on a reviewer", group: "In progress" as const },
           { name: "Shipped", group: "Complete" as const },
           { id: "abc", name: "Renamed" },
+          { id: "def", color: "red" as const },
         ],
       },
     };
     expect(STATUS_DB_PROPERTY_SCHEMA.parse(value)).toEqual(value);
+  });
+
+  it("rejects an option with neither a name nor an id", () => {
+    const res = DATABASE_PROPERTY_SCHEMA.safeParse({ status: { options: [{ color: "red" }] } });
+    expect(res.success).toBe(false);
   });
 
   it("rejects a group outside To-do, In progress and Complete", () => {
@@ -60,6 +66,6 @@ describe("status database property schema", () => {
     const json = emitJsonSchema(STATUS_DB_PROPERTY_SCHEMA) as any;
     const option = json.properties.status.properties.options.items;
     expect(option.properties.group.enum).toEqual(["To-do", "In progress", "Complete"]);
-    expect(option.required).toEqual(["name"]);
+    expect(option.required ?? []).not.toContain("name");
   });
 });
