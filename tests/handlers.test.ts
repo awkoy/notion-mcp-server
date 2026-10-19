@@ -17,6 +17,8 @@ const notionStub = {
   },
   pages: {
     move: vi.fn(),
+    retrieve: vi.fn(),
+    properties: { retrieve: vi.fn() },
     retrieveMarkdown: vi.fn(),
     updateMarkdown: vi.fn(),
     update: vi.fn(),
@@ -500,6 +502,34 @@ describe("get_page_markdown", () => {
     const res = await dispatch("get_page_markdown", { page_id: "p-1" });
     expect((res as { data: { markdown: string } }).data.markdown).toBe("");
   });
+
+  it("reports a complete page as such, with no warning", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValue({ markdown: "Body", truncated: false, unknown_block_ids: [] });
+    const res = await dispatch("get_page_markdown", { page_id: "p-1" });
+    expect(res).toMatchObject({ ok: true, data: { truncated: false, unknown_block_ids: [] } });
+    expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("passes truncated through and warns against replacing the page", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValue({ markdown: "Body", truncated: true, unknown_block_ids: [] });
+    const res = (await dispatch("get_page_markdown", { page_id: "p-1" })) as { data: unknown; warnings?: string[] };
+    expect(res.data).toMatchObject({ truncated: true, unknown_block_ids: [] });
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings![0]).toContain("truncated");
+    expect(res.warnings![0]).toContain("Do not replace the whole page");
+  });
+
+  it("passes unknown_block_ids through and warns against replacing the page", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValue({
+      markdown: 'Intro\n<unknown url="..." alt="child_page"/>',
+      truncated: false,
+      unknown_block_ids: ["b-1", "b-2"],
+    });
+    const res = (await dispatch("get_page_markdown", { page_id: "p-1" })) as { data: unknown; warnings?: string[] };
+    expect(res.data).toMatchObject({ truncated: false, unknown_block_ids: ["b-1", "b-2"] });
+    expect(res.warnings![0]).toContain("2 block(s) could not be loaded");
+    expect(res.warnings![0]).toContain("update_page_markdown");
+  });
 });
 
 describe("update_page_markdown", () => {
@@ -923,5 +953,260 @@ describe("update_database properties migration", () => {
     await dispatch("update_database", { database_id: "db-1", is_locked: true });
     const call = notionStub.databases.update.mock.calls[0][0] as Record<string, unknown>;
     expect(call.is_locked).toBe(true);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Relation / people values past the 25 a page object carries
+// ────────────────────────────────────────────────────────────────────────
+
+const refs = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}` }));
+const people = (n: number) => refs(n, "u").map((u) => ({ object: "user", ...u }));
+
+function pageWith(properties: Record<string, unknown>, id = "p-1") {
+  return {
+    object: "page",
+    id,
+    url: `https://notion.so/${id}`,
+    parent: { type: "data_source_id", data_source_id: "ds-1" },
+    in_trash: false,
+    created_time: "t",
+    last_edited_time: "t",
+    properties: { Name: { id: "title", type: "title", title: [{ plain_text: "Row" }] }, ...properties },
+  };
+}
+
+// One page of a pages.properties.retrieve walk over a relation or people property.
+function itemPage(type: "relation" | "people", values: unknown[], next: string | null) {
+  return {
+    object: "list",
+    type: "property_item",
+    results: values.map((v) => ({ object: "property_item", type, [type]: v })),
+    has_more: next !== null,
+    next_cursor: next,
+  };
+}
+
+describe("get_page include_properties reads full relation and people lists", () => {
+  it("walks pages.properties.retrieve for a relation Notion marked has_more", async () => {
+    notionStub.pages.retrieve.mockResolvedValue(
+      pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } })
+    );
+    const all = refs(130, "r");
+    notionStub.pages.properties.retrieve
+      .mockResolvedValueOnce(itemPage("relation", all.slice(0, 100), "c-2"))
+      .mockResolvedValueOnce(itemPage("relation", all.slice(100), null));
+
+    const res = (await dispatch("get_page", { page_id: "p-1", include_properties: true })) as {
+      data: { properties: Record<string, string[]>; truncated_properties?: string[] };
+      warnings?: string[];
+    };
+
+    expect(notionStub.pages.properties.retrieve).toHaveBeenCalledTimes(2);
+    expect(notionStub.pages.properties.retrieve.mock.calls[0][0]).toEqual({
+      page_id: "p-1",
+      property_id: "rel1",
+      page_size: 100,
+    });
+    expect(notionStub.pages.properties.retrieve.mock.calls[1][0]).toMatchObject({ start_cursor: "c-2" });
+    expect(res.data.properties.Tasks).toHaveLength(130);
+    expect(res.data.properties.Tasks.at(-1)).toBe("r-129");
+    expect(res.data).not.toHaveProperty("truncated_properties");
+    expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("reads a people property that holds exactly 25 (people carries no has_more)", async () => {
+    notionStub.pages.retrieve.mockResolvedValue(pageWith({ Owners: { id: "ppl", type: "people", people: people(25) } }));
+    notionStub.pages.properties.retrieve.mockResolvedValueOnce(itemPage("people", people(40), null));
+
+    const res = (await dispatch("get_page", { page_id: "p-1", include_properties: true })) as {
+      data: { properties: Record<string, string[]> };
+    };
+    expect(notionStub.pages.properties.retrieve).toHaveBeenCalledTimes(1);
+    expect(res.data.properties.Owners).toHaveLength(40);
+  });
+
+  it("makes no extra call when no list was cut", async () => {
+    notionStub.pages.retrieve.mockResolvedValue(
+      pageWith({
+        Tasks: { id: "rel1", type: "relation", relation: refs(3, "r"), has_more: false },
+        Owners: { id: "ppl", type: "people", people: people(2) },
+      })
+    );
+    const res = (await dispatch("get_page", { page_id: "p-1", include_properties: true })) as {
+      data: { properties: Record<string, string[]> };
+    };
+    expect(notionStub.pages.properties.retrieve).not.toHaveBeenCalled();
+    expect(res.data.properties.Tasks).toEqual(["r-0", "r-1", "r-2"]);
+    expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("makes no extra call without include_properties", async () => {
+    notionStub.pages.retrieve.mockResolvedValue(
+      pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } })
+    );
+    const res = await dispatch("get_page", { page_id: "p-1" });
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.pages.properties.retrieve).not.toHaveBeenCalled();
+    expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("stops at the page cap, flags the property and warns against writing it back", async () => {
+    notionStub.pages.retrieve.mockResolvedValue(
+      pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } })
+    );
+    let n = 0;
+    notionStub.pages.properties.retrieve.mockImplementation(async () => {
+      n += 1;
+      return itemPage("relation", refs(100, `r${n}`), `c-${n + 1}`);
+    });
+
+    const res = (await dispatch("get_page", { page_id: "p-1", include_properties: true })) as {
+      data: { properties: Record<string, string[]>; truncated_properties?: string[] };
+      warnings?: string[];
+    };
+    expect(notionStub.pages.properties.retrieve).toHaveBeenCalledTimes(10);
+    expect(res.data.properties.Tasks).toHaveLength(1000);
+    expect(res.data.truncated_properties).toEqual(["Tasks"]);
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings![0]).toContain('"Tasks"');
+    expect(res.warnings![0]).toContain("set_page_property");
+  });
+
+  it("verbose returns the raw page and warns that its lists are cut", async () => {
+    const raw = pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } });
+    notionStub.pages.retrieve.mockResolvedValue(raw);
+
+    const res = (await dispatch("get_page", { page_id: "p-1", include_properties: true, verbose: true })) as {
+      data: unknown;
+      warnings?: string[];
+    };
+    expect(res.data).toEqual(raw);
+    expect(notionStub.pages.properties.retrieve).not.toHaveBeenCalled();
+    expect(res.warnings![0]).toContain('"Tasks"');
+    expect(res.warnings![0]).toContain("without verbose");
+  });
+});
+
+describe("query_database flags rows whose relation or people lists were cut", () => {
+  it("marks each cut row and adds one warning, without extra calls", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [
+        pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } }, "p-1"),
+        pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(2, "r"), has_more: false } }, "p-2"),
+        pageWith({ Owners: { id: "ppl", type: "people", people: people(25) } }, "p-3"),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    const res = (await dispatch("query_database", { data_source_id: "ds-1" })) as {
+      data: { results: Array<{ id: string; truncated_properties?: string[] }> };
+      warnings?: string[];
+    };
+    expect(notionStub.pages.properties.retrieve).not.toHaveBeenCalled();
+    const byId = Object.fromEntries(res.data.results.map((r) => [r.id, r.truncated_properties]));
+    expect(byId).toEqual({ "p-1": ["Tasks"], "p-2": undefined, "p-3": ["Owners"] });
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings![0]).toContain("2 row(s)");
+    expect(res.warnings![0]).toContain('"Tasks", "Owners"');
+    expect(res.warnings![0]).toContain("get_page include_properties:true");
+  });
+
+  it("warns on verbose rows too", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } })],
+      has_more: false,
+      next_cursor: null,
+    });
+    const res = (await dispatch("query_database", { data_source_id: "ds-1", verbose: true })) as {
+      warnings?: string[];
+    };
+    expect(res.warnings![0]).toContain("1 row(s)");
+  });
+
+  it("warns across pages when paginate is on", async () => {
+    notionStub.dataSources.query
+      .mockResolvedValueOnce({
+        object: "list",
+        results: [pageWith({}, "p-1")],
+        has_more: true,
+        next_cursor: "c-2",
+      })
+      .mockResolvedValueOnce({
+        object: "list",
+        results: [pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } }, "p-2")],
+        has_more: false,
+        next_cursor: null,
+      });
+    const res = (await dispatch("query_database", { data_source_id: "ds-1", paginate: true })) as {
+      warnings?: string[];
+    };
+    expect(res.warnings![0]).toContain("1 row(s)");
+  });
+
+  it("adds no warning when nothing was cut", async () => {
+    notionStub.dataSources.query.mockResolvedValue({
+      object: "list",
+      results: [pageWith({ Owners: { id: "ppl", type: "people", people: people(24) } })],
+      has_more: false,
+      next_cursor: null,
+    });
+    const res = await dispatch("query_database", { data_source_id: "ds-1" });
+    expect(res).not.toHaveProperty("warnings");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Status property definitions
+// ────────────────────────────────────────────────────────────────────────
+
+describe("status property definitions", () => {
+  it("create_database sends a bare status property for Notion's default options", async () => {
+    notionStub.databases.create.mockResolvedValue({ id: "db-new", title: [], properties: {} });
+
+    const res = await dispatch("create_database", {
+      parent: { type: "page_id", page_id: "p-1" },
+      title: "Tasks",
+      properties: { Name: { type: "title", title: {} }, State: { status: {} }, Phase: { type: "status" } },
+    });
+    expect((res as { ok: boolean }).ok).toBe(true);
+    const call = notionStub.databases.create.mock.calls[0][0] as { initial_data_source: { properties: unknown } };
+    expect(call.initial_data_source.properties).toEqual({
+      Name: { type: "title", title: {} },
+      State: { type: "status", status: {} },
+      Phase: { type: "status", status: {} },
+    });
+  });
+
+  it("update_data_source sends status options with their groups", async () => {
+    notionStub.dataSources.update.mockResolvedValue({ id: "ds-1" });
+    const options = [
+      { name: "Backlog", color: "gray", group: "To-do" },
+      { name: "Building", group: "In progress", description: "Being worked on" },
+      { name: "Shipped", color: "green", group: "Complete" },
+    ];
+
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      properties: { Stage: { type: "status", status: { options } } },
+    });
+    expect((res as { ok: boolean }).ok).toBe(true);
+    expect(notionStub.dataSources.update.mock.calls[0][0]).toEqual({
+      data_source_id: "ds-1",
+      properties: { Stage: { type: "status", status: { options } } },
+    });
+  });
+
+  it("rejects a group Notion does not have", async () => {
+    const res = await dispatch("update_data_source", {
+      data_source_id: "ds-1",
+      properties: { Stage: { status: { options: [{ name: "Blocked", group: "Blocked" }] } } },
+    });
+    expect((res as { ok: boolean }).ok).toBe(false);
+    expect((res as { error: { code: string } }).error.code).toBe("validation_error");
+    expect(notionStub.dataSources.update).not.toHaveBeenCalled();
   });
 });

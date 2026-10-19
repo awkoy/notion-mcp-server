@@ -1,9 +1,17 @@
 import { z } from "zod";
+import { isFullPage, type PageObjectResponse } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
-import { slimPage, slimItem, slimList } from "../utils/slim.js";
-import { paginateAll } from "../utils/paginate.js";
+import {
+  incompleteListProperties,
+  isIncompleteListProperty,
+  PAGE_PROPERTY_REFERENCE_LIMIT,
+  slimPage,
+  slimItem,
+  slimList,
+} from "../utils/slim.js";
+import { DEFAULT_PAGE_LIMIT, paginateAll } from "../utils/paginate.js";
 import type { OperationError, OperationResult } from "./types.js";
 import { parseMarkdownToBlocks } from "../markdown/parse.js";
 import { PARENT_SCHEMA } from "../schema/page.js";
@@ -625,13 +633,75 @@ register({
   example: { page_id: "<page-id>" },
   handler: tryHandler(async ({ page_id, include_properties, verbose }) => {
     const notion = await getClient();
-    const response = await notion.pages.retrieve({ page_id });
-    return {
-      ok: true,
-      data: slimPage(response, verbose ?? false, include_properties ?? false),
-    };
+    let response = await notion.pages.retrieve({ page_id });
+    if (verbose) {
+      // The raw page is returned as Notion sent it, cut lists included.
+      const cut = incompleteListProperties(response);
+      return withWarnings(
+        { ok: true, data: response },
+        cut.length
+          ? [`The raw page object holds at most ${PAGE_PROPERTY_REFERENCE_LIMIT} values per relation or people property, and ${propertiesPhrase(cut)} more. Call get_page with include_properties:true and without verbose for the full list.`]
+          : []
+      );
+    }
+    if (include_properties && isFullPage(response)) {
+      response = await withFullListProperties(notion, response);
+    }
+    const cut = include_properties ? incompleteListProperties(response) : [];
+    return withWarnings(
+      { ok: true, data: slimPage(response, false, include_properties ?? false) },
+      cut.length
+        ? [`The ${propertiesPhrase(cut)} more than ${LIST_PROPERTY_PAGE_LIMIT * 100} values, and only the first ${LIST_PROPERTY_PAGE_LIMIT * 100} were read. Do not write such a list back with set_page_property: it replaces the whole list and would drop the rest.`]
+        : []
+    );
   }),
 });
+
+const LIST_PROPERTY_PAGE_LIMIT = DEFAULT_PAGE_LIMIT;
+
+// `property "A" holds` / `properties "A", "B" hold`
+function propertiesPhrase(names: readonly string[]): string {
+  const quoted = names.map((n) => `"${n}"`).join(", ");
+  return names.length === 1 ? `property ${quoted} holds` : `properties ${quoted} hold`;
+}
+
+/**
+ * Swap in the full value of every relation / people property the page object
+ * cut at 25, read through the property-item endpoint. set_page_property
+ * replaces a whole list, so a read-modify-write on the cut value would delete
+ * every reference past the 25th. A list longer than the walk cap keeps
+ * `has_more: true`, which slimPage reports in `truncated_properties`.
+ */
+async function withFullListProperties(
+  notion: Awaited<ReturnType<typeof getClient>>,
+  page: PageObjectResponse
+): Promise<PageObjectResponse> {
+  const properties = { ...page.properties };
+  for (const [name, prop] of Object.entries(page.properties)) {
+    if (!isIncompleteListProperty(prop)) continue;
+    const { results, truncated } = await paginateAll(
+      async (cursor) => {
+        const r = await notion.pages.properties.retrieve({
+          page_id: page.id,
+          property_id: prop.id,
+          page_size: 100,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        });
+        return r.object === "list"
+          ? { results: r.results, has_more: r.has_more, next_cursor: r.next_cursor }
+          : { results: [r], has_more: false, next_cursor: null };
+      },
+      { limit: LIST_PROPERTY_PAGE_LIMIT }
+    );
+    const values = results.flatMap((item) =>
+      item.type === "relation" ? [item.relation] : item.type === "people" ? [item.people] : []
+    );
+    // The SDK types leave has_more off the page value; Notion sends it on a relation.
+    const full: Record<string, unknown> = { ...prop, [prop.type]: values, has_more: truncated };
+    properties[name] = full as unknown as typeof prop;
+  }
+  return { ...page, properties };
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // move_page
@@ -690,18 +760,53 @@ const GetPageMarkdownParams = z.object({
   page_id: notionId(),
 });
 
+/**
+ * Notion stops rendering at about 20,000 blocks and renders blocks the
+ * integration can't read as `<unknown>` tags. Either way the markdown is not
+ * the whole page, and writing it back with replace_content would delete what
+ * was left out.
+ */
+function incompleteMarkdownWarning(
+  truncated: boolean,
+  unknownBlockIds: readonly string[]
+): string | undefined {
+  if (!truncated && unknownBlockIds.length === 0) return undefined;
+  const why = [
+    truncated ? "Notion truncated it (pages over about 20,000 blocks)" : undefined,
+    unknownBlockIds.length
+      ? `${unknownBlockIds.length} block(s) could not be loaded and appear as <unknown> tags (not shared with the integration, or past the limit); see unknown_block_ids`
+      : undefined,
+  ].filter(Boolean);
+  return `This markdown is not the whole page: ${why.join("; ")}. Do not replace the whole page with update_page_markdown (replace_content): blocks missing here would be deleted. Edit with insert_content, append_blocks or update_block instead, or pass an unknown block id as page_id to read that block.`;
+}
+
 register({
   name: "get_page_markdown",
   access: "read",
   domain: "pages",
-  description: "Return a page's body as Notion-rendered markdown. Server-side conversion; round-trips with update_page_markdown.",
+  description:
+    "Return a page's body as Notion-rendered markdown. Server-side conversion; round-trips with update_page_markdown. `truncated: true` or a non-empty `unknown_block_ids` means part of the page is missing from the markdown.",
   batchable: true,
   schema: GetPageMarkdownParams,
   example: { page_id: "<page-id>" },
   handler: tryHandler(async ({ page_id }) => {
     const notion = await getClient();
     const response = await notion.pages.retrieveMarkdown({ page_id });
-    return { ok: true, data: { page_id, markdown: response.markdown ?? "" } };
+    const truncated = response.truncated ?? false;
+    const unknownBlockIds = response.unknown_block_ids ?? [];
+    const warning = incompleteMarkdownWarning(truncated, unknownBlockIds);
+    return withWarnings(
+      {
+        ok: true,
+        data: {
+          page_id,
+          markdown: response.markdown ?? "",
+          truncated,
+          unknown_block_ids: unknownBlockIds,
+        },
+      },
+      warning ? [warning] : []
+    );
   }),
 });
 
@@ -728,7 +833,8 @@ register({
   name: "update_page_markdown",
   access: "write",
   domain: "pages",
-  description: "Replace (or insert into) a page's body using Notion's server-side markdown renderer. Skip the local remark pipeline.",
+  description:
+    "Replace (or insert into) a page's body using Notion's server-side markdown renderer. Skip the local remark pipeline. Replacing deletes every block the new markdown leaves out: if get_page_markdown returned `truncated: true` or any `unknown_block_ids`, do not replace the page — use insert_content or block operations.",
   batchable: true,
   schema: UpdatePageMarkdownParams,
   example: {

@@ -3,7 +3,7 @@ import { isFullDatabase } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
-import { slimDatabase, slimItem, slimList } from "../utils/slim.js";
+import { slimDatabase, slimItem, slimList, truncatedRowWarnings } from "../utils/slim.js";
 import type { SearchItemResponse } from "../utils/slim.js";
 import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { PARENT_SCHEMA } from "../schema/page.js";
@@ -313,6 +313,7 @@ register({
         if (!hasMore || collected.length >= limit) break;
         cursor = slim.next_cursor ?? undefined;
       }
+      const warnings = truncatedRowWarnings(collected);
       if (verbose) {
         return {
           ok: true,
@@ -321,6 +322,7 @@ register({
             truncated: hasMore && collected.length >= limit,
             pages_walked: pagesWalked,
           },
+          ...warnings,
         };
       }
       const { parent, rows } = hoistParent(collected as RowWithParent[]);
@@ -332,12 +334,14 @@ register({
           truncated: hasMore && collected.length >= limit,
           pages_walked: pagesWalked,
         },
+        ...warnings,
       };
     }
 
     const response = await runQuery(start_cursor, pageSize);
     const slim = slimList(response, slimRow, verbose ?? false);
-    if (verbose) return { ok: true, data: slim };
+    const warnings = truncatedRowWarnings(slim.results);
+    if (verbose) return { ok: true, data: slim, ...warnings };
     const { parent, rows } = hoistParent(slim.results as RowWithParent[]);
     return {
       ok: true,
@@ -347,6 +351,7 @@ register({
         has_more: slim.has_more,
         next_cursor: slim.next_cursor,
       },
+      ...warnings,
     };
   }),
 });

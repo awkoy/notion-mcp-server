@@ -58,6 +58,26 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
   }
 }
 
+// a status property: `status: {}` gives Notion's defaults (Not started, In progress, Done);
+// each option joins one of the fixed groups To-do, In progress or Complete
+{
+  "operation": "update_data_source",
+  "payload": {
+    "data_source_id": "<data-source-id>",
+    "properties": {
+      "Stage": {
+        "status": {
+          "options": [
+            { "name": "Backlog", "color": "gray", "group": "To-do" },
+            { "name": "Building", "color": "blue", "group": "In progress" },
+            { "name": "Shipped", "color": "green", "group": "Complete" }
+          ]
+        }
+      }
+    }
+  }
+}
+
 // upload a file and place it on a page in one call
 {
   "operation": "upload_file",
@@ -80,7 +100,15 @@ Every mutating operation accepts `{ items: [...] }` and returns a result per ite
 
 A payload that doesn't validate comes back with `{ code, message, path, issues, schema, example, fix }`: the operation's JSON Schema, a working example and a hint, so the next call can be corrected without a `notion_describe` round trip.
 
-A successful result can carry `warnings`. Each entry names a field that was ignored (misspelt or misplaced) along with the accepted ones, or a property name that was corrected. The call still ran.
+A successful result can carry `warnings`. Each entry names a field that was ignored (misspelt or misplaced) along with the accepted ones, or a property name that was corrected, or says that what came back is incomplete. The call still ran.
+
+## Incomplete reads
+
+Notion cuts some reads short. The server passes on what it knows and warns before a write that would lose the missing part.
+
+- **`get_page_markdown`** returns `truncated` and `unknown_block_ids` next to `markdown`. Notion truncates pages over about 20,000 blocks, and blocks the integration can't load (not shared with it, for example) appear as `<unknown>` tags with their ids in `unknown_block_ids`. When either says the page is incomplete, a warning says not to replace the page with `update_page_markdown`, which would delete the missing blocks; edit with `insert_content`, `append_blocks` or `update_block` instead.
+- **`get_page` with `include_properties: true`** returns every value of a relation or people property. A page object holds at most 25, so for a longer list the server reads the property itself through Notion's property endpoint, up to 1,000 values. A list longer than that is named in `truncated_properties`, with a warning not to write it back with `set_page_property`, which replaces the whole list. With `verbose: true` the raw page comes back as Notion sent it, with a warning naming the cut properties.
+- **`query_database` and `query_view`** rows keep the 25 values a query returns. Reading the rest would take an extra call for each cut property in each row, so the server names the cut properties in each row's `truncated_properties` and adds one warning; read the row with `get_page` before writing such a property back.
 
 ## MCP resources
 
@@ -89,5 +117,5 @@ Clients that support resource attachment (`@`-mention) can pull Notion content i
 | Resource URI | Returns |
 | --- | --- |
 | `notion://operations` | Markdown cheat sheet of every enabled operation, with batchability and the tool that runs it |
-| `notion://page/<page_id>` | Page body as markdown |
+| `notion://page/<page_id>` | Page body as markdown. An incomplete page (see [Incomplete reads](#incomplete-reads)) starts with an HTML comment that says so. |
 | `notion://database/<data_source_id>` | Data source schema as JSON |

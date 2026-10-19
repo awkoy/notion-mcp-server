@@ -148,6 +148,54 @@ function flattenProperty(
   }
 }
 
+// A page object carries at most 25 references in a relation or people value.
+// A relation says when it was cut with `has_more`; people carries no flag, so
+// a full 25 has to be read as "maybe more".
+export const PAGE_PROPERTY_REFERENCE_LIMIT = 25;
+
+export function isIncompleteListProperty(prop: PageObjectResponse["properties"][string]): boolean {
+  if (prop.type !== "relation" && prop.type !== "people") return false;
+  const hasMore = (prop as { has_more?: unknown }).has_more;
+  if (typeof hasMore === "boolean") return hasMore;
+  const items = prop.type === "relation" ? prop.relation : prop.people;
+  return items.length >= PAGE_PROPERTY_REFERENCE_LIMIT;
+}
+
+/** Names of the relation / people properties whose value the page object cut short. */
+export function incompleteListProperties(page: PageResponse): string[] {
+  if (!isFullPage(page)) return [];
+  return Object.entries(page.properties)
+    .filter(([, prop]) => isIncompleteListProperty(prop))
+    .map(([name]) => name);
+}
+
+/**
+ * The `warnings` for a list of query rows, slim (`truncated_properties`) or
+ * raw (`verbose`), ready to spread into a result. Rows are flagged rather than
+ * completed: that would cost an extra paginated call per cut property per row,
+ * against a 3 req/s limit, for a read that rarely writes the list back.
+ * get_page completes them.
+ */
+export function truncatedRowWarnings(rows: readonly unknown[]): { warnings?: string[] } {
+  const names = new Set<string>();
+  let count = 0;
+  for (const row of rows) {
+    const r = row as { object?: unknown; truncated_properties?: string[] };
+    const cut =
+      r.object === "page" ? incompleteListProperties(row as PageResponse) : (r.truncated_properties ?? []);
+    if (cut.length === 0) continue;
+    count += 1;
+    for (const name of cut) names.add(name);
+  }
+  if (count === 0) return {};
+  const list = [...names].map((n) => `"${n}"`).join(", ");
+  return {
+    warnings: [
+      `${count} row(s) hold more relation or people values than a query returns (at most ${PAGE_PROPERTY_REFERENCE_LIMIT} per property): ${list}. Read the row with get_page include_properties:true for the full list before writing the property back with set_page_property, which replaces the whole list.`,
+    ],
+  };
+}
+
 function flattenProperties(
   properties: PageObjectResponse["properties"],
   pageId: string
@@ -179,7 +227,12 @@ export function slimPage(
   };
   if (!includeProperties) return base;
   const props = flattenProperties(page.properties, page.id);
-  return Object.keys(props).length ? { ...base, properties: props } : base;
+  const truncated = incompleteListProperties(page);
+  return {
+    ...base,
+    ...(Object.keys(props).length ? { properties: props } : {}),
+    ...(truncated.length ? { truncated_properties: truncated } : {}),
+  };
 }
 
 export function slimBlock(block: BlockResponse, verbose = false) {

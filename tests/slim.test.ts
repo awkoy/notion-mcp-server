@@ -7,6 +7,8 @@ import {
   slimUser,
   slimComment,
   slimList,
+  isIncompleteListProperty,
+  truncatedRowWarnings,
 } from "../src/utils/slim.js";
 
 // Tests use minimal stub objects that only include the fields the slim
@@ -561,5 +563,40 @@ describe("slimDataSource — option names", () => {
     const text = (slimDataSource(ds) as { properties: Record<string, string> }).properties.Many;
     expect(text.startsWith("select: o0 | o1 |")).toBe(true);
     expect(text.endsWith("| o29 | +10 more")).toBe(true);
+  });
+});
+
+describe("relation and people values cut at 25", () => {
+  const refs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `r-${i}` }));
+  const prop = (value: unknown) => fx<Parameters<typeof isIncompleteListProperty>[0]>(value);
+  const row = (properties: Record<string, unknown>, id = "p1") =>
+    fx<Parameters<typeof slimPage>[0]>({ object: "page", id, url: `u/${id}`, properties });
+
+  it("trusts has_more on a relation, and counts to 25 on people", () => {
+    expect(isIncompleteListProperty(prop({ type: "relation", relation: refs(25), has_more: true }))).toBe(true);
+    expect(isIncompleteListProperty(prop({ type: "relation", relation: refs(25), has_more: false }))).toBe(false);
+    expect(isIncompleteListProperty(prop({ type: "people", people: refs(25) }))).toBe(true);
+    expect(isIncompleteListProperty(prop({ type: "people", people: refs(24) }))).toBe(false);
+    expect(isIncompleteListProperty(prop({ type: "multi_select", multi_select: refs(30) }))).toBe(false);
+  });
+
+  it("slimPage names the cut properties only when it flattens properties", () => {
+    const page = row({ Tasks: { type: "relation", relation: refs(25), has_more: true } });
+    expect(slimPage(page, false, true)).toMatchObject({ truncated_properties: ["Tasks"] });
+    expect(slimPage(page, false, false)).not.toHaveProperty("truncated_properties");
+    expect(slimPage(row({ Tasks: { type: "relation", relation: refs(3), has_more: false } }), false, true)).not.toHaveProperty(
+      "truncated_properties"
+    );
+  });
+
+  it("truncatedRowWarnings reads slim rows and raw pages alike", () => {
+    const cut = row({ Tasks: { type: "relation", relation: refs(25), has_more: true } }, "p1");
+    const whole = row({ Tasks: { type: "relation", relation: refs(1), has_more: false } }, "p2");
+    const slim = [slimPage(cut, false, true), slimPage(whole, false, true)];
+
+    expect(truncatedRowWarnings(slim).warnings).toEqual([expect.stringContaining('1 row(s) hold more relation or people values')]);
+    expect(truncatedRowWarnings([cut, whole]).warnings?.[0]).toContain('"Tasks"');
+    expect(truncatedRowWarnings([whole])).toEqual({});
+    expect(truncatedRowWarnings([])).toEqual({});
   });
 });
