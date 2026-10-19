@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import type { LookupAddress } from "node:dns";
@@ -92,6 +101,22 @@ const { lookupStub } = vi.hoisted(() => ({
 }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupStub, default: { lookup: lookupStub } }));
 
+// The path source's open goes through the real fs, with a hook that lets a
+// test swap the file between the policy check and the open.
+const { fsHooks } = vi.hoisted(() => ({
+  fsHooks: { beforeOpen: undefined as ((path: string) => void) | undefined },
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      fsHooks.beforeOpen?.(String(args[0]));
+      return actual.open(...args);
+    },
+  };
+});
+
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
 import { setActiveTransport } from "../src/config/http.js";
@@ -154,6 +179,7 @@ afterEach(() => {
   }
   savedEnv.clear();
   setActiveTransport("stdio");
+  fsHooks.beforeOpen = undefined;
 });
 
 const NO_PROXY_ENV = {
@@ -966,11 +992,14 @@ describe("upload_file (path source)", () => {
     }
   });
 
-  it("surfaces the fs error when the path does not exist and makes no SDK calls", async () => {
+  it("reports a missing path as a validation_error and makes no SDK calls", async () => {
     const res = await dispatch("upload_file", {
       source: { type: "path", path: "/no/such/file-xyz.txt" },
     });
-    expect((res as { ok: boolean }).ok).toBe(false);
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toBe("/no/such/file-xyz.txt does not exist (ENOENT).");
+    expect(res.error.fix).toContain("Check the path");
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
   });
@@ -1084,11 +1113,191 @@ describe("upload_file (path policy)", () => {
   });
 
   // /dev/zero passes any size check (its size is 0) and never ends.
-  it.skipIf(process.platform === "win32")("refuses /dev/zero", async () => {
+  it.skipIf(process.platform === "win32")("over stdio with no root, refuses /dev/zero", async () => {
     const res = await uploadPath("/dev/zero", "zero.bin");
     assertErr(res);
-    expect(res.error.code).toBe("validation_error");
-    expect(res.error.message).toContain("not a regular file");
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(res.error.message).toContain("under /dev");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "with the policy off, still refuses /dev/zero as not a regular file",
+    async () => {
+      setEnv({ NOTION_UPLOAD_ROOT: "/" });
+      const res = await uploadPath("/dev/zero", "zero.bin");
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("not a regular file");
+    }
+  );
+
+  // A regular file of size 0 that holds the server's environment, NOTION_TOKEN
+  // included: it passes the regular-file and size checks.
+  it.skipIf(process.platform !== "linux")(
+    "over stdio with no root, refuses /proc/self/environ",
+    async () => {
+      const res = await uploadPath("/proc/self/environ", "environ.txt");
+      assertErr(res);
+      expect(res.error.code).toBe("path_not_allowed");
+      expect(res.error.message).toContain("under /proc");
+      expect(res.error.fix).toContain("NOTION_UPLOAD_ROOT");
+      expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    }
+  );
+
+  describe("app-data folders, with a stand-in home directory", () => {
+    const home = mkdtempSync(join(tmpdir(), "notion-home-"));
+    const write = (rel: string, body: string) => {
+      const full = join(home, rel);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, body);
+      return full;
+    };
+
+    // Where the README tells Claude Desktop users to put NOTION_TOKEN.
+    it.skipIf(process.platform !== "darwin")(
+      "on macOS, refuses ~/Library/Application Support/Claude/claude_desktop_config.json",
+      async () => {
+        write("Library/Application Support/Claude/claude_desktop_config.json", "{}");
+        setEnv({ HOME: home });
+        const res = await uploadPath("~/Library/Application Support/Claude/claude_desktop_config.json");
+        assertErr(res);
+        expect(res.error.code).toBe("path_not_allowed");
+        expect(res.error.message).toContain("Library");
+        expect(res.error.message).toContain("NOTION_TOKEN");
+        expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+      }
+    );
+
+    it.skipIf(process.platform !== "darwin")(
+      "on macOS, refuses the Cursor, Windsurf and VS Code user folders",
+      async () => {
+        setEnv({ HOME: home });
+        for (const app of ["Cursor", "Windsurf", "Code"]) {
+          write(`Library/Application Support/${app}/User/settings.json`, "{}");
+          const res = await uploadPath(`~/Library/Application Support/${app}/User/settings.json`);
+          assertErr(res);
+          expect(res.error.code).toBe("path_not_allowed");
+        }
+      }
+    );
+
+    it.skipIf(process.platform !== "darwin")("on macOS, still reads iCloud Drive", async () => {
+      write("Library/Mobile Documents/com~apple~CloudDocs/report.txt", "icloud");
+      setEnv({ HOME: home });
+      const res = await uploadPath("~/Library/Mobile Documents/com~apple~CloudDocs/report.txt");
+      assertOk(res);
+      expect((await sendBytes(0)).toString()).toBe("icloud");
+    });
+
+    it.skipIf(process.platform !== "win32")(
+      "on Windows, refuses %APPDATA%\\Claude\\claude_desktop_config.json",
+      async () => {
+        const config = write("AppData/Roaming/Claude/claude_desktop_config.json", "{}");
+        setEnv({ APPDATA: join(home, "AppData", "Roaming") });
+        const res = await uploadPath(config);
+        assertErr(res);
+        expect(res.error.code).toBe("path_not_allowed");
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "refuses XDG_CONFIG_HOME when it points outside dot-names, through a symlink too",
+      async () => {
+        const config = write("config/Claude/claude_desktop_config.json", "{}");
+        symlinkSync(join(home, "config"), join(home, "innocent-dir"));
+        setEnv({ XDG_CONFIG_HOME: join(home, "config") });
+        for (const path of [config, join(home, "innocent-dir/Claude/claude_desktop_config.json")]) {
+          const res = await uploadPath(path);
+          assertErr(res);
+          expect(res.error.code).toBe("path_not_allowed");
+        }
+        expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  describe("file-system errors", () => {
+    it.skipIf(process.platform === "win32")("reports a symlink loop as a validation_error", async () => {
+      symlinkSync(join(dir, "loop-b"), join(dir, "loop-a"));
+      symlinkSync(join(dir, "loop-a"), join(dir, "loop-b"));
+      const res = await uploadPath(join(dir, "loop-a"), "loop.txt");
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("symlink loop (ELOOP)");
+      expect(res.error.fix).toBeTruthy();
+    });
+
+    it("reports a file used as a directory as a validation_error", async () => {
+      const res = await uploadPath(join(dir, "plain.txt", "child.txt"));
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("(ENOTDIR)");
+      expect(res.error.fix).toBeTruthy();
+    });
+
+    // root reads everything, so the permission bits do not stop it.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "reports an unreadable directory as a validation_error",
+      async () => {
+        const locked = join(dir, "locked");
+        mkdirSync(locked);
+        writeFileSync(join(locked, "a.txt"), "a");
+        chmodSync(locked, 0o000);
+        try {
+          const res = await uploadPath(join(locked, "a.txt"));
+          assertErr(res);
+          expect(res.error.code).toBe("validation_error");
+          expect(res.error.message).toContain("(EACCES)");
+          expect(res.error.fix).toContain("readable");
+        } finally {
+          chmodSync(locked, 0o755);
+        }
+      }
+    );
+  });
+
+  // The policy approves a real path; the read then opens it by name. A file
+  // swapped in between must not be read.
+  describe("a file swapped after the check", () => {
+    it("refuses a different file moved over the path", async () => {
+      const target = join(dir, "swap-target.txt");
+      writeFileSync(target, "approved");
+      writeFileSync(join(dir, "swap-other.txt"), "swapped");
+      fsHooks.beforeOpen = (path) => {
+        if (path.endsWith("swap-target.txt")) renameSync(join(dir, "swap-other.txt"), path);
+      };
+      const res = await uploadPath(target);
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("changed while it was being opened");
+      expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+    });
+
+    it.skipIf(process.platform === "win32")("refuses a symlink put in its place", async () => {
+      const target = join(dir, "swap-link.txt");
+      writeFileSync(target, "approved");
+      fsHooks.beforeOpen = (path) => {
+        if (!path.endsWith("swap-link.txt")) return;
+        unlinkSync(path);
+        symlinkSync(join(dir, ".secret", "key.txt"), path);
+      };
+      const res = await uploadPath(target);
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain("changed while it was being opened");
+      expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+    });
+
+    it("reads the file when nothing changed", async () => {
+      let opened = 0;
+      fsHooks.beforeOpen = () => {
+        opened++;
+      };
+      const res = await uploadPath(join(dir, "plain.txt"));
+      assertOk(res);
+      expect(opened).toBe(1);
+    });
   });
 });
 
@@ -1290,8 +1499,23 @@ describe("upload_file (upload root)", () => {
       source: { type: "path", path: "nope.txt" },
     });
     assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain("does not exist (ENOENT)");
     expect(res.error.message).not.toContain("outside NOTION_UPLOAD_ROOT");
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  // A dangling symlink does exist. Kept as a lexical tail it would pass the
+  // check, and a target created outside the root later would then be read.
+  it("stops at a dangling symlinked directory instead of treating it as missing", async () => {
+    process.env.NOTION_UPLOAD_ROOT = root;
+    symlinkSync(join(outside, "not-yet"), join(root, "later"));
+    const res = await dispatch("upload_file", {
+      source: { type: "path", path: "later/file.txt" },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toBe(`${join(realpathSync(root), "later")} does not exist (ENOENT).`);
   });
 });
 

@@ -138,7 +138,7 @@ Both go in the same `NOTION_TOKEN` env var; only where you get them differs.
 | `NOTION_READ_ONLY` | — | — | `true` disables every write operation |
 | `NOTION_ALLOWED_OPERATIONS` / `NOTION_BLOCKED_OPERATIONS` | — | — | Allowlist / blocklist of operations, see [Restricting operations](#restricting-operations) |
 | `NOTION_CONFIRM_DESTRUCTIVE` | — | — | `true` asks you before a destructive operation runs |
-| `NOTION_UPLOAD_ROOT` | — | — | Directory `upload_file`'s local `path` source is confined to (`/` for no limit). Unset: refused over HTTP, dot-named paths refused over stdio, see [Files](#files) |
+| `NOTION_UPLOAD_ROOT` | — | — | Directory `upload_file`'s local `path` source is confined to (`/` for no limit). Unset: refused over HTTP, dot-named paths and system and app-data folders refused over stdio, see [Files](#files) |
 | `NOTION_UPLOAD_MAX_BYTES` | — | `1073741824` (1 GiB) | Largest file `upload_file` accepts from any source |
 | `NOTION_UPLOAD_URL_TIMEOUT_MS` | — | `30000` | Time limit for fetching a `url` source, redirects and body included |
 | `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` | — | — | `true` lets a `url` source reach private, loopback and link-local addresses |
@@ -166,7 +166,7 @@ To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a 
 
 `upload_file` accepts base64, a public URL or a local path, up to `NOTION_UPLOAD_MAX_BYTES` (1 GiB by default). Since the model picks the source, the server guards the two it reads itself:
 
-- **Local paths.** Set `NOTION_UPLOAD_ROOT` to the directory uploads may come from; paths outside it are refused, symlinks included. Without it, path sources are off over HTTP, and over stdio any path through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`) is refused. `NOTION_UPLOAD_ROOT=/` turns the limit off.
+- **Local paths.** Set `NOTION_UPLOAD_ROOT` to the directory uploads may come from; paths outside it are refused, symlinks included. Without it, path sources are off over HTTP, and over stdio a path is refused when it goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`) or lies under a system or app-data folder (`/proc`, `/dev`, `~/Library`, `%APPDATA%`), where MCP clients keep your token. `NOTION_UPLOAD_ROOT=/` turns the limit off. Inside a root every file is readable, `.env` and `.git` included, so over HTTP pick a root that holds only files you would hand to whoever can call the server.
 - **URLs.** http and https only. Every hop, redirects included, must resolve to a public address, so loopback, private networks and cloud metadata endpoints are refused; `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` lifts that for an intranet. The fetch stops after `NOTION_UPLOAD_URL_TIMEOUT_MS` (30 s) or once the body passes the size limit.
 
 Notion's signed file URLs are about 500 tokens each and expire within an hour. `NOTION_FILE_URLS=ref` replaces them in responses with short `notion-file:` refs that `get_file_url` and `get_image` resolve on demand. [How refs work →](./docs/configuration.md#files)

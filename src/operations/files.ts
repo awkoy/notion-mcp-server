@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { constants, open, realpath, stat } from "node:fs/promises";
+import { constants, lstat, open, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { getClient, proxyAwareFetch } from "../services/notion.js";
@@ -8,6 +8,7 @@ import { getActiveTransport } from "../config/http.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { readCapped } from "../utils/read-capped.js";
+import { dotSegment, sensitiveZones, zoneOf, type Zone } from "../utils/upload-paths.js";
 import { slimFileUpload, slimList } from "../utils/slim.js";
 import { asSdk } from "../utils/notion-types.js";
 import type {
@@ -78,6 +79,43 @@ class UploadRefused extends Error {
   }
 }
 
+// File-system errors from resolving or reading a path source. They are the
+// caller's to fix (a wrong path, a permission), so they come back as
+// validation_error with a fix, not as internal_error.
+const FS_ERRORS: Record<string, { what: string; fix: string }> = {
+  ENOENT: {
+    what: "does not exist",
+    fix: "Check the path. A relative path resolves against NOTION_UPLOAD_ROOT when it is set, else against the server's working directory.",
+  },
+  ENOTDIR: {
+    what: "goes through a file as if it were a directory",
+    fix: "Check the path.",
+  },
+  EACCES: {
+    what: "cannot be read by the user the server runs as",
+    fix: "Make the file, and every directory above it, readable by the server's user, or copy the file somewhere it can read.",
+  },
+  ELOOP: {
+    what: "goes through a symlink loop",
+    fix: "Fix or remove the looping symlink, or pass the file's real path.",
+  },
+  ENAMETOOLONG: { what: "is too long", fix: "Pass a shorter path." },
+};
+FS_ERRORS.EPERM = FS_ERRORS.EACCES;
+
+// The refusal for a known file-system error, or the error itself.
+function fsRefusal(path: string, err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const { code, path: failed } = err as NodeJS.ErrnoException;
+  const known = code === undefined ? undefined : FS_ERRORS[code];
+  if (!known) return err;
+  return new UploadRefused({
+    code: "validation_error",
+    message: `${failed ?? path} ${known.what} (${code}).`,
+    fix: known.fix,
+  });
+}
+
 // Expand a leading ~ or ~/ to the current user's home directory. Node's fs
 // does not do this itself, and ~-relative paths are the common shape a caller
 // hands to a local stdio server.
@@ -94,7 +132,9 @@ function expandHome(p: string): string {
  * realpath() throws ENOENT the moment a segment is missing, but a segment that
  * does not exist cannot be a symlink either — so the unresolved tail is safe to
  * re-append. That keeps a missing file an ordinary ENOENT from the read instead
- * of turning it into a confinement error.
+ * of turning it into a confinement error. A dangling symlink also throws
+ * ENOENT, but it does exist, and its target could appear later, so it is
+ * reported as missing rather than kept as a lexical tail.
  */
 async function realpathAsDeepAsPossible(p: string): Promise<string> {
   const tail: string[] = [];
@@ -105,6 +145,7 @@ async function realpathAsDeepAsPossible(p: string): Promise<string> {
       return tail.length > 0 ? join(real, ...tail) : real;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      if (await lstat(current).then(() => true, () => false)) throw err;
       const parent = dirname(current);
       if (parent === current) return p; // walked up to the filesystem root
       tail.unshift(basename(current));
@@ -113,10 +154,22 @@ async function realpathAsDeepAsPossible(p: string): Promise<string> {
   }
 }
 
-// The first dot-named segment of a path: ~/.ssh, ~/.aws, ~/.config, .env,
-// .git, .npmrc. Credentials and tokens live under names like these.
-function hiddenSegment(p: string): string | undefined {
-  return p.split(sep).find((s) => s.startsWith(".") && s !== "." && s !== "..");
+// The system and app-data directory a real path falls in, if any
+// (src/utils/upload-paths.ts lists them and why). Each directory is matched
+// in its lexical and its real form: on macOS /var/run is /private/var/run,
+// and a symlinked home has a different real path.
+async function sensitiveZone(target: string): Promise<string | undefined> {
+  const zones = sensitiveZones(process.platform, homedir(), process.env);
+  const real = (dir: string) => realpath(dir).catch(() => dir);
+  const resolved = await Promise.all(
+    zones.map(
+      async (z): Promise<Zone> => ({
+        dir: await real(z.dir),
+        allow: z.allow && (await Promise.all(z.allow.map(real))),
+      })
+    )
+  );
+  return zoneOf(target, [...zones, ...resolved], process.platform);
 }
 
 /**
@@ -130,11 +183,23 @@ function hiddenSegment(p: string): string | undefined {
  * - NOTION_UPLOAD_ROOT set: the path must resolve inside it, and a relative
  *   path resolves against it. NOTION_UPLOAD_ROOT=/ turns confinement off.
  * - Unset, HTTP transport: refused. The caller is remote.
- * - Unset, stdio: allowed, except a path with a dot-named segment, checked on
- *   the real path so a symlink cannot hide one. A heuristic that keeps the
- *   usual credential stores out; the root is the boundary.
+ * - Unset, stdio: allowed, except a path with a dot-named segment or under a
+ *   system or app-data directory (/proc, /dev, ~/Library, %APPDATA%),
+ *   checked on the real path so a symlink cannot hide one. A heuristic that
+ *   keeps the usual credential stores out, an MCP client's config holding
+ *   this server's NOTION_TOKEN among them; the root is the boundary.
+ *
+ * File-system errors come back as validation_error (fsRefusal).
  */
 async function resolveUploadPath(p: string): Promise<string> {
+  try {
+    return await checkUploadPath(p);
+  } catch (err) {
+    throw fsRefusal(p, err);
+  }
+}
+
+async function checkUploadPath(p: string): Promise<string> {
   const root = process.env.NOTION_UPLOAD_ROOT?.trim();
   if (!root) {
     if (getActiveTransport() === "http") {
@@ -146,12 +211,20 @@ async function resolveUploadPath(p: string): Promise<string> {
       });
     }
     const target = await realpathAsDeepAsPossible(resolve(expandHome(p)));
-    const hidden = hiddenSegment(target);
+    const hidden = dotSegment(target, process.platform);
     if (hidden) {
       throw new UploadRefused({
         code: "path_not_allowed",
         message: `Refusing to upload ${p}: the path goes through "${hidden}", and dot-named files and directories are where credentials and config live (~/.ssh, ~/.aws, .env).`,
         fix: "Copy the file out of the dot-named directory first, or set NOTION_UPLOAD_ROOT to the directory uploads may come from: inside the root, dot names are allowed.",
+      });
+    }
+    const zone = await sensitiveZone(target);
+    if (zone) {
+      throw new UploadRefused({
+        code: "path_not_allowed",
+        message: `Refusing to upload ${p}: it is under ${zone}, where the system and apps keep their state and credentials (an MCP client's config holds this server's NOTION_TOKEN).`,
+        fix: "Copy the file somewhere else first, or set NOTION_UPLOAD_ROOT to the directory uploads may come from.",
       });
     }
     return target;
@@ -178,23 +251,48 @@ type Limit = { bytes: number; tooLarge: (size: string) => OperationError };
 /**
  * Read a path source: a regular file no larger than the limit, checked before
  * a byte is read. /dev/zero or a FIFO would never end, and a huge file would
- * be in memory before any later check ran. The open is non-blocking, so a
- * path swapped for a FIFO after the stat cannot hang it, and the stat is
- * repeated on the open handle.
+ * be in memory before any later check ran.
+ *
+ * `path` is the real path the policy approved, so it is checked with lstat
+ * and opened with O_NOFOLLOW (where the platform has it): a symlink there
+ * means the file was swapped after the check. The handle's own stat must
+ * then show the same file (device and inode) as the lstat did. The open is
+ * non-blocking, so a swap to a FIFO cannot hang it. A swap of a directory
+ * above the file between the policy check and the lstat is not caught: that
+ * needs openat2(RESOLVE_NO_SYMLINKS), which Node does not expose.
  */
 async function readUploadFile(path: string, limit: Limit): Promise<Buffer> {
+  try {
+    return await readCheckedFile(path, limit);
+  } catch (err) {
+    throw fsRefusal(path, err);
+  }
+}
+
+async function readCheckedFile(path: string, limit: Limit): Promise<Buffer> {
   const notAFile = () =>
     new UploadRefused({
       code: "validation_error",
       message: `${path} is not a regular file.`,
       fix: "Pass the path of a file, not a directory, device or pipe.",
     });
-  const before = await stat(path);
+  const changed = () =>
+    new UploadRefused({
+      code: "validation_error",
+      message: `${path} changed while it was being opened.`,
+      fix: "Try again once nothing else is writing to or moving the file.",
+    });
+  const before = await lstat(path);
   if (!before.isFile()) throw notAFile();
   if (before.size > limit.bytes) throw new UploadRefused(limit.tooLarge(`${before.size} bytes`));
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  const handle = await open(path, flags).catch((err: NodeJS.ErrnoException) => {
+    // O_NOFOLLOW refuses a symlink with ELOOP (EMLINK on FreeBSD).
+    throw err.code === "ELOOP" || err.code === "EMLINK" ? changed() : err;
+  });
   try {
     const opened = await handle.stat();
+    if (opened.dev !== before.dev || opened.ino !== before.ino) throw changed();
     if (!opened.isFile()) throw notAFile();
     if (opened.size > limit.bytes) throw new UploadRefused(limit.tooLarge(`${opened.size} bytes`));
     // The cap again while reading: a file that grows after the stat is cut off.
@@ -419,7 +517,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted). Confined to NOTION_UPLOAD_ROOT when it is set. Without it, refused over the HTTP transport, and over stdio refused for paths through a dot-named file or directory (~/.ssh, .env).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it: http(s) only, public addresses only, redirects checked the same way, time-limited).\n\n`mode` is picked from the size when omitted: \"single\" up to 20 MiB, \"multi\" above. Files over NOTION_UPLOAD_MAX_BYTES (default 1 GiB) are refused before they are read; Notion's own limit is 5 MiB per file on free workspaces and 5 GiB on paid.\n\n`content_type` defaults to the type for the filename's extension; an extension the server does not know is sent as application/octet-stream and Notion resolves it from the filename.\n\nPass `attach_to` to place the file on a page in the same call — without it the result is a file_upload_id that nothing references yet.\n  • `attach_to: { block_id: \"<page-or-block-id>\", caption?: \"...\", position?: \"start\"|\"end\", after?: \"<block-id>\" }` — same placement fields as append_blocks.\n  • The block type follows the content type: image/* → image, video/* → video, audio/* → audio, application/pdf → pdf, anything else (CAD and 3D included) → file.\n  • The result then carries `block_id` and `block_type` next to `file_upload_id`. If the append fails after the upload, the error names the file_upload_id so it can be placed with append_blocks instead of re-uploaded.\n\nExample: `{ source: { type: \"path\", path: \"~/Desktop/chart.png\" }, attach_to: { block_id: \"<page-id>\", caption: \"Q3 revenue\" } }`",
+    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted). Confined to NOTION_UPLOAD_ROOT when it is set. Without it, refused over the HTTP transport, and over stdio refused for paths through a dot-named file or directory (~/.ssh, .env) or under system and app-data folders (/proc, /dev, ~/Library, %APPDATA%).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it: http(s) only, public addresses only, redirects checked the same way, time-limited).\n\n`mode` is picked from the size when omitted: \"single\" up to 20 MiB, \"multi\" above. Files over NOTION_UPLOAD_MAX_BYTES (default 1 GiB) are refused before they are read; Notion's own limit is 5 MiB per file on free workspaces and 5 GiB on paid.\n\n`content_type` defaults to the type for the filename's extension; an extension the server does not know is sent as application/octet-stream and Notion resolves it from the filename.\n\nPass `attach_to` to place the file on a page in the same call — without it the result is a file_upload_id that nothing references yet.\n  • `attach_to: { block_id: \"<page-or-block-id>\", caption?: \"...\", position?: \"start\"|\"end\", after?: \"<block-id>\" }` — same placement fields as append_blocks.\n  • The block type follows the content type: image/* → image, video/* → video, audio/* → audio, application/pdf → pdf, anything else (CAD and 3D included) → file.\n  • The result then carries `block_id` and `block_type` next to `file_upload_id`. If the append fails after the upload, the error names the file_upload_id so it can be placed with append_blocks instead of re-uploaded.\n\nExample: `{ source: { type: \"path\", path: \"~/Desktop/chart.png\" }, attach_to: { block_id: \"<page-id>\", caption: \"Q3 revenue\" } }`",
   batchable: false,
   schema: UploadFileParams,
   example: {

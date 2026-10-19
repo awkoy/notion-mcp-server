@@ -66,7 +66,8 @@ Environment:
   NOTION_BLOCKED_OPERATIONS  comma-separated blocklist (same vocabulary); wins over the allowlist
   NOTION_CONFIRM_DESTRUCTIVE true/1 asks you to confirm each destructive operation (MCP elicitation)
   NOTION_UPLOAD_ROOT         confine upload_file's path source to one directory ("/" = anywhere);
-                             unset, paths are refused over HTTP and through dot-names over stdio
+                             unset, paths are refused over HTTP, and over stdio through dot-names
+                             or under system and app-data folders (/proc, ~/Library, %APPDATA%)
   NOTION_UPLOAD_MAX_BYTES    largest file upload_file accepts (default 1073741824, 1 GiB)
   NOTION_UPLOAD_URL_TIMEOUT_MS
                              time limit for upload_file's url source, redirects included (default 30000)
