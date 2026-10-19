@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Long or deeply nested content in `create_page`, `append_blocks` and `batch_mixed_blocks`.** Notion takes at most 100 blocks in a children array, 1000 blocks per request and two levels of nesting, and the server sent all of a call's content in one request, so markdown with more than 100 top-level blocks, a list nested three deep or a table of more than 100 rows failed. The content now goes in as many requests as those limits need, in order. If a later request fails, `create_page` moves the half-written page to trash, and `append_blocks` says how many blocks it appended and the id of the last one.
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
 - The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
 
