@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import type { LookupAddress } from "node:dns";
+import type { LookupFunction } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import type {
   BatchResult,
   OperationError,
@@ -79,8 +84,17 @@ vi.mock("../src/services/notion.js", async (importOriginal) => ({
 const { fetchStub } = vi.hoisted(() => ({ fetchStub: vi.fn() }));
 vi.mock("node-fetch", () => ({ default: fetchStub }));
 
+// The url source resolves the host before it fetches, to refuse private
+// addresses. Every name resolves to a public address unless a test says not.
+const PUBLIC_IP = "93.184.215.14";
+const { lookupStub } = vi.hoisted(() => ({
+  lookupStub: vi.fn<(host: string, options: { all: true }) => Promise<LookupAddress[]>>(),
+}));
+vi.mock("node:dns/promises", () => ({ lookup: lookupStub, default: { lookup: lookupStub } }));
+
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
+import { setActiveTransport } from "../src/config/http.js";
 
 beforeAll(async () => {
   await initOperations();
@@ -90,7 +104,64 @@ beforeEach(() => {
   for (const fn of Object.values(notionStub.fileUploads)) fn.mockReset();
   notionStub.blocks.children.append.mockReset();
   fetchStub.mockReset();
+  lookupStub.mockReset();
+  lookupStub.mockResolvedValue([{ address: PUBLIC_IP, family: 4 }]);
 });
+
+// What node-fetch resolves to: headers, and the body as a Node Readable.
+function fakeResponse({
+  status = 200,
+  headers = {},
+  body = [],
+}: {
+  status?: number;
+  headers?: Record<string, string>;
+  body?: Buffer[] | Readable;
+} = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: http.STATUS_CODES[status] ?? "",
+    headers: new Headers(headers),
+    body: body instanceof Readable ? body : Readable.from(body),
+  };
+}
+
+function redirectTo(location: string, status = 302) {
+  return fakeResponse({ status, headers: { location } });
+}
+
+// A fetch that never answers on its own, only rejects when its signal aborts.
+function hangUntilAborted(_url: string, init: { signal: AbortSignal }) {
+  return new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  });
+}
+
+// Set env vars for one test; afterEach puts the old values back.
+const savedEnv = new Map<string, string | undefined>();
+function setEnv(vars: Record<string, string | undefined>) {
+  for (const [name, value] of Object.entries(vars)) {
+    if (!savedEnv.has(name)) savedEnv.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+}
+afterEach(() => {
+  for (const [name, value] of savedEnv) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  savedEnv.clear();
+  setActiveTransport("stdio");
+});
+
+const NO_PROXY_ENV = {
+  HTTPS_PROXY: undefined,
+  https_proxy: undefined,
+  HTTP_PROXY: undefined,
+  http_proxy: undefined,
+};
 
 // ──────────────────────────────────────────────────────────────────────────
 // Narrowing helpers — let TypeScript prove the shape instead of `as` casts.
@@ -183,7 +254,7 @@ describe("upload_file (single-part)", () => {
     expect(notionStub.fileUploads.complete).not.toHaveBeenCalled();
   });
 
-  it("infers content_type from the filename extension when caller omits it (Notion rejects octet-stream)", async () => {
+  it("infers content_type from the filename extension when caller omits it", async () => {
     notionStub.fileUploads.create.mockResolvedValue({
       id: "fu-inferred",
       status: "pending",
@@ -216,6 +287,17 @@ describe("upload_file (single-part)", () => {
     ["deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
     ["sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
     ["doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    ["page.html", "text/html"],
+    ["page.htm", "text/html"],
+    ["plan.dwg", "image/vnd.dwg"],
+    ["plan.dxf", "image/vnd.dxf"],
+    ["part.step", "model/step"],
+    ["part.stp", "model/step"],
+    ["part.stl", "model/stl"],
+    ["mesh.obj", "model/obj"],
+    ["scene.glb", "model/gltf-binary"],
+    ["scene.gltf", "model/gltf+json"],
+    ["PART.STL", "model/stl"],
   ])("infers content_type for %s", async (filename, expectedType) => {
     notionStub.fileUploads.create.mockResolvedValue({ id: "fu-infer" });
     notionStub.fileUploads.send.mockResolvedValue({
@@ -235,18 +317,61 @@ describe("upload_file (single-part)", () => {
     });
   });
 
-  it("returns validation_error envelope when content_type is omitted and the extension isn't on the allowlist", async () => {
+  // Since 2026-09-22 Notion reads application/octet-stream as "unspecified"
+  // and resolves the type from the extension, so an extension the server
+  // does not map is Notion's call, not a refusal here.
+  it("sends an extension the server does not map as application/octet-stream", async () => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-octet" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-octet", status: "uploaded" });
+
     const res = await dispatch("upload_file", {
       mode: "single",
       filename: "weird.xyz",
       source: { type: "base64", data: Buffer.from("x").toString("base64") },
     });
-    assertErr(res);
-    expect(res.error.code).toBe("validation_error");
-    expect(res.error.message).toContain("weird.xyz");
-    expect(res.error.fix).toContain("content_type");
-    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
-    expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+
+    assertOk(res);
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+      mode: "single_part",
+      filename: "weird.xyz",
+      content_type: "application/octet-stream",
+    });
+    const blob = sendArgs(0).file.data;
+    if (typeof blob === "string" || !(blob instanceof Blob)) {
+      throw new Error("Expected file.data to be a Blob");
+    }
+    expect(blob.type).toBe("application/octet-stream");
+  });
+
+  it.each(["README", "trailing."])(
+    "refuses %s, a filename with no extension, when content_type is omitted",
+    async (filename) => {
+      const res = await dispatch("upload_file", {
+        filename,
+        source: { type: "base64", data: Buffer.from("x").toString("base64") },
+      });
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(res.error.message).toContain(filename);
+      expect(res.error.fix).toContain("content_type");
+      expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it("takes a filename with no extension when content_type is given", async () => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-noext" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-noext", status: "uploaded" });
+    const res = await dispatch("upload_file", {
+      filename: "README",
+      content_type: "text/plain",
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+    assertOk(res);
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+      mode: "single_part",
+      filename: "README",
+      content_type: "text/plain",
+    });
   });
 });
 
@@ -345,27 +470,99 @@ describe("upload_file (multi-part)", () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────
+// upload_file: size limits
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (size limits)", () => {
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-size", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-size", status: "uploaded" });
+    notionStub.fileUploads.complete.mockResolvedValue({ id: "fu-size", status: "uploaded" });
+  });
+
+  const base64Of = (bytes: number) => Buffer.alloc(bytes).toString("base64");
+
+  it("refuses base64 over NOTION_UPLOAD_MAX_BYTES and makes no SDK calls", async () => {
+    setEnv({ NOTION_UPLOAD_MAX_BYTES: "10" });
+    const res = await dispatch("upload_file", {
+      filename: "big.pdf",
+      source: { type: "base64", data: base64Of(11) },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("too_large");
+    expect(res.error.message).toContain("11 bytes");
+    expect(res.error.fix).toContain("NOTION_UPLOAD_MAX_BYTES");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("takes a file exactly at NOTION_UPLOAD_MAX_BYTES", async () => {
+    setEnv({ NOTION_UPLOAD_MAX_BYTES: "10" });
+    const res = await dispatch("upload_file", {
+      filename: "ten.pdf",
+      source: { type: "base64", data: base64Of(10) },
+    });
+    assertOk(res);
+  });
+
+  it('holds an explicit mode: "single" to Notion\'s 20 MiB single-part limit', async () => {
+    const res = await dispatch("upload_file", {
+      mode: "single",
+      filename: "big.pdf",
+      source: { type: "base64", data: base64Of(20 * MB + 1) },
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("too_large");
+    expect(res.error.message).toContain("single-part");
+    expect(res.error.fix).toContain('mode: "multi"');
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("stays single-part up to 20 MiB when mode is omitted", async () => {
+    await dispatch("upload_file", {
+      filename: "edge.pdf",
+      source: { type: "base64", data: base64Of(20 * MB) },
+    });
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "single_part" })
+    );
+  });
+
+  it("switches to multi-part above 20 MiB when mode is omitted", async () => {
+    const res = await dispatch("upload_file", {
+      filename: "big.pdf",
+      source: { type: "base64", data: base64Of(21 * MB) },
+    });
+    assertOk(res);
+    expect(notionStub.fileUploads.create).toHaveBeenCalledWith({
+      mode: "multi_part",
+      filename: "big.pdf",
+      content_type: "application/pdf",
+      number_of_parts: 5,
+    });
+    expect(notionStub.fileUploads.send).toHaveBeenCalledTimes(5);
+    expect(notionStub.fileUploads.complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
 // upload_file: URL source
 // ──────────────────────────────────────────────────────────────────────────
 
 describe("upload_file (URL source)", () => {
+  beforeEach(() => {
+    setEnv(NO_PROXY_ENV);
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-url" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-url", status: "uploaded" });
+  });
+
+  const upload = (url: string) =>
+    dispatch("upload_file", { filename: "blob.pdf", source: { type: "url", url } });
+
   it("fetches the URL and forwards the exact bytes to fileUploads.send", async () => {
     const remoteBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x42, 0x00, 0x99]);
-    fetchStub.mockResolvedValue({
-      ok: true,
-      status: 200,
-      arrayBuffer: async () =>
-        remoteBytes.buffer.slice(
-          remoteBytes.byteOffset,
-          remoteBytes.byteOffset + remoteBytes.byteLength
-        ),
-    });
-
-    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-url" });
-    notionStub.fileUploads.send.mockResolvedValue({
-      id: "fu-url",
-      status: "uploaded",
-    });
+    fetchStub.mockResolvedValue(
+      fakeResponse({ body: [remoteBytes.subarray(0, 3), remoteBytes.subarray(3)] })
+    );
 
     const res = await dispatch("upload_file", {
       mode: "single",
@@ -376,38 +573,327 @@ describe("upload_file (URL source)", () => {
     expect(res).toMatchObject({ ok: true });
     expect(fetchStub).toHaveBeenCalledTimes(1);
     expect(fetchStub.mock.calls[0][0]).toBe("https://example.com/blob.pdf");
+    // Redirects are followed by hand, so each Location gets the same check.
+    expect(fetchStub.mock.calls[0][1]).toMatchObject({ redirect: "manual" });
+    expect(lookupStub).toHaveBeenCalledWith("example.com", { all: true });
     expect((await sendBytes(0)).equals(remoteBytes)).toBe(true);
   });
 
   it("goes through the proxy in HTTPS_PROXY, like every Notion API call", async () => {
-    const saved = process.env.HTTPS_PROXY;
-    process.env.HTTPS_PROXY = "http://proxy.local:3128";
-    try {
-      fetchStub.mockResolvedValue({
-        ok: true,
-        status: 200,
-        arrayBuffer: async () => new ArrayBuffer(4),
-      });
-      notionStub.fileUploads.create.mockResolvedValue({ id: "fu-proxy" });
-      notionStub.fileUploads.send.mockResolvedValue({
-        id: "fu-proxy",
-        status: "uploaded",
-      });
+    setEnv({ HTTPS_PROXY: "http://proxy.local:3128" });
+    fetchStub.mockResolvedValue(fakeResponse({ body: [Buffer.alloc(4)] }));
 
-      const res = await dispatch("upload_file", {
-        mode: "single",
-        filename: "blob.pdf",
-        source: { type: "url", url: "https://example.com/blob.pdf" },
-      });
+    const res = await upload("https://example.com/blob.pdf");
 
-      expect(res).toMatchObject({ ok: true });
-      const init = fetchStub.mock.calls[0][1] as { agent?: HttpsProxyAgent<string> };
-      expect(init.agent).toBeInstanceOf(HttpsProxyAgent);
-      expect(init.agent?.proxy.href).toBe("http://proxy.local:3128/");
-    } finally {
-      if (saved === undefined) delete process.env.HTTPS_PROXY;
-      else process.env.HTTPS_PROXY = saved;
+    expect(res).toMatchObject({ ok: true });
+    const init = fetchStub.mock.calls[0][1] as { agent?: HttpsProxyAgent<string> };
+    expect(init.agent).toBeInstanceOf(HttpsProxyAgent);
+    expect(init.agent?.proxy.href).toBe("http://proxy.local:3128/");
+  });
+
+  // Behind a proxy the proxy connects, so the check runs on the local DNS
+  // answer; a host that resolves to a private address is still refused.
+  it("still refuses a private host behind a proxy", async () => {
+    setEnv({ HTTPS_PROXY: "http://proxy.local:3128" });
+    lookupStub.mockResolvedValue([{ address: "10.0.0.7", family: 4 }]);
+    const res = await upload("https://intranet.example/blob.pdf");
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  // Resolving again at connect time would let a DNS server that answers
+  // differently the second time (rebinding) send the request to 127.0.0.1.
+  it("pins the connection to the address it checked", async () => {
+    lookupStub.mockResolvedValue([
+      { address: PUBLIC_IP, family: 4 },
+      { address: "2606:2800:21f:cb07:6820:80da:af6b:8b2c", family: 6 },
+    ]);
+    fetchStub.mockResolvedValue(fakeResponse({ body: [Buffer.from("x")] }));
+    await upload("https://example.com/blob.pdf");
+
+    const agent = (fetchStub.mock.calls[0][1] as { agent?: http.Agent }).agent;
+    expect(agent).toBeInstanceOf(https.Agent);
+    const { lookup } = (agent as unknown as { options: { lookup: LookupFunction } }).options;
+    const ask = (options: { family?: number; all?: boolean }) =>
+      new Promise<unknown[]>((resolve, reject) =>
+        lookup("example.com", options, (err, address, family) =>
+          err ? reject(err) : resolve([address, family])
+        )
+      );
+    expect(await ask({ family: 4 })).toEqual([PUBLIC_IP, 4]);
+    expect(await ask({ family: 6 })).toEqual(["2606:2800:21f:cb07:6820:80da:af6b:8b2c", 6]);
+    // Node's happy-eyeballs connect asks for every address at once.
+    expect(await ask({ all: true })).toEqual([
+      [
+        { address: PUBLIC_IP, family: 4 },
+        { address: "2606:2800:21f:cb07:6820:80da:af6b:8b2c", family: 6 },
+      ],
+      undefined,
+    ]);
+    expect(lookupStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins an http URL through an http agent", async () => {
+    fetchStub.mockResolvedValue(fakeResponse({ body: [Buffer.from("x")] }));
+    await upload("http://example.com/blob.pdf");
+    const agent = (fetchStub.mock.calls[0][1] as { agent?: http.Agent }).agent;
+    expect(agent).toBeInstanceOf(http.Agent);
+    expect(agent).not.toBeInstanceOf(https.Agent);
+  });
+
+  it.each([
+    "http://127.0.0.1/blob.pdf",
+    "http://127.1.2.3:8080/blob.pdf",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://10.0.0.1/blob.pdf",
+    "http://172.16.5.5/blob.pdf",
+    "http://192.168.1.10/blob.pdf",
+    "http://100.64.0.1/blob.pdf",
+    "http://0.0.0.0/blob.pdf",
+    // Other spellings of 127.0.0.1 that the URL parser turns into it.
+    "http://2130706433/blob.pdf",
+    "http://0x7f.1/blob.pdf",
+    "http://[::1]/blob.pdf",
+    "http://[::]/blob.pdf",
+    "http://[fc00::1]/blob.pdf",
+    "http://[fe80::1]/blob.pdf",
+    "http://[fd00:ec2::254]/blob.pdf",
+    "http://[::ffff:127.0.0.1]/blob.pdf",
+    "http://[::ffff:169.254.169.254]/blob.pdf",
+    "http://[64:ff9b::a00:1]/blob.pdf",
+  ])("refuses %s without fetching it", async (url) => {
+    const res = await upload(url);
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(res.error.fix).toContain("base64 or path");
+    expect(lookupStub).not.toHaveBeenCalled();
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, LookupAddress[]]>([
+    ["10.0.0.1", [{ address: "10.0.0.1", family: 4 }]],
+    ["127.0.0.1", [{ address: "127.0.0.1", family: 4 }]],
+    ["::1", [{ address: "::1", family: 6 }]],
+    // One private address among public ones is enough: the connection may use any.
+    [
+      "public and 169.254.169.254",
+      [
+        { address: PUBLIC_IP, family: 4 },
+        { address: "169.254.169.254", family: 4 },
+      ],
+    ],
+    ["no address", []],
+  ])("refuses a host that resolves to %s", async (_label, addresses) => {
+    lookupStub.mockResolvedValue(addresses);
+    const res = await upload("https://files.example/blob.pdf");
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(res.error.message).toContain("files.example");
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("reports a host that does not resolve as fetch_failed", async () => {
+    lookupStub.mockRejectedValue(
+      Object.assign(new Error("getaddrinfo ENOTFOUND nope.example"), { code: "ENOTFOUND" })
+    );
+    const res = await upload("https://nope.example/blob.pdf");
+    assertErr(res);
+    expect(res.error.code).toBe("fetch_failed");
+    expect(res.error.message).toContain("ENOTFOUND");
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it.each(["ftp://example.com/blob.pdf", "file:///etc/passwd", "gopher://example.com/blob.pdf"])(
+    "rejects %s at the schema",
+    async (url) => {
+      const res = await upload(url);
+      assertErr(res);
+      expect(res.error.code).toBe("validation_error");
+      expect(lookupStub).not.toHaveBeenCalled();
+      expect(fetchStub).not.toHaveBeenCalled();
     }
+  );
+
+  it("fetches a private host when NOTION_UPLOAD_ALLOW_PRIVATE_URLS is on", async () => {
+    setEnv({ NOTION_UPLOAD_ALLOW_PRIVATE_URLS: "true" });
+    fetchStub.mockResolvedValue(fakeResponse({ body: [Buffer.from("intranet")] }));
+    const res = await upload("http://10.0.0.1/blob.pdf");
+    assertOk(res);
+    expect(lookupStub).not.toHaveBeenCalled();
+    expect((await sendBytes(0)).toString()).toBe("intranet");
+  });
+
+  it("reports a non-2xx answer as fetch_failed", async () => {
+    const notFound = fakeResponse({ status: 404, body: [Buffer.from("nope")] });
+    fetchStub.mockResolvedValue(notFound);
+    const res = await upload("https://example.com/blob.pdf");
+    assertErr(res);
+    expect(res.error.code).toBe("fetch_failed");
+    expect(res.error.message).toContain("404 Not Found");
+    expect(notFound.body.destroyed).toBe(true);
+  });
+});
+
+describe("upload_file (URL source redirects)", () => {
+  beforeEach(() => {
+    setEnv(NO_PROXY_ENV);
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-redirect" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-redirect", status: "uploaded" });
+  });
+
+  const upload = () =>
+    dispatch("upload_file", {
+      filename: "blob.pdf",
+      source: { type: "url", url: "https://example.com/blob.pdf" },
+    });
+
+  it("follows a redirect to a public URL, a relative Location included", async () => {
+    fetchStub
+      .mockResolvedValueOnce(redirectTo("/files/real.pdf", 301))
+      .mockResolvedValueOnce(fakeResponse({ body: [Buffer.from("moved")] }));
+    const res = await upload();
+    assertOk(res);
+    expect(fetchStub.mock.calls.map((c) => c[0])).toEqual([
+      "https://example.com/blob.pdf",
+      "https://example.com/files/real.pdf",
+    ]);
+    // One deadline for the whole fetch: every hop gets the same signal.
+    expect(fetchStub.mock.calls[1][1].signal).toBe(fetchStub.mock.calls[0][1].signal);
+    expect((await sendBytes(0)).toString()).toBe("moved");
+  });
+
+  it("refuses a redirect to the metadata address after one fetch", async () => {
+    const first = redirectTo("http://169.254.169.254/latest/meta-data/iam/");
+    fetchStub.mockResolvedValueOnce(first);
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(res.error.message).toContain("169.254.169.254");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(first.body.destroyed).toBe(true);
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a redirect to a host that resolves to a private address", async () => {
+    lookupStub
+      .mockResolvedValueOnce([{ address: PUBLIC_IP, family: 4 }])
+      .mockResolvedValueOnce([{ address: "192.168.0.10", family: 4 }]);
+    fetchStub.mockResolvedValueOnce(redirectTo("https://router.example/admin"));
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(res.error.message).toContain("router.example");
+    expect(lookupStub).toHaveBeenLastCalledWith("router.example", { all: true });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a redirect to a non-http scheme", async () => {
+    fetchStub.mockResolvedValueOnce(redirectTo("file:///etc/passwd"));
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("url_refused");
+    expect(res.error.message).toContain("file:///etc/passwd");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after five redirects", async () => {
+    fetchStub.mockImplementation(async () => redirectTo("https://example.com/again"));
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("fetch_failed");
+    expect(res.error.message).toContain("more than 5");
+    expect(fetchStub).toHaveBeenCalledTimes(6);
+  });
+
+  it("reports a redirect with no Location", async () => {
+    fetchStub.mockResolvedValueOnce(fakeResponse({ status: 302 }));
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("fetch_failed");
+    expect(res.error.message).toContain("no Location");
+  });
+});
+
+describe("upload_file (URL source limits)", () => {
+  beforeEach(() => {
+    setEnv(NO_PROXY_ENV);
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-limit" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-limit", status: "uploaded" });
+  });
+
+  const upload = () =>
+    dispatch("upload_file", {
+      filename: "blob.pdf",
+      source: { type: "url", url: "https://example.com/blob.pdf" },
+    });
+
+  it("refuses a Content-Length over NOTION_UPLOAD_MAX_BYTES before reading the body", async () => {
+    setEnv({ NOTION_UPLOAD_MAX_BYTES: "10" });
+    const big = fakeResponse({ headers: { "content-length": "11" }, body: [Buffer.alloc(11)] });
+    fetchStub.mockResolvedValueOnce(big);
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("too_large");
+    expect(res.error.message).toContain("11 bytes");
+    expect(res.error.fix).toContain("NOTION_UPLOAD_MAX_BYTES");
+    expect(big.body.destroyed).toBe(true);
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  // A chunked response carries no Content-Length, and a server can lie in it.
+  it("stops reading a body the moment it passes the limit", async () => {
+    setEnv({ NOTION_UPLOAD_MAX_BYTES: "4096" });
+    let produced = 0;
+    const endless = new Readable({
+      highWaterMark: 1024,
+      read() {
+        produced += 1024;
+        this.push(Buffer.alloc(1024));
+      },
+    });
+    fetchStub.mockResolvedValueOnce(fakeResponse({ body: endless }));
+    const res = await upload();
+    assertErr(res);
+    expect(res.error.code).toBe("too_large");
+    expect(res.error.message).toContain("over 4096 bytes");
+    expect(endless.destroyed).toBe(true);
+    expect(produced).toBeLessThan(64 * 1024);
+  });
+
+  describe("timeout", () => {
+    beforeEach(() => {
+      setEnv({ NOTION_UPLOAD_URL_TIMEOUT_MS: "50" });
+    });
+
+    it("gives up on a server that never answers", async () => {
+      fetchStub.mockImplementation(hangUntilAborted);
+      const res = await upload();
+      assertErr(res);
+      expect(res.error.code).toBe("timeout");
+      expect(res.error.message).toContain("50 ms");
+      expect(res.error.fix).toContain("NOTION_UPLOAD_URL_TIMEOUT_MS");
+      expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    });
+
+    it("gives up on a body that stalls halfway", async () => {
+      const stalled = new Readable({ read() {} });
+      stalled.push(Buffer.from("partial"));
+      fetchStub.mockResolvedValueOnce(fakeResponse({ body: stalled }));
+      const res = await upload();
+      assertErr(res);
+      expect(res.error.code).toBe("timeout");
+      expect(stalled.destroyed).toBe(true);
+    });
+
+    it("gives up on a DNS lookup that never answers", async () => {
+      lookupStub.mockReturnValue(new Promise(() => {}));
+      const res = await upload();
+      assertErr(res);
+      expect(res.error.code).toBe("timeout");
+      expect(fetchStub).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -487,6 +973,122 @@ describe("upload_file (path source)", () => {
     expect((res as { ok: boolean }).ok).toBe(false);
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_file: which paths may be read
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_file (path policy)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "notion-policy-"));
+  writeFileSync(join(dir, "plain.txt"), "plain");
+  writeFileSync(join(dir, ".hidden.txt"), "hidden");
+  mkdirSync(join(dir, ".secret"));
+  writeFileSync(join(dir, ".secret", "key.txt"), "secret");
+  symlinkSync(join(dir, ".secret", "key.txt"), join(dir, "innocent.txt"));
+
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-policy", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-policy", status: "uploaded" });
+  });
+
+  const uploadPath = (path: string, filename?: string) =>
+    dispatch("upload_file", { ...(filename ? { filename } : {}), source: { type: "path", path } });
+
+  it("over HTTP, refuses a path source when NOTION_UPLOAD_ROOT is unset", async () => {
+    setActiveTransport("http");
+    const res = await uploadPath(join(dir, "plain.txt"));
+    assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(res.error.message).toContain("HTTP transport");
+    expect(res.error.fix).toContain("base64");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("over HTTP, reads a path inside NOTION_UPLOAD_ROOT", async () => {
+    setActiveTransport("http");
+    setEnv({ NOTION_UPLOAD_ROOT: dir });
+    const res = await uploadPath("plain.txt");
+    assertOk(res);
+    expect((await sendBytes(0)).toString()).toBe("plain");
+  });
+
+  it("over HTTP, still takes a base64 source with no root", async () => {
+    setActiveTransport("http");
+    const res = await dispatch("upload_file", {
+      filename: "a.txt",
+      source: { type: "base64", data: Buffer.from("x").toString("base64") },
+    });
+    assertOk(res);
+  });
+
+  it("over stdio with no root, reads an ordinary path", async () => {
+    const res = await uploadPath(join(dir, "plain.txt"));
+    assertOk(res);
+  });
+
+  it.each([
+    [".secret/key.txt", ".secret"],
+    [".hidden.txt", ".hidden.txt"],
+  ])("over stdio with no root, refuses %s, a dot-named path", async (rel, segment) => {
+    const res = await uploadPath(join(dir, rel));
+    assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(res.error.message).toContain(`"${segment}"`);
+    expect(res.error.fix).toContain("NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("over stdio, checks the real path, so a symlink cannot hide a dot directory", async () => {
+    const res = await uploadPath(join(dir, "innocent.txt"));
+    assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(res.error.message).toContain('".secret"');
+  });
+
+  it("over stdio, refuses ~/.ssh whether or not the file exists", async () => {
+    const res = await uploadPath("~/.ssh/id_ed25519");
+    assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
+    expect(res.error.message).toContain('".ssh"');
+  });
+
+  it("inside NOTION_UPLOAD_ROOT, dot names are allowed", async () => {
+    setEnv({ NOTION_UPLOAD_ROOT: dir });
+    const res = await uploadPath(".secret/key.txt");
+    assertOk(res);
+    expect((await sendBytes(0)).toString()).toBe("secret");
+  });
+
+  it("NOTION_UPLOAD_ROOT=/ lifts the restriction", async () => {
+    setEnv({ NOTION_UPLOAD_ROOT: "/" });
+    const res = await uploadPath(join(dir, ".secret", "key.txt"));
+    assertOk(res);
+  });
+
+  it("refuses a file over NOTION_UPLOAD_MAX_BYTES before reading it", async () => {
+    setEnv({ NOTION_UPLOAD_MAX_BYTES: "4" });
+    const res = await uploadPath(join(dir, "plain.txt"));
+    assertErr(res);
+    expect(res.error.code).toBe("too_large");
+    expect(res.error.message).toContain("5 bytes");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a directory", async () => {
+    const res = await uploadPath(dir, "dir.txt");
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain("not a regular file");
+  });
+
+  // /dev/zero passes any size check (its size is 0) and never ends.
+  it.skipIf(process.platform === "win32")("refuses /dev/zero", async () => {
+    const res = await uploadPath("/dev/zero", "zero.bin");
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain("not a regular file");
   });
 });
 
@@ -625,7 +1227,9 @@ describe("upload_file (upload root)", () => {
       source: { type: "path", path: join(outside, "outside.txt") },
     });
     assertErr(res);
+    expect(res.error.code).toBe("path_not_allowed");
     expect(res.error.message).toContain("outside NOTION_UPLOAD_ROOT");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
   });
 
   it("refuses a traversal out of the root", async () => {
@@ -792,6 +1396,44 @@ describe("upload_file (attach_to)", () => {
   it("infers the block type from the filename when content_type is omitted", async () => {
     await dispatch("upload_file", { filename: "clip.mp4", source, attach_to: { block_id: PAGE } });
     expect(notionStub.blocks.children.append.mock.calls[0][0].children[0].type).toBe("video");
+  });
+
+  // dwg and dxf are registered under image/, but Notion takes CAD and 3D
+  // files as file blocks.
+  it.each(["plan.dwg", "plan.dxf", "part.step", "part.stl", "mesh.obj", "scene.glb", "page.html"])(
+    "attaches %s as a file block",
+    async (filename) => {
+      const res = await dispatch("upload_file", { filename, source, attach_to: { block_id: PAGE } });
+      assertOk(res);
+      expect(res.data).toMatchObject({ block_type: "file" });
+      expect(notionStub.blocks.children.append.mock.calls[0][0].children[0].type).toBe("file");
+    }
+  );
+
+  it("for an extension the server does not map, picks the block from the type Notion resolved", async () => {
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-att",
+      status: "uploaded",
+      content_type: "audio/ogg",
+    });
+    const res = await dispatch("upload_file", {
+      filename: "track.xyz",
+      source,
+      attach_to: { block_id: PAGE },
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({ block_type: "audio" });
+  });
+
+  it("falls back to a file block when Notion does not say what it resolved", async () => {
+    notionStub.fileUploads.send.mockResolvedValue({ id: "fu-att", status: "uploaded" });
+    const res = await dispatch("upload_file", {
+      filename: "track.xyz",
+      source,
+      attach_to: { block_id: PAGE },
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({ block_type: "file" });
   });
 
   it("takes a Notion link for block_id and a block link for after", async () => {

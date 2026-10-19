@@ -1,12 +1,13 @@
 import { z } from "zod";
-import { readFile, realpath } from "node:fs/promises";
+import { constants, open, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import type { Readable } from "node:stream";
-import type { Response } from "node-fetch";
 import { getClient, proxyAwareFetch } from "../services/notion.js";
+import { bodyStream, discardBody, fetchPublicUrl } from "../services/public-fetch.js";
+import { getActiveTransport } from "../config/http.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
+import { readCapped } from "../utils/read-capped.js";
 import { slimFileUpload, slimList } from "../utils/slim.js";
 import { asSdk } from "../utils/notion-types.js";
 import type {
@@ -19,8 +20,18 @@ import { FILE_REF_PREFIX, blockFileRef, parseFileRef } from "../utils/file-ref.j
 import { notionId } from "../schema/id.js";
 import type { OperationError, OperationResult } from "./types.js";
 
-// Notion's documented per-part ceiling for multi-part uploads.
+// Part size for multi-part uploads. Notion takes parts of 5 to 20 MiB, the
+// last one smaller.
 const MAX_PART_BYTES = 5 * 1024 * 1024;
+
+// The largest file Notion takes in a single-part upload. Anything bigger has
+// to go in parts.
+const SINGLE_PART_MAX_BYTES = 20 * 1024 * 1024;
+
+// The whole file is held in memory while it is sent, so the server caps it.
+// Notion's own per-file limit is 5 MiB on free workspaces and 5 GiB on paid.
+const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_URL_TIMEOUT_MS = 30_000;
 
 const FILE_UPLOAD_STATUS = ["pending", "uploaded", "expired", "failed"] as const;
 
@@ -33,19 +44,39 @@ const SourceSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("url"),
-    url: z.url().describe("Public URL to fetch the file bytes from."),
+    url: z
+      .url({ protocol: /^https?$/ })
+      .describe("Public http(s) URL the server fetches the bytes from. Hosts that resolve to private, loopback or link-local addresses are refused, redirects included."),
   }),
   z.object({
     type: z.literal("path"),
     path: z
       .string()
       .describe(
-        "Local filesystem path (absolute, or ~-relative). The server reads the file directly — bytes never pass through the tool call, so this is the fastest, cheapest source for files on the same machine as the server."
+        "Local filesystem path (absolute, or ~-relative). The server reads the file directly — bytes never pass through the tool call, so this is the fastest, cheapest source for files on the same machine as the server. Confined to NOTION_UPLOAD_ROOT when it is set."
       ),
   }),
 ]);
 
 type Source = z.infer<typeof SourceSchema>;
+
+function positiveIntEnv(name: string, fallback: number): number {
+  const n = Number(process.env[name]?.trim() || undefined);
+  return Number.isSafeInteger(n) && n > 0 ? n : fallback;
+}
+
+function truthyEnv(name: string): boolean {
+  return ["true", "1", "yes", "on"].includes((process.env[name] ?? "").trim().toLowerCase());
+}
+
+// A source the server will not read, carrying the envelope to return. The
+// helpers below throw it and the handler turns it into { ok: false }, so a
+// refusal reads as one, not as an internal_error.
+class UploadRefused extends Error {
+  constructor(readonly error: OperationError) {
+    super(error.message);
+  }
+}
 
 // Expand a leading ~ or ~/ to the current user's home directory. Node's fs
 // does not do this itself, and ~-relative paths are the common shape a caller
@@ -62,7 +93,7 @@ function expandHome(p: string): string {
  *
  * realpath() throws ENOENT the moment a segment is missing, but a segment that
  * does not exist cannot be a symlink either — so the unresolved tail is safe to
- * re-append. That keeps a missing file an ordinary ENOENT from readFile instead
+ * re-append. That keeps a missing file an ordinary ENOENT from the read instead
  * of turning it into a confinement error.
  */
 async function realpathAsDeepAsPossible(p: string): Promise<string> {
@@ -82,19 +113,49 @@ async function realpathAsDeepAsPossible(p: string): Promise<string> {
   }
 }
 
+// The first dot-named segment of a path: ~/.ssh, ~/.aws, ~/.config, .env,
+// .git, .npmrc. Credentials and tokens live under names like these.
+function hiddenSegment(p: string): string | undefined {
+  return p.split(sep).find((s) => s.startsWith(".") && s !== "." && s !== "..");
+}
+
 /**
- * Confine a path source to NOTION_UPLOAD_ROOT when it is set.
+ * Decide whether a path source may be read, and return the real path to read.
  *
  * A path source hands the server a filename and the server reads it, so
- * whoever writes the tool call can read any file the server user can. Callers
- * that want the model to upload only from one directory set the root, and a
- * relative path then resolves inside it.
+ * whoever writes the tool call can read any file the server user can: a model
+ * following instructions it found in a page, or, over HTTP, anyone who can
+ * reach the endpoint. So:
  *
- * Unset means no confinement, which is the behavior before this existed.
+ * - NOTION_UPLOAD_ROOT set: the path must resolve inside it, and a relative
+ *   path resolves against it. NOTION_UPLOAD_ROOT=/ turns confinement off.
+ * - Unset, HTTP transport: refused. The caller is remote.
+ * - Unset, stdio: allowed, except a path with a dot-named segment, checked on
+ *   the real path so a symlink cannot hide one. A heuristic that keeps the
+ *   usual credential stores out; the root is the boundary.
  */
 async function resolveUploadPath(p: string): Promise<string> {
-  const root = process.env.NOTION_UPLOAD_ROOT;
-  if (!root) return expandHome(p);
+  const root = process.env.NOTION_UPLOAD_ROOT?.trim();
+  if (!root) {
+    if (getActiveTransport() === "http") {
+      throw new UploadRefused({
+        code: "path_not_allowed",
+        message:
+          "Path sources are off over the HTTP transport unless NOTION_UPLOAD_ROOT is set: the caller is remote, and could otherwise read any file the server can.",
+        fix: "Send the bytes as a base64 source, or ask the server's operator to set NOTION_UPLOAD_ROOT to the directory uploads may come from.",
+      });
+    }
+    const target = await realpathAsDeepAsPossible(resolve(expandHome(p)));
+    const hidden = hiddenSegment(target);
+    if (hidden) {
+      throw new UploadRefused({
+        code: "path_not_allowed",
+        message: `Refusing to upload ${p}: the path goes through "${hidden}", and dot-named files and directories are where credentials and config live (~/.ssh, ~/.aws, .env).`,
+        fix: "Copy the file out of the dot-named directory first, or set NOTION_UPLOAD_ROOT to the directory uploads may come from: inside the root, dot names are allowed.",
+      });
+    }
+    return target;
+  }
 
   // Compare real paths, not lexical ones. resolve() never touches the disk, so
   // on its own it green-lights a symlink that sits inside the root and points
@@ -103,38 +164,78 @@ async function resolveUploadPath(p: string): Promise<string> {
   const target = await realpathAsDeepAsPossible(resolve(base, expandHome(p)));
   const withSep = base.endsWith(sep) ? base : base + sep;
   if (target !== base && !target.startsWith(withSep)) {
-    throw new Error(
-      `Path is outside NOTION_UPLOAD_ROOT: ${p}. Uploads are confined to ${base}.`
-    );
+    throw new UploadRefused({
+      code: "path_not_allowed",
+      message: `Path is outside NOTION_UPLOAD_ROOT: ${p}. Uploads are confined to ${base}.`,
+      fix: "Pass a path inside the upload root, or a path relative to it.",
+    });
   }
   return target;
+}
+
+type Limit = { bytes: number; tooLarge: (size: string) => OperationError };
+
+/**
+ * Read a path source: a regular file no larger than the limit, checked before
+ * a byte is read. /dev/zero or a FIFO would never end, and a huge file would
+ * be in memory before any later check ran. The open is non-blocking, so a
+ * path swapped for a FIFO after the stat cannot hang it, and the stat is
+ * repeated on the open handle.
+ */
+async function readUploadFile(path: string, limit: Limit): Promise<Buffer> {
+  const notAFile = () =>
+    new UploadRefused({
+      code: "validation_error",
+      message: `${path} is not a regular file.`,
+      fix: "Pass the path of a file, not a directory, device or pipe.",
+    });
+  const before = await stat(path);
+  if (!before.isFile()) throw notAFile();
+  if (before.size > limit.bytes) throw new UploadRefused(limit.tooLarge(`${before.size} bytes`));
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) throw notAFile();
+    if (opened.size > limit.bytes) throw new UploadRefused(limit.tooLarge(`${opened.size} bytes`));
+    // The cap again while reading: a file that grows after the stat is cut off.
+    const bytes = await readCapped(handle.createReadStream({ autoClose: false }), limit.bytes);
+    if (!bytes) throw new UploadRefused(limit.tooLarge(`over ${limit.bytes} bytes`));
+    return bytes;
+  } finally {
+    await handle.close();
+  }
 }
 
 // Returns Uint8Array<ArrayBuffer> — the DOM Blob constructor's BlobPart type
 // rejects Uint8Array<ArrayBufferLike> under newer @types/node (it widens to
 // include SharedArrayBuffer). Allocating fresh guarantees the concrete type.
-async function resolveBytes(source: Source): Promise<Uint8Array<ArrayBuffer>> {
+async function resolveBytes(
+  source: Source,
+  resolvedPath: string | undefined,
+  limit: Limit
+): Promise<Uint8Array<ArrayBuffer>> {
+  let buf: Buffer;
   if (source.type === "base64") {
-    const buf = Buffer.from(source.data, "base64");
-    const out = new Uint8Array(buf.byteLength);
-    out.set(buf);
-    return out;
+    // The decoded size is known from the string's length, so an oversized
+    // payload is refused without decoding it.
+    const size = Buffer.byteLength(source.data, "base64");
+    if (size > limit.bytes) throw new UploadRefused(limit.tooLarge(`${size} bytes`));
+    buf = Buffer.from(source.data, "base64");
+  } else if (source.type === "path") {
+    buf = await readUploadFile(resolvedPath ?? (await resolveUploadPath(source.path)), limit);
+  } else {
+    const fetched = await fetchPublicUrl(source.url, {
+      maxBytes: limit.bytes,
+      timeoutMs: positiveIntEnv("NOTION_UPLOAD_URL_TIMEOUT_MS", DEFAULT_URL_TIMEOUT_MS),
+      allowPrivate: truthyEnv("NOTION_UPLOAD_ALLOW_PRIVATE_URLS"),
+      tooLarge: limit.tooLarge,
+    });
+    if (!fetched.ok) throw new UploadRefused(fetched.error);
+    buf = fetched.bytes;
   }
-  if (source.type === "path") {
-    const buf = await readFile(await resolveUploadPath(source.path));
-    const out = new Uint8Array(buf.byteLength);
-    out.set(buf);
-    return out;
-  }
-  // Through the proxy-aware helper, not the global fetch: behind a corporate
-  // proxy the global one cannot reach the URL at all.
-  const res = await proxyAwareFetch(source.url);
-  if (!res.ok) {
-    throw new Error(
-      `Failed to fetch ${source.url}: ${res.status} ${res.statusText}`
-    );
-  }
-  return new Uint8Array(await res.arrayBuffer());
+  const out = new Uint8Array(buf.byteLength);
+  out.set(buf);
+  return out;
 }
 
 function splitIntoParts(
@@ -151,13 +252,16 @@ function splitIntoParts(
   return parts;
 }
 
-// Notion's File Upload API requires the Blob's type on send() to match
-// the content_type stored at create(). It does NOT accept
-// application/octet-stream as a fallback. The allowlist below mirrors the
-// MIME types documented at
-// https://developers.notion.com/docs/working-with-files-and-media — when the
-// caller doesn't pass content_type, infer it from the filename extension so
-// create + send agree.
+// Notion's File Upload API requires the Blob's type on send() to match the
+// content_type stored at create(). The map below mirrors the MIME types
+// documented at https://developers.notion.com/docs/working-with-files-and-media
+// so a known extension gets its exact type, which also picks the block type
+// for attach_to. An extension not listed here is sent as
+// application/octet-stream: since 2026-09-22 Notion treats that as
+// unspecified and resolves the type from the filename's extension, rejecting
+// only extensions it does not support.
+const OCTET_STREAM = "application/octet-stream";
+
 const EXTENSION_TO_MIME: Record<string, string> = {
   // Audio
   aac: "audio/aac",
@@ -204,6 +308,8 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   webm: "video/webm",
   // Documents
   csv: "text/csv",
+  htm: "text/html",
+  html: "text/html",
   json: "application/json",
   md: "text/markdown",
   markdown: "text/markdown",
@@ -216,13 +322,38 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   xls: "application/vnd.ms-excel",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  // CAD and 3D (accepted since 2026-09-22; attached as file blocks)
+  "3dm": "application/vnd.mcneel.3dm",
+  "3mf": "model/3mf",
+  dae: "model/vnd.collada+xml",
+  dwf: "model/vnd.dwf",
+  dwg: "image/vnd.dwg",
+  dxf: "image/vnd.dxf",
+  fbx: "application/vnd.autodesk.fbx",
+  glb: "model/gltf-binary",
+  gltf: "model/gltf+json",
+  iges: "model/iges",
+  igs: "model/iges",
+  obj: "model/obj",
+  rfa: "application/vnd.autodesk.revit",
+  rvt: "application/vnd.autodesk.revit",
+  step: "model/step",
+  stl: "model/stl",
+  stp: "model/step",
+  usdz: "model/vnd.usdz+zip",
 };
 
+// The MIME type for a filename: the mapped one, octet-stream for an extension
+// the map lacks (Notion resolves it), undefined for no extension at all.
 function inferContentType(filename: string): string | undefined {
   const dot = filename.lastIndexOf(".");
   if (dot < 0 || dot === filename.length - 1) return undefined;
   const ext = filename.slice(dot + 1).toLowerCase();
-  return EXTENSION_TO_MIME[ext];
+  return EXTENSION_TO_MIME[ext] ?? OCTET_STREAM;
+}
+
+function isOctetStream(contentType: string): boolean {
+  return contentType.split(";")[0].trim().toLowerCase() === OCTET_STREAM;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -234,11 +365,15 @@ function inferContentType(filename: string): string | undefined {
 // use a video in an image block"). Its supported-types table groups formats
 // by the same MIME families, so the prefix is the rule: image/* covers svg,
 // webp, avif and ico as well as png/jpeg; video/* covers webm, mkv and 3gp;
-// audio/* covers flac, opus and weba.
+// audio/* covers flac, opus and weba. The exception is CAD: dwg and dxf are
+// registered under image/, but Notion attaches CAD and 3D files as file blocks.
 type MediaBlockType = "image" | "video" | "audio" | "pdf" | "file";
 
+const CAD_IMAGE_TYPES = new Set(["image/vnd.dwg", "image/vnd.dxf"]);
+
 function blockTypeFor(contentType: string): MediaBlockType {
-  const type = contentType.toLowerCase();
+  const type = contentType.split(";")[0].trim().toLowerCase();
+  if (CAD_IMAGE_TYPES.has(type)) return "file";
   if (type.startsWith("image/")) return "image";
   if (type.startsWith("video/")) return "video";
   if (type.startsWith("audio/")) return "audio";
@@ -262,7 +397,7 @@ const UploadFileParams = z.object({
   mode: z
     .enum(["single", "multi"])
     .optional()
-    .describe("'single' (default) = one create+send call. 'multi' = chunk into 5MB parts then complete."),
+    .describe("Omit to pick by size: 'single' (one create+send call) up to 20 MiB, 'multi' (5 MiB parts, then complete) above."),
   attach_to: AttachToSchema.optional().describe(
     "Append the file to a page as a block, in the same call. Without this, upload_file returns a file_upload_id and nothing references it."
   ),
@@ -272,7 +407,10 @@ const UploadFileParams = z.object({
     .describe(
       "Required for base64 and url sources. Optional for a path source — defaults to the file's basename."
     ),
-  content_type: z.string().optional(),
+  content_type: z
+    .string()
+    .optional()
+    .describe("Defaults to the type for the filename's extension. An extension the server does not know is sent as application/octet-stream, and Notion resolves it."),
   source: SourceSchema,
 });
 
@@ -281,7 +419,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it server-side).\n\n`mode` defaults to \"single\"; only pass \"multi\" for files larger than ~5MB.\n\nPass `attach_to` to place the file on a page in the same call — without it the result is a file_upload_id that nothing references yet.\n  • `attach_to: { block_id: \"<page-or-block-id>\", caption?: \"...\", position?: \"start\"|\"end\", after?: \"<block-id>\" }` — same placement fields as append_blocks.\n  • The block type follows the content type: image/* → image, video/* → video, audio/* → audio, application/pdf → pdf, anything else → file.\n  • The result then carries `block_id` and `block_type` next to `file_upload_id`. If the append fails after the upload, the error names the file_upload_id so it can be placed with append_blocks instead of re-uploaded.\n\nExample: `{ source: { type: \"path\", path: \"~/Desktop/chart.png\" }, attach_to: { block_id: \"<page-id>\", caption: \"Q3 revenue\" } }`",
+    "Upload a file via Notion's file_uploads API. Handles single-part (one create + one send) and multi-part (create + N sends + complete) transparently.\n\nSource shapes:\n  • Local path:   `source: { type: \"path\", path: \"/abs/or/~/file.pdf\" }` (server reads the file directly — preferred for local files; filename is derived from the path if omitted). Confined to NOTION_UPLOAD_ROOT when it is set. Without it, refused over the HTTP transport, and over stdio refused for paths through a dot-named file or directory (~/.ssh, .env).\n  • Base64 bytes: `source: { type: \"base64\", data: \"<b64 string>\" }`\n  • Public URL:   `source: { type: \"url\", url: \"https://example.com/file.pdf\" }` (the server fetches it: http(s) only, public addresses only, redirects checked the same way, time-limited).\n\n`mode` is picked from the size when omitted: \"single\" up to 20 MiB, \"multi\" above. Files over NOTION_UPLOAD_MAX_BYTES (default 1 GiB) are refused before they are read; Notion's own limit is 5 MiB per file on free workspaces and 5 GiB on paid.\n\n`content_type` defaults to the type for the filename's extension; an extension the server does not know is sent as application/octet-stream and Notion resolves it from the filename.\n\nPass `attach_to` to place the file on a page in the same call — without it the result is a file_upload_id that nothing references yet.\n  • `attach_to: { block_id: \"<page-or-block-id>\", caption?: \"...\", position?: \"start\"|\"end\", after?: \"<block-id>\" }` — same placement fields as append_blocks.\n  • The block type follows the content type: image/* → image, video/* → video, audio/* → audio, application/pdf → pdf, anything else (CAD and 3D included) → file.\n  • The result then carries `block_id` and `block_type` next to `file_upload_id`. If the append fails after the upload, the error names the file_upload_id so it can be placed with append_blocks instead of re-uploaded.\n\nExample: `{ source: { type: \"path\", path: \"~/Desktop/chart.png\" }, attach_to: { block_id: \"<page-id>\", caption: \"Q3 revenue\" } }`",
   batchable: false,
   schema: UploadFileParams,
   example: {
@@ -289,156 +427,196 @@ register({
     content_type: "application/pdf",
     source: { type: "base64", data: "JVBERi0xLjQK..." },
   },
-  handler: tryHandler(async ({ mode, filename, content_type, source, attach_to }) => {
-    const effectiveMode = mode ?? "single";
-    // A path source carries its own name; fall back to the basename when the
-    // caller doesn't pass filename explicitly. base64/url have no name to
-    // derive, so filename stays required there.
-    const effectiveFilename =
-      filename ??
-      (source.type === "path"
-        ? basename(await resolveUploadPath(source.path))
-        : undefined);
-    if (!effectiveFilename) {
-      return {
-        ok: false,
-        error: {
-          code: "validation_error",
-          message:
-            "filename is required for base64 and url sources (there is no name to derive).",
-          fix: 'Pass `filename` (e.g. "report.pdf"), or use a path source to derive it from the path.',
-        },
-      };
+  handler: tryHandler(async (params) => {
+    try {
+      return await uploadFile(params);
+    } catch (err) {
+      if (err instanceof UploadRefused) return { ok: false, error: err.error };
+      throw err;
     }
-    const notion = await getClient();
-    const bytes = await resolveBytes(source);
-    // Notion rejects send() when the Blob's MIME doesn't match the
-    // content_type stored at create(), and rejects application/octet-stream
-    // outright. Resolve a single MIME for both sides: caller's content_type
-    // wins, else infer from the filename extension.
-    const effectiveType = content_type ?? inferContentType(effectiveFilename);
-    if (!effectiveType) {
-      return {
-        ok: false,
-        error: {
-          code: "validation_error",
-          message: `Could not infer content_type from filename "${effectiveFilename}". Notion's File Upload API rejects application/octet-stream and only accepts a fixed allowlist of MIME types.`,
-          fix: "Pass `content_type` explicitly (e.g. \"application/pdf\", \"image/png\", \"text/plain\"). See https://developers.notion.com/docs/working-with-files-and-media for the full list.",
-        },
-      };
-    }
-
-    // Both modes end the same way: slim the upload, and append a block for it
-    // when the caller asked for one.
-    const finish = async (
-      uploaded: Parameters<typeof slimFileUpload>[0]
-    ): Promise<OperationResult> => {
-      const data = slimFileUpload(uploaded);
-      if (!attach_to) return { ok: true, data };
-      const kind = blockTypeFor(effectiveType);
-      const block = {
-        object: "block",
-        type: kind,
-        [kind]: {
-          type: "file_upload",
-          file_upload: { id: uploaded.id },
-          ...(attach_to.caption
-            ? { caption: [{ type: "text", text: { content: attach_to.caption } }] }
-            : {}),
-        },
-      };
-      // Same placement rule as append_blocks.
-      const position = attach_to.position
-        ? { type: attach_to.position }
-        : attach_to.after
-          ? { type: "after_block" as const, after_block: { id: attach_to.after } }
-          : undefined;
-      try {
-        const appended = await notion.blocks.children.append(
-          asSdk<AppendBlockBody>({
-            block_id: attach_to.block_id,
-            children: asSdk<AppendBlockChildren>([block]),
-            ...(position ? { position } : {}),
-          })
-        );
-        // Notion returns just the new block for end/after, but the full child
-        // set for position "start" — the new block comes first either way.
-        return {
-          ok: true,
-          data: { ...data, block_id: appended.results[0]?.id, block_type: kind },
-        };
-      } catch (err) {
-        // The upload itself succeeded and its id is still usable. A thrown
-        // error would hide that, and the caller would upload the same bytes
-        // again to get an id it already has.
-        const reason = err instanceof Error ? err.message : String(err);
-        return {
-          ok: false,
-          error: {
-            code: "attach_failed",
-            message: `Uploaded as file_upload_id ${uploaded.id}, but appending a ${kind} block to ${attach_to.block_id} failed: ${reason}`,
-            fix: `The upload is done — do not re-upload. Place it with append_blocks: { block_id: "${attach_to.block_id}", children: [{ type: "${kind}", ${kind}: { type: "file_upload", file_upload: { id: "${uploaded.id}" } } }] }`,
-          },
-        };
-      }
-    };
-
-    if (effectiveMode === "single") {
-      const createBody: CreateFileUploadBody = {
-        mode: "single_part",
-        filename: effectiveFilename,
-        content_type: effectiveType,
-      };
-      const created = await notion.fileUploads.create(createBody);
-      const sendBody: SendFileUploadBody = {
-        file_upload_id: created.id,
-        file: {
-          filename: effectiveFilename,
-          data: new Blob([bytes], { type: effectiveType }),
-        },
-      };
-      const sent = await notion.fileUploads.send(sendBody);
-      return finish(sent);
-    }
-
-    const parts = splitIntoParts(bytes);
-    const createBody: CreateFileUploadBody = {
-      mode: "multi_part",
-      filename: effectiveFilename,
-      content_type: effectiveType,
-      number_of_parts: parts.length,
-    };
-    const created = await notion.fileUploads.create(createBody);
-
-    for (const [index, part] of parts.entries()) {
-      const partNumber = index + 1;
-      const sendBody: SendFileUploadBody = {
-        file_upload_id: created.id,
-        file: {
-          filename: effectiveFilename,
-          data: new Blob([part], { type: effectiveType }),
-        },
-        part_number: String(partNumber),
-      };
-      try {
-        await notion.fileUploads.send(sendBody);
-      } catch (err) {
-        // Notion has no abort endpoint — the upload object expires on its
-        // own. Surface part number + upload id so the caller can either
-        // retry the upload from scratch or look up the dangling object.
-        const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Multi-part upload ${created.id} failed on part ${partNumber}/${parts.length}: ${reason}. The upload object will expire automatically; re-call upload_file to retry.`
-        );
-      }
-    }
-
-    const completed = await notion.fileUploads.complete({
-      file_upload_id: created.id,
-    });
-    return finish(completed);
   }),
 });
+
+async function uploadFile({
+  mode,
+  filename,
+  content_type,
+  source,
+  attach_to,
+}: z.infer<typeof UploadFileParams>): Promise<OperationResult> {
+  // Resolved once: the policy check, the default filename and the read all
+  // use the same real path.
+  const resolvedPath =
+    source.type === "path" ? await resolveUploadPath(source.path) : undefined;
+  // A path source carries its own name; fall back to the basename when the
+  // caller doesn't pass filename explicitly. base64/url have no name to
+  // derive, so filename stays required there.
+  const effectiveFilename = filename ?? (resolvedPath ? basename(resolvedPath) : undefined);
+  if (!effectiveFilename) {
+    return {
+      ok: false,
+      error: {
+        code: "validation_error",
+        message:
+          "filename is required for base64 and url sources (there is no name to derive).",
+        fix: 'Pass `filename` (e.g. "report.pdf"), or use a path source to derive it from the path.',
+      },
+    };
+  }
+  // Notion rejects send() when the Blob's MIME doesn't match the
+  // content_type stored at create(). Resolve a single MIME for both sides:
+  // caller's content_type wins, else infer from the filename extension.
+  // Checked before any bytes are read or fetched.
+  const effectiveType = content_type ?? inferContentType(effectiveFilename);
+  if (!effectiveType) {
+    return {
+      ok: false,
+      error: {
+        code: "validation_error",
+        message: `Could not infer content_type from filename "${effectiveFilename}": it has no extension, and Notion resolves the type from one or the other.`,
+        fix: "Give `filename` its extension (e.g. \"report.pdf\"), or pass `content_type` explicitly (e.g. \"application/pdf\"). See https://developers.notion.com/docs/working-with-files-and-media for the supported types.",
+      },
+    };
+  }
+
+  // An explicit "single" is held to Notion's single-part limit; otherwise
+  // the mode follows the size and only the server's own cap applies.
+  const maxBytes = positiveIntEnv("NOTION_UPLOAD_MAX_BYTES", DEFAULT_MAX_UPLOAD_BYTES);
+  const singleCapped = mode === "single" && SINGLE_PART_MAX_BYTES < maxBytes;
+  const limit: Limit = {
+    bytes: singleCapped ? SINGLE_PART_MAX_BYTES : maxBytes,
+    tooLarge: (size) =>
+      singleCapped
+        ? {
+            code: "too_large",
+            message: `${effectiveFilename} is ${size}, over Notion's ${SINGLE_PART_MAX_BYTES} byte (20 MiB) limit for a single-part upload.`,
+            fix: 'Omit `mode` (the size picks it) or pass mode: "multi".',
+          }
+        : {
+            code: "too_large",
+            message: `${effectiveFilename} is ${size}, over this server's upload limit of ${maxBytes} bytes.`,
+            fix: "The server operator can raise NOTION_UPLOAD_MAX_BYTES. Notion itself takes up to 5 MiB per file on free workspaces and 5 GiB on paid.",
+          },
+  };
+
+  const notion = await getClient();
+  const bytes = await resolveBytes(source, resolvedPath, limit);
+  const effectiveMode = mode ?? (bytes.byteLength > SINGLE_PART_MAX_BYTES ? "multi" : "single");
+
+  // Both modes end the same way: slim the upload, and append a block for it
+  // when the caller asked for one.
+  const finish = async (
+    uploaded: Parameters<typeof slimFileUpload>[0]
+  ): Promise<OperationResult> => {
+    const data = slimFileUpload(uploaded);
+    if (!attach_to) return { ok: true, data };
+    // For octet-stream, the type Notion resolved from the extension is the
+    // one the block has to match.
+    const kind = blockTypeFor(
+      isOctetStream(effectiveType) && uploaded.content_type ? uploaded.content_type : effectiveType
+    );
+    const block = {
+      object: "block",
+      type: kind,
+      [kind]: {
+        type: "file_upload",
+        file_upload: { id: uploaded.id },
+        ...(attach_to.caption
+          ? { caption: [{ type: "text", text: { content: attach_to.caption } }] }
+          : {}),
+      },
+    };
+    // Same placement rule as append_blocks.
+    const position = attach_to.position
+      ? { type: attach_to.position }
+      : attach_to.after
+        ? { type: "after_block" as const, after_block: { id: attach_to.after } }
+        : undefined;
+    try {
+      const appended = await notion.blocks.children.append(
+        asSdk<AppendBlockBody>({
+          block_id: attach_to.block_id,
+          children: asSdk<AppendBlockChildren>([block]),
+          ...(position ? { position } : {}),
+        })
+      );
+      // Notion returns just the new block for end/after, but the full child
+      // set for position "start" — the new block comes first either way.
+      return {
+        ok: true,
+        data: { ...data, block_id: appended.results[0]?.id, block_type: kind },
+      };
+    } catch (err) {
+      // The upload itself succeeded and its id is still usable. A thrown
+      // error would hide that, and the caller would upload the same bytes
+      // again to get an id it already has.
+      const reason = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        error: {
+          code: "attach_failed",
+          message: `Uploaded as file_upload_id ${uploaded.id}, but appending a ${kind} block to ${attach_to.block_id} failed: ${reason}`,
+          fix: `The upload is done — do not re-upload. Place it with append_blocks: { block_id: "${attach_to.block_id}", children: [{ type: "${kind}", ${kind}: { type: "file_upload", file_upload: { id: "${uploaded.id}" } } }] }`,
+        },
+      };
+    }
+  };
+
+  if (effectiveMode === "single") {
+    const createBody: CreateFileUploadBody = {
+      mode: "single_part",
+      filename: effectiveFilename,
+      content_type: effectiveType,
+    };
+    const created = await notion.fileUploads.create(createBody);
+    const sendBody: SendFileUploadBody = {
+      file_upload_id: created.id,
+      file: {
+        filename: effectiveFilename,
+        data: new Blob([bytes], { type: effectiveType }),
+      },
+    };
+    const sent = await notion.fileUploads.send(sendBody);
+    return finish(sent);
+  }
+
+  const parts = splitIntoParts(bytes);
+  const createBody: CreateFileUploadBody = {
+    mode: "multi_part",
+    filename: effectiveFilename,
+    content_type: effectiveType,
+    number_of_parts: parts.length,
+  };
+  const created = await notion.fileUploads.create(createBody);
+
+  for (const [index, part] of parts.entries()) {
+    const partNumber = index + 1;
+    const sendBody: SendFileUploadBody = {
+      file_upload_id: created.id,
+      file: {
+        filename: effectiveFilename,
+        data: new Blob([part], { type: effectiveType }),
+      },
+      part_number: String(partNumber),
+    };
+    try {
+      await notion.fileUploads.send(sendBody);
+    } catch (err) {
+      // Notion has no abort endpoint — the upload object expires on its
+      // own. Surface part number + upload id so the caller can either
+      // retry the upload from scratch or look up the dangling object.
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Multi-part upload ${created.id} failed on part ${partNumber}/${parts.length}: ${reason}. The upload object will expire automatically; re-call upload_file to retry.`
+      );
+    }
+  }
+
+  const completed = await notion.fileUploads.complete({
+    file_upload_id: created.id,
+  });
+  return finish(completed);
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // list_file_uploads
@@ -606,42 +784,6 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 function imageMimeType(contentType: string | null): string | undefined {
   const type = contentType?.split(";")[0].trim().toLowerCase();
   return type && type.startsWith("image/") ? type : undefined;
-}
-
-// node-fetch types the body as NodeJS.ReadableStream; at runtime it is a Node
-// Readable, which is what destroy() and async iteration below need.
-function bodyStream(res: Response): Readable | null {
-  return res.body as Readable | null;
-}
-
-// Drop a body we will not read, so the socket goes back to the pool (or is
-// closed) instead of sitting there until the response is garbage-collected.
-function discardBody(res: Response): void {
-  bodyStream(res)?.destroy();
-}
-
-// Read the body in chunks with a running total and stop the moment it passes
-// the cap. arrayBuffer() would hold the whole response in memory before the
-// size could be checked, and a chunked response carries no content-length.
-async function readCapped(
-  body: Readable | null,
-  max: number
-): Promise<Buffer | undefined> {
-  if (!body) return Buffer.alloc(0);
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of body) {
-    const buf: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buf.byteLength;
-    if (total > max) {
-      // Returning from inside for-await also destroys the stream; doing it
-      // explicitly keeps the intent visible.
-      body.destroy();
-      return undefined;
-    }
-    chunks.push(buf);
-  }
-  return Buffer.concat(chunks);
 }
 
 const tooLarge = (size: string): OperationError => ({
