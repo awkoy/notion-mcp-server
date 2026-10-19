@@ -53,8 +53,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           # The io.modelcontextprotocol.server.name label lets the official MCP
-          # registry verify image ownership if we later add an OCI package to
-          # server.json.
+          # registry verify that we own the image, which server.json lists as
+          # an OCI package. Without it, publish-npm.yml's registry step fails.
           labels: |
             ${{ steps.meta.outputs.labels }}
             io.modelcontextprotocol.server.name=io.github.awkoy/notion-mcp-server

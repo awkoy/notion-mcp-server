@@ -1,6 +1,6 @@
 # Tools, calls and resources
 
-The [README](../README.md#tools-and-operations) lists the 47 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
+The [README](../README.md#tools-and-operations) lists the 46 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
 
 ## Three tools
 

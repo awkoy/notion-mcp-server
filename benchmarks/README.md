@@ -36,7 +36,7 @@ Re-measured 2026-09-21: this server at v3.1.0 against `@notionhq/notion-mcp-serv
 
 **94.1% smaller — 17.1× less** context spent on tool schemas at connection.
 
-The official server front-loads all 24 endpoint schemas whether or not you use them. This server exposes three tools — `notion_read` and `notion_write` (which between them dispatch every operation, each carrying an enum of its operation names) and `notion_describe` (returns any operation's schema on demand) — so the full operation catalog never sits in context. The two enums are ~330 of the 1,005 tokens: that is what naming all 48 operations up front costs.
+The official server front-loads all 24 endpoint schemas whether or not you use them. This server exposes three tools — `notion_read` and `notion_write` (which between them dispatch every operation, each carrying an enum of its operation names) and `notion_describe` (returns any operation's schema on demand) — so the full operation catalog never sits in context. The two enums are ~330 of the 1,005 tokens: that is what naming all 46 operations and their two aliases up front costs.
 
 ### Realistic sessions — static 1,005 + `notion_describe` only for operations actually used
 
@@ -55,7 +55,7 @@ Often the agent skips `describe` entirely — `notion_read` / `notion_write` ret
 
 ### Honest worst case
 
-Describing **all 48 operations** costs 27,134 tokens on top of the static 1,005, so 28,139 in total — more than the official server's 17,163. An agent that enumerates the catalog loses this trade outright. The design pays only for what a task touches, while the official server pays its full 17,163 on every connection regardless. Note also this server covers **47 operations (plus one alias) vs. the official 24 endpoints**, with richer per-operation schemas (batch semantics, idempotency), so even per-operation the payloads aren't strictly like-for-like.
+Describing **all 48 operation names** (46 operations and two aliases) costs 27,134 tokens on top of the static 1,005, so 28,139 in total — more than the official server's 17,163. An agent that enumerates the catalog loses this trade outright. The design pays only for what a task touches, while the official server pays its full 17,163 on every connection regardless. Note also this server covers **46 operations (plus two aliases) vs. the official 24 endpoints**, with richer per-operation schemas (batch semantics, idempotency), so even per-operation the payloads aren't strictly like-for-like.
 
 ## Part 2 — the responses
 

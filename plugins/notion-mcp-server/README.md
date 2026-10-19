@@ -65,6 +65,16 @@ mkdir -p ~/.cursor/plugins/local && cp -R notion-mcp-server/plugins/notion-mcp-s
 
 To update, pull the clone and copy the folder again. The plugin declares one variable, `NOTION_TOKEN`. Set it where Cursor offers plugin settings, or export `NOTION_TOKEN` in your shell profile and restart Cursor, which then reads it from its environment. If neither is set, the server gets the literal text `${NOTION_TOKEN}` and reports an invalid token. Optional `NOTION_PAGE_ID` and `NOTION_READ_ONLY=true` are read from the same environment.
 
+## If the server fails to start after an update
+
+npm can refuse to install versions younger than a set age: the `min-release-age` setting (npm 11.10 and later, in days) or `before` (a date). The plugin runs one exact version, so if your npm config sets either, the server fails to start for the first days after each plugin update, and `/mcp` shows it as failed. Run the plugin's `npx` command in a terminal to see the cause. npm prints `npm error notarget No matching version found for notion-mcp-server@<version> with a date before …`.
+
+The error clears once the release is older than your setting. On npm 12 you can exempt just this package instead, with this line in `~/.npmrc`:
+
+```ini
+min-release-age-exclude=notion-mcp-server
+```
+
 ## Data and privacy
 
 The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. In Codex or Cursor, it goes to that app's model provider under that app's terms. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).

@@ -10,10 +10,20 @@ const read = (file: string) => JSON.parse(readFileSync(new URL(`../${file}`, imp
 describe("distribution manifests", () => {
   const pkg = read("package.json");
 
+  // The registry rejects a `version` field on an OCI package; its image tag
+  // carries the version instead.
   it("server.json carries the package version", () => {
     const server = read("server.json");
     expect(server.version).toBe(pkg.version);
-    for (const p of server.packages) expect(p.version).toBe(pkg.version);
+    for (const p of server.packages) {
+      if (p.registryType === "oci") {
+        expect(p.version).toBeUndefined();
+        expect(p.identifier).toBe(`ghcr.io/awkoy/notion-mcp-server:${pkg.version}`);
+      } else {
+        expect(p.version).toBe(pkg.version);
+      }
+    }
+    expect(server.packages.map((p: { registryType: string }) => p.registryType)).toEqual(["npm", "oci"]);
   });
 
   it("gemini-extension.json carries the package version and starts the npm package", () => {
