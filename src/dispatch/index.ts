@@ -9,10 +9,9 @@ import type {
 } from "../operations/types.js";
 import { buildKey, lookup, store } from "./idempotency.js";
 import { mapWithConcurrency } from "./concurrency.js";
-import { retryPolicy, withRetry } from "./retry.js";
-import { withWriteLog } from "../services/write-log.js";
+import { withCallContext } from "../services/call-context.js";
 import { buildValidationError } from "../utils/learning-error.js";
-import { toErrorEnvelope } from "../utils/error.js";
+import { partlyAppliedError, toErrorEnvelope } from "../utils/error.js";
 import {
   isOperationAllowed,
   operationNotAllowedError,
@@ -150,17 +149,25 @@ export async function dispatch(
   return runSingle(def, payload);
 }
 
-// Run the handler, retrying transient failures as retryPolicy allows for the
-// operation's access (writes only on 429/529, and only before anything was
-// written). The shared rate limiter paces each Notion request the handler
-// sends, retries included (see PacedClient in services/notion.ts).
+// Run the handler once. Each Notion request it sends is paced and retried on
+// its own (PacedClient in services/notion.ts), so the handler is never run
+// again. A write that fails after one of its requests changed something in
+// Notion says so in its error, so the model does not repeat the whole call.
 function runHandlerWithLimitAndRetry(
   def: OperationDef,
   params: unknown
 ): Promise<OperationResult> {
-  return withWriteLog((writes) =>
-    withRetry(() => def.handler(params), retryPolicy(def.access, writes))
-  );
+  return withCallContext(def.access, async (call) => {
+    const partly = () => def.access === "write" && call.wrote;
+    try {
+      const result = await def.handler(params);
+      if (result.ok || !partly()) return result;
+      return { ...result, error: partlyAppliedError(result.error) };
+    } catch (error) {
+      if (!partly()) throw error;
+      return { ok: false, error: partlyAppliedError(toErrorEnvelope(error)) };
+    }
+  });
 }
 
 async function runSingle(

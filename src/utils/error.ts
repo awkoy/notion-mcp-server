@@ -1,7 +1,6 @@
 import { APIResponseError } from "@notionhq/client";
 import { AuthError } from "../services/auth.js";
 import type { OperationError } from "../operations/types.js";
-import { readRetryAfterMs } from "./retry-after.js";
 
 /**
  * Error codes from Notion API
@@ -36,10 +35,9 @@ export enum NotionErrorCode {
  * Codes that indicate a transient failure, where trying again may succeed.
  * Only 429 and 529 mean Notion turned the request away without running it.
  * A 500, 503 or 504 does not: the request may have run, and Notion's docs say
- * a write "may still have been saved". So these are safe to retry only for
- * reads; writes retry on RETRYABLE_WRITE_CODES alone.
- * Shared by the dispatch retry wrapper and any caller that wants to classify
- * an error envelope without re-encoding the same rules.
+ * a write "may still have been saved". So these are safe to retry only for a
+ * request that is safe to repeat (see requestRetryOpts in dispatch/retry.ts);
+ * a write's request retries on RETRYABLE_WRITE_CODES alone.
  */
 export const RETRYABLE_NOTION_CODES: ReadonlySet<NotionErrorCode> = new Set([
   NotionErrorCode.RateLimited,
@@ -66,15 +64,6 @@ export function isRetryableNotionCode(code: string | undefined): boolean {
 
 export function isRetryableWriteCode(code: string | undefined): boolean {
   return code !== undefined && (RETRYABLE_WRITE_CODES as ReadonlySet<string>).has(code);
-}
-
-// The wait Notion asked for on the error an envelope was built from. Kept
-// beside the envelope rather than on it, because the envelope goes to the
-// model as-is; dispatch reads it to time the next attempt.
-const retryAfterByEnvelope = new WeakMap<OperationError, number>();
-
-export function envelopeRetryAfterMs(error: OperationError): number | null {
-  return retryAfterByEnvelope.get(error) ?? null;
 }
 
 type ErrorEntry = { message: string; fix?: string };
@@ -170,7 +159,7 @@ export function toErrorEnvelope(error: unknown): OperationError {
   if (error instanceof APIResponseError) {
     const entry = lookup(error.code);
     const body = (error as APIResponseError & { body?: unknown }).body;
-    const envelope: OperationError = {
+    return {
       code: error.code,
       message: entry.message + (error.message && error.message !== entry.message ? ` (${error.message})` : ""),
       ...(entry.fix ? { fix: entry.fix } : {}),
@@ -178,9 +167,6 @@ export function toErrorEnvelope(error: unknown): OperationError {
         ? { path: extractValidationPath(body) }
         : {}),
     };
-    const retryAfterMs = readRetryAfterMs(error);
-    if (retryAfterMs !== null) retryAfterByEnvelope.set(envelope, retryAfterMs);
-    return envelope;
   }
   if (error instanceof AuthError) {
     return {
@@ -193,6 +179,18 @@ export function toErrorEnvelope(error: unknown): OperationError {
     return { code: "internal_error", message: error.message };
   }
   return { code: "unknown_error", message: String(error) };
+}
+
+// The error of a write that failed after one of its requests had already
+// changed something in Notion (an append of batch_mixed_blocks, the create
+// step of upload_file). Repeating the whole call can apply that part twice.
+export function partlyAppliedError(error: OperationError): OperationError {
+  const fix = "Read the target back to see what was saved, then repeat only the part that is missing: running the whole call again can apply the saved part twice.";
+  return {
+    ...error,
+    message: `${error.message} Part of this call was already applied in Notion before it failed.`,
+    fix: error.fix ? `${fix} ${error.fix}` : fix,
+  };
 }
 
 function extractValidationPath(body: unknown): (string | number)[] | undefined {

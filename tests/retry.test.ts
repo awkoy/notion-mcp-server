@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { z } from "zod";
 import {
   APIErrorCode,
@@ -12,21 +12,16 @@ import {
   isRetryableErrorCode,
   isRetryableSdkError,
   isRetryableSdkWriteError,
+  requestRetryOpts,
   withRetry,
 } from "../src/dispatch/retry.js";
 import { register } from "../src/operations/registry.js";
-import type {
-  OperationAccess,
-  OperationDef,
-  OperationName,
-  OperationResult,
-} from "../src/operations/types.js";
+import type { OperationName, OperationResult } from "../src/operations/types.js";
 import { dispatch } from "../src/dispatch/index.js";
 import { configureOperationAccess } from "../src/operations/access.js";
-import { configureRateLimiter } from "../src/dispatch/rate-limit.js";
 import { NotionErrorCode, toErrorEnvelope } from "../src/utils/error.js";
-import { readRetryAfterMs } from "../src/utils/retry-after.js";
-import { markWrite } from "../src/services/write-log.js";
+import { parseRetryAfter, readRetryAfterMs } from "../src/utils/retry-after.js";
+import { markWrite } from "../src/services/call-context.js";
 
 const RETRY_AFTER_HEADER = "retry-after";
 
@@ -211,7 +206,7 @@ describe("withRetry — SDK errors", () => {
     expect(Date.now() - start).toBeGreaterThanOrEqual(RETRY_AFTER_SECONDS * 1000 * 0.8);
   });
 
-  it("gives up at once when Retry-After is longer than maxRetryAfterMs", async () => {
+  it("gives up at once when Retry-After would run past the budget", async () => {
     let calls = 0;
     const start = Date.now();
     await expect(
@@ -220,12 +215,55 @@ describe("withRetry — SDK errors", () => {
         throw makeApiError({
           code: APIErrorCode.RateLimited,
           status: 429,
-          headers: { [RETRY_AFTER_HEADER]: "120" },
+          headers: { [RETRY_AFTER_HEADER]: "61" },
         });
-      }, { ...FAST_OPTS, maxRetryAfterMs: 60_000 })
+      }, FAST_OPTS)
     ).rejects.toMatchObject({ code: APIErrorCode.RateLimited });
     expect(calls).toBe(1);
     expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("stops when the next wait would pass the budget, counting the waits already made", async () => {
+    // Each wait is 60 ms on a 100 ms budget: the first fits, the second
+    // would end at about 120 ms, so the second error is handed back.
+    let calls = 0;
+    await expect(
+      withRetry(async () => {
+        calls++;
+        throw makeApiError({
+          code: APIErrorCode.RateLimited,
+          status: 429,
+          headers: { [RETRY_AFTER_HEADER]: "0.06" },
+        });
+      }, { ...FAST_OPTS, budgetMs: 100 })
+    ).rejects.toMatchObject({ code: APIErrorCode.RateLimited });
+    expect(calls).toBe(2);
+  });
+
+  it("takes each wait from a budget shared across requests", async () => {
+    // Two requests of one call: the first waits 60 ms of the 100 ms shared
+    // budget, so the second cannot wait another 60 ms.
+    const waitBudget = { remainingMs: 100 };
+    const rateLimitedOnce = () => {
+      let calls = 0;
+      return async () => {
+        calls++;
+        if (calls === 1) {
+          throw makeApiError({
+            code: APIErrorCode.RateLimited,
+            status: 429,
+            headers: { [RETRY_AFTER_HEADER]: "0.06" },
+          });
+        }
+        return "ok";
+      };
+    };
+    await expect(withRetry(rateLimitedOnce(), { ...FAST_OPTS, waitBudget })).resolves.toBe("ok");
+    expect(waitBudget.remainingMs).toBe(40);
+    await expect(
+      withRetry(rateLimitedOnce(), { ...FAST_OPTS, waitBudget })
+    ).rejects.toMatchObject({ code: APIErrorCode.RateLimited });
+    expect(waitBudget.remainingMs).toBe(40);
   });
 });
 
@@ -260,6 +298,38 @@ describe("readRetryAfterMs", () => {
     expect(readRetryAfterMs(err)).toBeNull();
     expect(readRetryAfterMs(new Error("x"))).toBeNull();
   });
+
+  it("falls back to the body when the header is not a wait", () => {
+    const err = makeApiError({
+      code: APIErrorCode.RateLimited,
+      status: 429,
+      headers: { "Retry-After": "soon" },
+      additionalData: { retry_after: "4" },
+    });
+    expect(readRetryAfterMs(err)).toBe(4_000);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("takes seconds, whole or fractional", () => {
+    expect(parseRetryAfter("2")).toBe(2_000);
+    expect(parseRetryAfter("0.5")).toBe(500);
+    expect(parseRetryAfter(" 3 ")).toBe(3_000);
+  });
+
+  it("takes an HTTP date", () => {
+    const inFiveSeconds = new Date(Date.now() + 5_000).toUTCString();
+    const ms = parseRetryAfter(inFiveSeconds);
+    expect(ms).toBeGreaterThan(3_000);
+    expect(ms).toBeLessThanOrEqual(5_000);
+  });
+
+  it.each(["", " ", "5, 5", "0x10", "1e3", "-1", "Infinity", "soon"])(
+    "rejects %j",
+    (raw) => {
+      expect(parseRetryAfter(raw)).toBeNull();
+    }
+  );
 });
 
 describe("isRetryableSdkWriteError", () => {
@@ -282,6 +352,52 @@ describe("isRetryableSdkWriteError", () => {
     }
     expect(isRetryableSdkWriteError(makeUnknownHttpError(502))).toBe(false);
     expect(isRetryableSdkWriteError(new RequestTimeoutError())).toBe(false);
+  });
+});
+
+describe("requestRetryOpts", () => {
+  const rateLimited = makeApiError({ code: APIErrorCode.RateLimited, status: 429 });
+  const overloaded = makeApiError({ code: APIErrorCode.ServiceOverload, status: 529 });
+  const serverError = makeApiError({ code: APIErrorCode.InternalServerError, status: 500 });
+  const timeout = new RequestTimeoutError();
+
+  function retries(method: string, access: "read" | "write" | undefined, err: unknown): boolean {
+    const call = access && { access, wrote: false, retryWait: { remainingMs: 60_000 } };
+    const { shouldRetry } = requestRetryOpts(method, call);
+    return shouldRetry?.(err) ?? false;
+  }
+
+  it("retries a GET on 5xx and timeouts, even inside a write", () => {
+    // The SDK sends methods in lower case.
+    expect(retries("get", "write", serverError)).toBe(true);
+    expect(retries("get", "write", timeout)).toBe(true);
+    expect(retries("get", "write", makeUnknownHttpError(502))).toBe(true);
+  });
+
+  it("retries a read operation's POST (search, query) on 5xx and timeouts", () => {
+    expect(retries("post", "read", serverError)).toBe(true);
+    expect(retries("post", "read", timeout)).toBe(true);
+  });
+
+  it("retries a write request on 429 and 529 only", () => {
+    for (const method of ["post", "patch", "delete"]) {
+      expect(retries(method, "write", rateLimited)).toBe(true);
+      expect(retries(method, "write", overloaded)).toBe(true);
+      expect(retries(method, "write", serverError)).toBe(false);
+      expect(retries(method, "write", timeout)).toBe(false);
+    }
+  });
+
+  it("treats a request outside any call (a rollback) as a write", () => {
+    expect(retries("patch", undefined, rateLimited)).toBe(true);
+    expect(retries("patch", undefined, serverError)).toBe(false);
+  });
+
+  it("hands over the call's shared wait budget", () => {
+    const retryWait = { remainingMs: 60_000 };
+    const call = { access: "write" as const, wrote: false, retryWait };
+    expect(requestRetryOpts("post", call).waitBudget).toBe(retryWait);
+    expect(requestRetryOpts("post", undefined).waitBudget).toBeUndefined();
   });
 });
 
@@ -326,91 +442,45 @@ describe("isRetryableSdkError / isRetryableErrorCode", () => {
   });
 });
 
-describe("dispatch — handler retry on retryable envelope", () => {
-  const OP_NAME = "get_bot_user" as OperationName;
-  let attempts = 0;
-
-  beforeEach(() => {
-    attempts = 0;
-    const def: OperationDef<{ ping: boolean }, { ping: boolean }> = {
-      name: OP_NAME,
-      description: "retry synthetic op",
-      batchable: false,
-      access: "read",
-      domain: "pages",
-      schema: z.object({ ping: z.boolean() }),
-      example: { ping: true },
-      handler: async ({ ping }) => {
-        attempts++;
-        if (attempts <= 2) {
-          return {
-            ok: false,
-            error: {
-              code: NotionErrorCode.RateLimited,
-              message: "stub: rate limited",
-            },
-          };
-        }
-        return { ok: true, data: { ping } };
-      },
-    };
-    register(def);
-  });
-
-  afterEach(() => {
-    configureRateLimiter();
-  });
-
-  it("retries a handler that returns a retryable envelope until it succeeds", async () => {
-    const res = await dispatch(OP_NAME, { ping: true });
-    expect(res.ok).toBe(true);
-    expect(attempts).toBe(3);
-  });
-});
-
-describe("dispatch — retry policy by access", () => {
+describe("dispatch — handler runs once", () => {
   // One synthetic read op and one write op, under real names (this file never
   // loads the real operations). The registry refuses a second registration,
-  // so they are registered once and each test sets the steps they run: each
-  // call runs the next step, and the last one repeats. A step builds its
-  // envelope the way a handler does, through toErrorEnvelope, so a Retry-After
-  // on the SDK error travels with it.
+  // so they are registered once and each test sets the step they run. The
+  // SDK client retries each request on its own (tests/retry-http.test.ts), so
+  // dispatch runs a handler once whatever it returns.
   const READ_OP = "get_block" as OperationName;
   const WRITE_OP = "delete_block" as OperationName;
 
   type Step = () => OperationResult;
-  type Script = { steps: Step[]; calls: number };
-  const scripts = new Map<OperationName, Script>();
+  const steps = new Map<OperationName, Step>();
+  let calls = 0;
 
-  function fail(init: ApiErrorInit): Step {
-    return () => ({ ok: false, error: toErrorEnvelope(makeApiError(init)) });
-  }
-  const succeed: Step = () => ({ ok: true, data: { done: true } });
-
-  function stubOp(name: OperationName, steps: Step[]): Script {
-    const script = { steps, calls: 0 };
-    scripts.set(name, script);
-    return script;
-  }
+  const rateLimited: Step = () => ({
+    ok: false,
+    error: toErrorEnvelope(makeApiError({ code: APIErrorCode.RateLimited, status: 429 })),
+  });
+  const wroteThen = (step: Step): Step => () => {
+    markWrite();
+    return step();
+  };
 
   beforeAll(() => {
     for (const [name, access] of [
       [READ_OP, "read"],
       [WRITE_OP, "write"],
-    ] as const satisfies readonly (readonly [OperationName, OperationAccess])[]) {
+    ] as const) {
       register({
         name,
-        description: "retry policy synthetic op",
+        description: "dispatch synthetic op",
         batchable: false,
         access,
         domain: "blocks",
         schema: z.object({}),
         example: {},
         handler: async () => {
-          const script = scripts.get(name);
-          if (!script) throw new Error(`no steps set for ${name}`);
-          const step = script.steps[Math.min(script.calls, script.steps.length - 1)];
-          script.calls++;
+          calls++;
+          const step = steps.get(name);
+          if (!step) throw new Error(`no step set for ${name}`);
           return step();
         },
       });
@@ -419,122 +489,49 @@ describe("dispatch — retry policy by access", () => {
     configureOperationAccess();
   });
 
-  const now0 = { [RETRY_AFTER_HEADER]: "0" };
+  function run(name: OperationName, step: Step): Promise<OperationResult> {
+    calls = 0;
+    steps.set(name, step);
+    return dispatch(name, {}) as Promise<OperationResult>;
+  }
 
-  afterEach(() => {
-    configureRateLimiter();
-  });
-
-  it("does not retry a write on 500", async () => {
-    const op = stubOp(WRITE_OP, [
-      fail({ code: APIErrorCode.InternalServerError, status: 500 }),
-      succeed,
-    ]);
-    const res = await dispatch(WRITE_OP, {});
-    expect(res).toMatchObject({ ok: false, error: { code: "internal_server_error" } });
-    expect(op.calls).toBe(1);
-  });
-
-  it("does not retry a write on 504", async () => {
-    const op = stubOp(WRITE_OP, [
-      fail({ code: APIErrorCode.GatewayTimeout, status: 504 }),
-      succeed,
-    ]);
-    const res = await dispatch(WRITE_OP, {});
-    expect(res).toMatchObject({ ok: false, error: { code: "gateway_timeout" } });
-    expect(op.calls).toBe(1);
-  });
-
-  it("does not retry a write on 503: Notion says it may have been saved", async () => {
-    const op = stubOp(WRITE_OP, [
-      fail({ code: APIErrorCode.ServiceUnavailable, status: 503 }),
-      succeed,
-    ]);
-    await dispatch(WRITE_OP, {});
-    expect(op.calls).toBe(1);
-  });
-
-  it("still retries a read on 500 and 504", async () => {
-    const op = stubOp(READ_OP, [
-      fail({ code: APIErrorCode.InternalServerError, status: 500, headers: now0 }),
-      fail({ code: APIErrorCode.GatewayTimeout, status: 504, headers: now0 }),
-      succeed,
-    ]);
-    const res = await dispatch(READ_OP, {});
-    expect(res.ok).toBe(true);
-    expect(op.calls).toBe(3);
-  });
-
-  it("retries a write on 429 and 529", async () => {
-    const op = stubOp(WRITE_OP, [
-      fail({ code: APIErrorCode.RateLimited, status: 429, headers: now0 }),
-      fail({ code: APIErrorCode.ServiceOverload, status: 529, headers: now0 }),
-      succeed,
-    ]);
-    const res = await dispatch(WRITE_OP, {});
-    expect(res.ok).toBe(true);
-    expect(op.calls).toBe(3);
-  });
-
-  it("does not re-run a write handler on 429 once it has written", async () => {
-    const rateLimited = fail({ code: APIErrorCode.RateLimited, status: 429, headers: now0 });
-    const op = stubOp(WRITE_OP, [
-      () => {
-        markWrite();
-        return rateLimited();
-      },
-      succeed,
-    ]);
-    const res = await dispatch(WRITE_OP, {});
+  it("does not re-run a handler that returns a retryable envelope", async () => {
+    const res = await run(READ_OP, rateLimited);
     expect(res).toMatchObject({ ok: false, error: { code: "rate_limited" } });
-    expect(op.calls).toBe(1);
+    expect(calls).toBe(1);
   });
 
-  // The jittered backoff before the second attempt is at most 250 ms, so a
-  // wait of 350 ms or more can only come from Retry-After.
-  const WAIT_SECONDS = "0.4";
-  const MIN_HONOURED_MS = 350;
-
-  it("waits out the Retry-After header carried by an envelope", async () => {
-    const op = stubOp(READ_OP, [
-      fail({
-        code: APIErrorCode.RateLimited,
-        status: 429,
-        headers: { [RETRY_AFTER_HEADER]: WAIT_SECONDS },
-      }),
-      succeed,
-    ]);
-    const start = Date.now();
-    const res = await dispatch(READ_OP, {});
-    expect(res.ok).toBe(true);
-    expect(op.calls).toBe(2);
-    expect(Date.now() - start).toBeGreaterThanOrEqual(MIN_HONOURED_MS);
+  it("returns a write's error as-is when nothing was written", async () => {
+    const res = await run(WRITE_OP, rateLimited);
+    expect(res).toEqual(rateLimited());
   });
 
-  it("waits out additional_data.retry_after carried by an envelope", async () => {
-    const op = stubOp(WRITE_OP, [
-      fail({
-        code: APIErrorCode.RateLimited,
-        status: 429,
-        additionalData: { retry_after: WAIT_SECONDS },
-      }),
-      succeed,
-    ]);
-    const start = Date.now();
-    const res = await dispatch(WRITE_OP, {});
-    expect(res.ok).toBe(true);
-    expect(op.calls).toBe(2);
-    expect(Date.now() - start).toBeGreaterThanOrEqual(MIN_HONOURED_MS);
+  it("says a write was partly applied when it fails after writing", async () => {
+    const res = await run(WRITE_OP, wroteThen(rateLimited));
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe("rate_limited");
+    expect(res.error.message).toMatch(/already applied/);
+    expect(res.error.fix).toMatch(/^Read the target back/);
+    expect(calls).toBe(1);
   });
 
-  it("returns the error instead of waiting when Retry-After is over a minute", async () => {
-    const op = stubOp(READ_OP, [
-      fail({ code: APIErrorCode.RateLimited, status: 429, headers: { [RETRY_AFTER_HEADER]: "90" } }),
-      succeed,
-    ]);
-    const res = await dispatch(READ_OP, {});
-    expect(res).toMatchObject({ ok: false, error: { code: "rate_limited" } });
-    expect(op.calls).toBe(1);
+  it("says so for a thrown error too", async () => {
+    const res = await run(
+      WRITE_OP,
+      wroteThen(() => {
+        throw makeApiError({ code: APIErrorCode.InternalServerError, status: 500 });
+      })
+    );
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: "internal_server_error", message: expect.stringMatching(/already applied/) },
+    });
+  });
+
+  it("leaves a successful write alone", async () => {
+    const res = await run(WRITE_OP, wroteThen(() => ({ ok: true, data: { done: true } })));
+    expect(res).toEqual({ ok: true, data: { done: true } });
   });
 
   it("keeps the Retry-After out of the envelope the model sees", () => {

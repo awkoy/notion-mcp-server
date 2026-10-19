@@ -9,13 +9,23 @@ const RETRY_AFTER_HEADER = "retry-after";
 const RETRY_AFTER_FIELD = "retry_after";
 const MS_PER_SECOND = 1_000;
 
-// Seconds, or an HTTP date, as milliseconds from now.
+// Non-negative seconds, as Notion sends them ("2", "0.5"). Number() alone
+// would also take "", " ", "0x10" and "1e3".
+const SECONDS = /^\d+(\.\d+)?$/;
+// An HTTP date in the one form RFC 9110 says senders use (IMF-fixdate,
+// "Sun, 06 Nov 1994 08:49:37 GMT"). Date.parse alone would also take "5, 5".
+const HTTP_DATE = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+// Seconds, or an HTTP date, as milliseconds from now. Anything else is not a
+// wait Notion asked for, so the caller falls back to its own backoff.
 export function parseRetryAfter(raw: string | null | undefined): number | null {
   if (!raw) return null;
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * MS_PER_SECOND);
-  const dateMs = Date.parse(raw);
-  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+  const value = raw.trim();
+  if (SECONDS.test(value)) return Number(value) * MS_PER_SECOND;
+  if (HTTP_DATE.test(value)) {
+    const dateMs = Date.parse(value);
+    if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+  }
   return null;
 }
 

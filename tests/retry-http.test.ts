@@ -11,6 +11,8 @@ vi.mock("node-fetch", () => ({ default: fetchStub }));
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
+import { getClient } from "../src/services/notion.js";
+import { withCallContext } from "../src/services/call-context.js";
 
 // node-fetch's own Response, as production gets it: its `headers` is
 // node-fetch's Headers class, not the global one.
@@ -19,6 +21,15 @@ const { Response: NodeFetchResponse } =
 
 const BLOCK = "3ab5030f-c6e5-8182-a41b-e48b46176e7b";
 const PAGE = "3ab5030f-c6e5-8109-b32f-dbd2c4093059";
+const UPLOAD = "3ab5030f-c6e5-81aa-9f00-0012e0f1a2b3";
+const UPLOAD_JSON = {
+  object: "file_upload",
+  id: UPLOAD,
+  status: "uploaded",
+  filename: "note.txt",
+  content_type: "text/plain",
+};
+const EMPTY_LIST = { object: "list", results: [], next_cursor: null, has_more: false };
 const BLOCK_JSON = {
   object: "block",
   id: BLOCK,
@@ -90,7 +101,7 @@ describe("dispatch over the real SDK — retries", () => {
     fetchStub.mockReset();
   });
 
-  describe("one retry layer", () => {
+  describe("one retry layer, per request", () => {
     it("sends five requests for a read that keeps getting 429, not five per SDK retry", async () => {
       const http = script(notionError(429, "rate_limited", { headers: NOW }));
       const res = await dispatch("get_block", { block_id: BLOCK });
@@ -111,6 +122,20 @@ describe("dispatch over the real SDK — retries", () => {
       const http = script(notionError(500, "internal_server_error"), ok());
       const res = (await dispatch("get_block", { block_id: BLOCK })) as OperationResult;
       expect(res.ok).toBe(true);
+      expect(http.methods).toEqual(["GET", "GET"]);
+    });
+
+    it("retries a read operation's POST on 500 (search is a POST)", async () => {
+      const http = script(notionError(500, "internal_server_error"), ok(EMPTY_LIST));
+      const res = (await dispatch("search_pages", { query: "x" })) as OperationResult;
+      expect(res.ok).toBe(true);
+      expect(http.methods).toEqual(["POST", "POST"]);
+    });
+
+    it("retries a GET on 500 inside a write (schema lookups)", async () => {
+      const http = script(notionError(500, "internal_server_error"), ok());
+      const notion = await getClient();
+      await withCallContext("write", () => notion.blocks.retrieve({ block_id: BLOCK }));
       expect(http.methods).toEqual(["GET", "GET"]);
     });
 
@@ -170,21 +195,82 @@ describe("dispatch over the real SDK — retries", () => {
       expect(http.methods).toEqual(["DELETE"]);
     });
 
-    it("does not re-run a handler after one of its requests was written", async () => {
-      // The append lands, then the delete is rate limited. Running the
-      // handler again would append the paragraph a second time.
+    it("retries a request rate limited halfway through a call, not the call", async () => {
+      // The append lands, then the delete is rate limited. Only the delete
+      // is sent again; running the handler again would append twice.
       const http = script(
         ok({ object: "list", results: [BLOCK_JSON], next_cursor: null, has_more: false }),
-        notionError(429, "rate_limited", { headers: NOW })
+        notionError(429, "rate_limited", { headers: NOW }),
+        ok()
       );
-      const res = await dispatch("batch_mixed_blocks", {
+      const res = (await dispatch("batch_mixed_blocks", {
         operations: [
           { op: "append", block_id: PAGE, markdown: "Hello" },
           { op: "delete", block_id: BLOCK },
         ],
-      });
-      expect(errorCode(res)).toBe("rate_limited");
+      })) as OperationResult;
+      expect(res.ok).toBe(true);
+      expect(http.methods).toEqual(["PATCH", "DELETE", "DELETE"]);
+    });
+
+    it("retries an upload's send after its create, on 429", async () => {
+      const http = script(
+        ok(UPLOAD_JSON),
+        notionError(429, "rate_limited", { headers: NOW }),
+        ok(UPLOAD_JSON)
+      );
+      const res = (await dispatch("upload_file", {
+        source: { type: "base64", data: Buffer.from("hello").toString("base64") },
+        filename: "note.txt",
+        content_type: "text/plain",
+      })) as OperationResult;
+      expect(res.ok).toBe(true);
+      expect(http.methods).toEqual(["POST", "POST", "POST"]);
+    });
+
+    it("says the call was partly applied when a later write request fails", async () => {
+      const http = script(
+        ok({ object: "list", results: [BLOCK_JSON], next_cursor: null, has_more: false }),
+        notionError(500, "internal_server_error", { headers: NOW })
+      );
+      const res = (await dispatch("batch_mixed_blocks", {
+        operations: [
+          { op: "append", block_id: PAGE, markdown: "Hello" },
+          { op: "delete", block_id: BLOCK },
+        ],
+      })) as OperationResult;
       expect(http.methods).toEqual(["PATCH", "DELETE"]);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("internal_server_error");
+      expect(res.error.message).toMatch(/already applied/);
+    });
+
+    it("does not say so when the first write request fails", async () => {
+      script(notionError(500, "internal_server_error", { headers: NOW }));
+      const res = (await dispatch("delete_block", { block_id: BLOCK })) as OperationResult;
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.message).not.toMatch(/already applied/);
+    });
+  });
+
+  describe("requests outside a dispatched call", () => {
+    // An atomic batch's rollback trashes what it created after the items ran.
+    it("retries a PATCH on 429", async () => {
+      const http = script(notionError(429, "rate_limited", { headers: NOW }), ok());
+      const notion = await getClient();
+      await notion.blocks.update({ block_id: BLOCK, in_trash: true });
+      expect(http.methods).toEqual(["PATCH", "PATCH"]);
+    });
+
+    it("does not retry a PATCH on 500", async () => {
+      const http = script(notionError(500, "internal_server_error", { headers: NOW }), ok());
+      const notion = await getClient();
+      await expect(notion.blocks.update({ block_id: BLOCK, in_trash: true })).rejects.toMatchObject({
+        status: 500,
+      });
+      expect(http.methods).toEqual(["PATCH"]);
     });
   });
 });

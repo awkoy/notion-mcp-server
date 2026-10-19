@@ -4,8 +4,9 @@ import type { RequestInfo, RequestInit, Response } from "node-fetch";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { Readable } from "node:stream";
 import { authProvider } from "./auth.js";
-import { markWrite } from "./write-log.js";
+import { currentCall, markWrite } from "./call-context.js";
 import { rateLimiter } from "../dispatch/rate-limit.js";
+import { requestRetryOpts, withRetry } from "../dispatch/retry.js";
 
 let cachedClient: Client | null = null;
 let cachedToken: string | null = null;
@@ -72,8 +73,8 @@ export function proxyAwareFetch(
 // hands back a Node Readable, so we adapt the body lazily; `text()` keeps
 // reading the original stream and only one of the two is ever consumed.
 //
-// A 2xx answer to anything but a GET is recorded in the call's write log,
-// which stops dispatch from retrying a write handler that already wrote.
+// A 2xx answer to anything but a GET marks the call as having written, so a
+// write that fails after it can say part of it was already applied.
 const sdkFetch: SupportedFetch = async (url, init) => {
   const res = await proxyAwareFetch(url, init);
   if (res.ok && (init?.method ?? "GET").toUpperCase() !== "GET") markWrite();
@@ -88,17 +89,24 @@ const sdkFetch: SupportedFetch = async (url, init) => {
   };
 };
 
-// The SDK client, paced by the shared rate limiter one HTTP request at a time.
-// Every endpoint method goes through `request`, so a handler that sends ten
-// requests (batch_mixed_blocks, a multi-part upload) takes ten tokens, and a
-// dispatch retry takes new ones. The wait happens here, before the SDK starts
-// its request timeout, so a queued request cannot time out while it waits.
+// The SDK client, paced by the shared rate limiter and retried one HTTP
+// request at a time. Every endpoint method goes through `request`, so a
+// handler that sends ten requests (batch_mixed_blocks, a multi-part upload)
+// takes ten tokens, and a request that gets a 429 halfway through is sent
+// again on its own, with a new token, instead of failing the whole call.
+// requestRetryOpts decides which failures may be retried (a write request is
+// sent again only when Notion did not run it) and how long the call's
+// requests may wait in total. The limiter's wait happens here, before the SDK
+// starts its request timeout, so a queued request cannot time out while it
+// waits.
 class PacedClient extends Client {
-  override async request<ResponseBody extends object>(
+  override request<ResponseBody extends object>(
     args: Parameters<Client["request"]>[0]
   ): Promise<ResponseBody> {
-    await rateLimiter.acquire();
-    return super.request<ResponseBody>(args);
+    return withRetry(async () => {
+      await rateLimiter.acquire();
+      return super.request<ResponseBody>(args);
+    }, requestRetryOpts(args.method, currentCall()));
   }
 }
 
@@ -109,10 +117,10 @@ export async function getClient(): Promise<Client> {
       auth: token,
       notionVersion: "2026-03-11",
       fetch: sdkFetch,
-      // Dispatch is the one retry layer (src/dispatch/retry.ts). It knows
-      // which operations write and retries them only when Notion did not run
-      // the request. The SDK's own retries would stack under it, up to three
-      // HTTP requests per dispatch attempt, and retry a DELETE on a 500.
+      // PacedClient.request is the one retry layer (src/dispatch/retry.ts).
+      // It knows whether the request belongs to a read operation, waits out
+      // Retry-After uncapped within one budget, and paces every attempt. The
+      // SDK's own retries would stack under it and skip the rate limiter.
       retry: false,
     });
     cachedClient = fresh;
