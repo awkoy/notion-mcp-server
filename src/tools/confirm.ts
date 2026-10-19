@@ -12,6 +12,7 @@ import { getOperation } from "../operations/registry.js";
 import {
   CONFIRM_DESTRUCTIVE_ENV_VAR,
   confirmDestructiveEnabled,
+  destructiveGroupBlocked,
   isOperationAllowed,
 } from "../operations/access.js";
 import type { OperationDef, OperationDomain, OperationError } from "../operations/types.js";
@@ -23,8 +24,8 @@ import { isModernRequest } from "../utils/mcp-era.js";
 // Opt-in confirmation of destructive operations (NOTION_CONFIRM_DESTRUCTIVE).
 //
 // Before notion_write dispatches an operation the registry marks
-// `destructive: true`, the server asks the human and only proceeds on an
-// explicit yes. The prompt names the operation and its target — with the
+// `destructive: true` — or a call its `destructiveWhen` says removes
+// something — the server asks the human and only proceeds on an explicit yes. The prompt names the operation and its target — with the
 // title when one cheap retrieve can fetch it — so the user knows what they
 // are approving, and a "no" comes back to the model as a
 // confirmation_declined error it must not retry.
@@ -66,7 +67,8 @@ const ID_FIELDS = [
   "view_id",
 ] as const;
 
-type Target = { kind: TargetKind; id: string };
+/** `reason` is what `destructiveWhen` said this one item removes. */
+type Target = { kind: TargetKind; id: string; reason?: string };
 
 /** What a call would remove: the targets, and how many candidates were looked at. */
 type Plan = {
@@ -91,10 +93,13 @@ export async function confirmDestructiveCall(
 ): Promise<OperationError | InputRequiredResult | null> {
   if (!confirmDestructiveEnabled()) return null;
   const def = getOperation(operation);
-  if (!def?.destructive) return null;
+  if (!def || (!def.destructive && !def.destructiveWhen)) return null;
   // Access checks come first: a blocked operation is rejected by dispatch
   // with operation_not_allowed, and the user should not be asked about it.
+  // The same goes for a removing call of a `destructiveWhen` operation while
+  // the `destructive` group is blocked: its handler refuses it.
   if (!isOperationAllowed(operation)) return null;
+  if (!def.destructive && destructiveGroupBlocked()) return null;
 
   // Second round: the answer is in. The state was verified (HMAC, TTL, bound
   // to tools/call) before this handler ran; what is left to check is that it
@@ -241,7 +246,8 @@ function planFor(def: OperationDef, payload: unknown): Plan | null {
 
 /**
  * The target of one item, or null when the item is not destructive: it fails
- * validation (dispatch reports that, nothing runs) or it is a restore.
+ * validation (dispatch reports that, nothing runs), it is a restore, or its
+ * operation's `destructiveWhen` finds nothing it removes.
  * Parsing through the operation's own schema also turns a pasted Notion URL
  * into the id the lookup needs.
  */
@@ -249,12 +255,17 @@ function targetOf(def: OperationDef, kind: TargetKind, item: unknown): Target | 
   const parsed = def.schema.safeParse(item);
   if (!parsed.success || !isRecord(parsed.data)) return null;
   const data = parsed.data;
+  let reason: string | undefined;
+  if (!def.destructive) {
+    reason = def.destructiveWhen?.(data) ?? undefined;
+    if (!reason) return null;
+  }
   // delete_database / delete_data_source: `in_trash` wins over the deprecated
   // `archived` alias, and either being false restores instead of trashing.
   if ((data.in_trash ?? data.archived ?? true) === false) return null;
   for (const field of ID_FIELDS) {
     const id = data[field];
-    if (typeof id === "string" && id) return { kind, id };
+    if (typeof id === "string" && id) return reason ? { kind, id, reason } : { kind, id };
   }
   return null;
 }
@@ -266,7 +277,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // ── Wording ────────────────────────────────────────────────────────────────
 
 function promptMessage(def: OperationDef, plan: Plan, target: string): string {
-  const what = firstSentence(def.description);
+  const what = consequences(def, plan);
   switch (plan.form) {
     case "single":
       return `Run ${def.name} on ${target}? ${what}`;
@@ -280,6 +291,18 @@ function promptMessage(def: OperationDef, plan: Plan, target: string): string {
       return `Run ${def.name}? ${n} of its ${plan.total} operations delete${n === 1 ? "s" : ""} ${target}.`;
     }
   }
+}
+
+/**
+ * What running it loses: the reasons `destructiveWhen` gave (one per item,
+ * capped like the id list), else the operation's own first sentence.
+ */
+function consequences(def: OperationDef, plan: Plan): string {
+  const reasons = plan.targets.flatMap((t) => (t.reason ? [t.reason] : []));
+  if (reasons.length === 0) return firstSentence(def.description);
+  const listed = reasons.slice(0, MAX_LISTED_IDS).join(" ");
+  const more = reasons.length - MAX_LISTED_IDS;
+  return more > 0 ? `${listed} And ${more} more like that.` : listed;
 }
 
 function firstSentence(text: string): string {

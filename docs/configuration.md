@@ -40,7 +40,9 @@ Operation access: 22/48 enabled (allow=read; block=(none))
 
 † = also in the `destructive` group. `trash_page` is an alias of `archive_page`.
 
-**Limitations.** Control is per operation, not per parameter. `update_page_markdown` is a write operation that can replace a page's whole body, and blocking `destructive` does not disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP prompts may still mention disabled operations, but running them is rejected.
+`update_data_source` stays out of the group, but a call that sets a property to `null` deletes that column and its values on every page. While `destructive` is blocked, such a call is refused with `operation_not_allowed`; the rest of a schema update still runs.
+
+**Limitations.** Apart from that `null` check, control is per operation, not per parameter. `update_page_markdown` is a write operation that can replace a page's whole body, and blocking `destructive` does not disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP prompts may still mention disabled operations, but running them is rejected.
 
 ## Confirming destructive operations
 
@@ -50,6 +52,8 @@ How the question reaches the client depends on the protocol revision it speaks:
 
 - **2025-era clients** get an `elicitation/create` request.
 - **MCP 2026-07-28 clients** get an `input_required` result. The retry carries a sealed `requestState` that only matches the call it was minted for, so an answer can't be replayed onto a different call.
+
+An `update_data_source` call that sets a property to `null` is confirmed the same way, and the dialog names the properties it deletes. A schema update that deletes nothing doesn't prompt.
 
 What never prompts: restores (`restore_page`, and `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry. A blocked operation is rejected with `operation_not_allowed` before anyone is asked.
 

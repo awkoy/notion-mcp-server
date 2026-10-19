@@ -43,7 +43,7 @@ Every parameter is optional, and an empty value behaves as if the variable were 
 Not exposed in the catalog entry: `NOTION_RATE_LIMIT` (the default of 3 requests per second is Notion's
 limit), `NOTION_DAILY_LOG_PAGE_ID` (used only by one MCP prompt), `HTTPS_PROXY` / `HTTP_PROXY`
 (Docker has its own proxy settings), and the HTTP transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`,
-`MCP_AUTH_TOKEN`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`), because the catalog runs the image over
+`MCP_AUTH_TOKEN`, `MCP_ALLOW_UNAUTHENTICATED`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`), because the catalog runs the image over
 stdio. The full list is in `notion-mcp-server --help` and the main README.
 
 ## Updating the entry

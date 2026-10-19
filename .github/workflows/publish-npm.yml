@@ -23,12 +23,13 @@ jobs:
           node-version: "24" # ships with npm >= 11.5 (required for Trusted Publishing)
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm is current
+      - name: Pin npm
         # Kept (unlike in ci.yml) because publishing has its own reason to be on
-        # a current npm: Trusted Publishing / OIDC provenance. node-version 24 is
-        # already meant to satisfy that floor; this guarantees it. A broken
-        # release costs far more than the 15s.
-        run: npm install -g npm@latest
+        # a known npm: Trusted Publishing / OIDC provenance needs >= 11.5.
+        # Pinned rather than @latest: the step that holds the publish token
+        # should not run whatever npm release landed minutes ago. Bump it by
+        # hand, to a release at least a week old.
+        run: npm install -g npm@11.21.0
 
       - name: Install dependencies
         # `npm ci` (not `npm install`): the published tarball must be built and
@@ -91,8 +92,16 @@ jobs:
           "
 
       - name: Install mcp-publisher
+        # Pinned to a release and checked against its sha256 (from that
+        # release's registry_<version>_checksums.txt) before it runs with this
+        # job's OIDC token. To bump: change both values together.
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          curl -fsSL -o mcp-publisher.tar.gz "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
 
       - name: Wait for npm to serve the published version
         # npm's publish pipeline is asynchronous: `npm publish` returns "your
