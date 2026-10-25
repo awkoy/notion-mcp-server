@@ -9,7 +9,7 @@ The plugin contains two things:
 
 ## Requirements
 
-- Node.js 20 or later, so that `npx` can run the server.
+- Node.js 22 or later, so that `npx` can run the server.
 - A Notion token. Open [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens), choose **+ New token**, pick your workspace and copy the `ntn_…` value. A Personal Access Token sees everything you can see. An Internal Integration secret also works, but it sees only the pages shared with that integration.
 
 ## Install
@@ -77,7 +77,7 @@ min-release-age-exclude=notion-mcp-server
 
 ## Data and privacy
 
-The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. In Codex or Cursor, it goes to that app's model provider under that app's terms. `upload_file` reads a local file only when you ask it to. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).
+The server runs on your computer and talks only to `api.notion.com` over HTTPS, using your token. There is no telemetry, no analytics, and no other server in the path. Whatever Claude reads from Notion goes into your conversation with Claude, and Anthropic handles it under the terms of your Claude plan. In Codex or Cursor, it goes to that app's model provider under that app's terms. `upload_file` reads a local file or fetches a URL only when you ask it to, and refuses URLs on private or loopback addresses. The full policy is in the [privacy section of the main README](https://github.com/awkoy/notion-mcp-server#privacy).
 
 ## Other ways to install
 

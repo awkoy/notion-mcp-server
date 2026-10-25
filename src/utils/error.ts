@@ -28,24 +28,42 @@ export enum NotionErrorCode {
   ServiceUnavailable = "service_unavailable",
   GatewayTimeout = "gateway_timeout",
   DatabaseConnectionUnavailable = "database_connection_unavailable",
+  ServiceOverload = "service_overload",
 }
 
 /**
- * Codes that indicate a transient failure — the request either never ran or
- * the server is asking us to back off. Safe to retry with exponential backoff.
- * Shared by the dispatch retry wrapper and any caller that wants to classify
- * an error envelope without re-encoding the same rules.
+ * Codes that indicate a transient failure, where trying again may succeed.
+ * Only 429 and 529 mean Notion turned the request away without running it.
+ * A 500, 503 or 504 does not: the request may have run, and Notion's docs say
+ * a write "may still have been saved". So these are safe to retry only for a
+ * request that is safe to repeat (see requestRetryOpts in dispatch/retry.ts);
+ * a write's request retries on RETRYABLE_WRITE_CODES alone.
  */
 export const RETRYABLE_NOTION_CODES: ReadonlySet<NotionErrorCode> = new Set([
   NotionErrorCode.RateLimited,
+  NotionErrorCode.ServiceOverload,
   NotionErrorCode.InternalServerError,
   NotionErrorCode.ServiceUnavailable,
   NotionErrorCode.GatewayTimeout,
   NotionErrorCode.DatabaseConnectionUnavailable,
 ]);
 
+/**
+ * Codes where Notion did not run the request and asks the caller to come back
+ * later. Notion's docs say to retry them for any request, so a write retries
+ * on these and nothing else.
+ */
+export const RETRYABLE_WRITE_CODES: ReadonlySet<NotionErrorCode> = new Set([
+  NotionErrorCode.RateLimited,
+  NotionErrorCode.ServiceOverload,
+]);
+
 export function isRetryableNotionCode(code: string | undefined): boolean {
   return code !== undefined && (RETRYABLE_NOTION_CODES as ReadonlySet<string>).has(code);
+}
+
+export function isRetryableWriteCode(code: string | undefined): boolean {
+  return code !== undefined && (RETRYABLE_WRITE_CODES as ReadonlySet<string>).has(code);
 }
 
 type ErrorEntry = { message: string; fix?: string };
@@ -113,18 +131,22 @@ const ERROR_MESSAGES: Record<string, ErrorEntry> = {
   },
   [NotionErrorCode.InternalServerError]: {
     message: "An unexpected error occurred on the Notion servers.",
-    fix: "Retry the operation; if it persists, check status.notion.so.",
+    fix: "Retry the operation; if it persists, check status.notion.so. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.ServiceUnavailable]: {
     message: "The Notion service is unavailable.",
-    fix: "Retry later with exponential backoff.",
+    fix: "Retry later with exponential backoff. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.GatewayTimeout]: {
     message: "The Notion gateway timed out before the request could complete.",
-    fix: "Retry later with exponential backoff.",
+    fix: "Retry later with exponential backoff. A write may have been saved anyway: read the target back before you repeat it.",
   },
   [NotionErrorCode.DatabaseConnectionUnavailable]: {
     message: "The database connection is unavailable.",
+    fix: "Retry later with exponential backoff.",
+  },
+  [NotionErrorCode.ServiceOverload]: {
+    message: "Notion is overloaded and did not run the request.",
     fix: "Retry later with exponential backoff.",
   },
 };
@@ -150,13 +172,25 @@ export function toErrorEnvelope(error: unknown): OperationError {
     return {
       code: "auth_error",
       message: `Notion auth failed: ${error.message}`,
-      fix: "Set NOTION_TOKEN env var, or configure OAuth credentials if using the auth gateway.",
+      fix: "Set NOTION_TOKEN in your MCP client config to a personal access token or an integration token, then restart the server.",
     };
   }
   if (error instanceof Error) {
     return { code: "internal_error", message: error.message };
   }
   return { code: "unknown_error", message: String(error) };
+}
+
+// The error of a write that failed after one of its requests had already
+// changed something in Notion (an append of batch_mixed_blocks, the create
+// step of upload_file). Repeating the whole call can apply that part twice.
+export function partlyAppliedError(error: OperationError): OperationError {
+  const fix = "Read the target back to see what was saved, then repeat only the part that is missing: running the whole call again can apply the saved part twice.";
+  return {
+    ...error,
+    message: `${error.message} Part of this call was already applied in Notion before it failed.`,
+    fix: error.fix ? `${fix} ${error.fix}` : fix,
+  };
 }
 
 function extractValidationPath(body: unknown): (string | number)[] | undefined {

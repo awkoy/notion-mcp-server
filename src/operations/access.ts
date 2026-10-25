@@ -36,6 +36,15 @@ export type OpMeta = {
   destructive?: boolean;
 };
 
+/**
+ * Whether NOTION_BLOCKED_OPERATIONS names the `destructive` group. Operations
+ * that remove content only in some calls (`destructiveWhen`) are not in the
+ * group, so their handlers ask this to refuse just those calls.
+ */
+export function destructiveGroupBlocked(): boolean {
+  return parseList(process.env[BLOCKED_ENV_VAR]).includes("destructive");
+}
+
 function parseList(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw

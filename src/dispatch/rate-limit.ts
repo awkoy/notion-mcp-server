@@ -1,7 +1,10 @@
 // Global limiter for Notion API calls. Notion enforces ~3 requests per second
 // per integration; without a cap, dispatch's parallel execution (concurrency
 // up to 10) hits 429s on larger batches. One shared instance means the limit
-// holds across single calls, batch items, and concurrent dispatches.
+// holds across single calls, batch items, and concurrent dispatches. Every
+// HTTP request the SDK client sends takes a token (PacedClient in
+// services/notion.ts), so a handler that sends several requests, and every
+// retry, is paced too.
 //
 // Implementation: a token bucket with capacity=1, equivalent to strict
 // pacing — each acquire reserves the next slot at `1000 / rate` ms after the
