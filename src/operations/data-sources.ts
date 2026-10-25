@@ -8,6 +8,7 @@ import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
 import { notionId } from "../schema/id.js";
 import { forgetDataSourceSchema, rememberDataSourceSchema } from "../services/schema-cache.js";
+import { destructiveGroupBlocked } from "./access.js";
 
 const VERBOSE = z.boolean().optional();
 
@@ -137,6 +138,14 @@ const DeleteDataSourceParams = z.object({
   verbose: VERBOSE,
 });
 
+/** Names an update_data_source item sets to null, which deletes those properties. */
+function deletedProperties(properties: unknown): string[] {
+  if (typeof properties !== "object" || properties === null) return [];
+  return Object.entries(properties)
+    .filter(([, definition]) => definition === null)
+    .map(([name]) => name);
+}
+
 register({
   name: "update_data_source",
   access: "write",
@@ -144,6 +153,14 @@ register({
   description: "Update a data source's schema (properties, title, icon). For database-level metadata use update_database. To trash or restore a data source use delete_data_source.",
   batchable: true,
   schema: UpdateDataSourceParams,
+  // A null property deletes the column with its values on every page — the
+  // same loss as trashing, minus the trash: the API has no way back.
+  destructiveWhen: (item) => {
+    const names = deletedProperties(item.properties);
+    if (names.length === 0) return null;
+    const list = names.map((n) => JSON.stringify(n)).join(", ");
+    return `It deletes the propert${names.length === 1 ? "y" : "ies"} ${list} and ${names.length === 1 ? "its" : "their"} values on every page, which cannot be undone.`;
+  },
   example: {
     data_source_id: "<data-source-id>",
     properties: {
@@ -176,6 +193,17 @@ register({
           code: "trash_moved",
           message: "in_trash / archived are no longer accepted on update_data_source — trashing is a destructive operation and lives on delete_data_source.",
           fix: "Call delete_data_source with the same data_source_id. It trashes by default; pass in_trash:false to restore.",
+        },
+      };
+    }
+    const deleted = deletedProperties(properties);
+    if (deleted.length > 0 && destructiveGroupBlocked()) {
+      return {
+        ok: false,
+        error: {
+          code: "operation_not_allowed",
+          message: `Deleting properties (${deleted.map((n) => JSON.stringify(n)).join(", ")}) removes their values on every page, and NOTION_BLOCKED_OPERATIONS blocks destructive operations on this server.`,
+          fix: "Leave the null properties out of the call; the rest of a schema update is allowed.",
         },
       };
     }

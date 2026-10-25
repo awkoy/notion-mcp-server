@@ -12,13 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Docker image in the MCP registry.** `server.json` lists `ghcr.io/awkoy/notion-mcp-server` as an OCI package next to the npm package, so registry clients can run the server with Docker. The image tag carries the version, and the release workflow waits for GHCR to serve that tag before it registers the release.
 - **Tools listed in the `.mcpb` bundle.** The manifest names `notion_read`, `notion_write` and `notion_describe`, so Claude Desktop can list them on the extension page.
 - **Status properties in `create_database` and `update_data_source`.** A definition takes `status: {}` for Notion's default options, or `options` with a `name`, `color`, `description` and `group` (`To-do`, `In progress` or `Complete`). On `update_data_source` an option can be named by its `id` alone, to recolor it or move it to another group (Notion keeps an option's name, so the API can't rename one), and the list replaces the property's options, so an option left out is removed. The schema was in the code but not in the list of property types, so a status definition failed validation.
+- **Deleting a property counts as destructive.** An `update_data_source` call that sets a property to `null` deletes that column and its values on every page, and the API can't bring it back. Under `NOTION_CONFIRM_DESTRUCTIVE` that call now asks first, and the dialog names the properties. With `destructive` in `NOTION_BLOCKED_OPERATIONS` it's refused with `operation_not_allowed`. Other schema changes still run without either.
+- `MCP_ALLOW_UNAUTHENTICATED`, for an HTTP deployment that authenticates in a proxy in front of the server. See the HTTP change below.
+
+### Changed
+
+- **Breaking for one HTTP setup: a non-loopback `HOST` needs `MCP_AUTH_TOKEN`.** Bound to `0.0.0.0` or a LAN address without a token, anyone who could reach the port acted with your `NOTION_TOKEN`; the server only printed a warning. It now refuses to start. Set `MCP_AUTH_TOKEN`, bind `HOST=127.0.0.1`, or set `MCP_ALLOW_UNAUTHENTICATED=true` when an authenticating proxy sits in front. Loopback binds and stdio are unchanged.
+- **Idle HTTP sessions close.** 2025-era clients open a session per connection, and a client that went away without `DELETE` left its session in memory for the life of the process. A session with no request and no open stream for 30 minutes is now closed, and at 1,000 open sessions the longest-idle one makes room, or a new client gets `503` when every session is busy. 2026-07-28 clients are stateless and unaffected.
+- **Node.js 22 or later.** Node 20 left support in April 2026. `engines`, the `.mcpb` manifest and the plugin README say 22, and CI runs on 22 and 24.
+- Dependencies: `@modelcontextprotocol/server` 2.3.1 (was 2.2.0) and `@modelcontextprotocol/node` 2.1.1 (was 2.1.0). The lockfile also pins `zod` 4.6.6. Dev-only: `@modelcontextprotocol/client` 2.3.1, `vitest` 5.0.3.
+- The Gemini CLI extension runs `notion-mcp-server@3.2.1`, pinned like the plugins, instead of whatever npm serves as latest.
+- The auth error's fix no longer mentions an OAuth gateway the server doesn't have.
 
 ### Fixed
 
 - **`get_page_markdown` says when the page is incomplete.** It returns Notion's `truncated` and `unknown_block_ids`, and warns against replacing such a page with `update_page_markdown`, which would delete the blocks missing from the markdown. The `notion://page` resource starts such a page with an HTML comment.
 - **Relation and people values past 25.** `get_page` with `include_properties: true` reads the whole list (up to 1,000 values) instead of the 25 a page object holds. Each of those reads takes its own rate-limit slot; if Notion refuses one, the property keeps the 25 values, is named in `truncated_properties` and gets a warning with Notion's error. `query_database` and `query_view` rows name cut properties in `truncated_properties` and add a warning, rather than an extra call per row.
+- **`prompts/get` without an `arguments` object.** `weekly_review` and `daily_log` take no required arguments, and clients such as the MCP Inspector leave the object out. SDK 2.2.0 rejected that call with "expected object, received undefined"; 2.3.1 accepts it.
+- The Docker image ships `LICENSE`.
+- `--help` links to the README's configuration and HTTP sections again; the anchors had moved in the README rewrite.
 - **Operation count.** The README, the docs, the `.mcpb` description and the Docker catalog copy said 47 operations. There are 46, plus two aliases: `trash_page` for `archive_page` and `get_self` for `get_bot_user`. The README's operations menu now marks `get_self` as an alias, and its heading is "46 ops, plus two aliases".
 - The plugin README explains why the server fails to start for a few days after an update when npm's `min-release-age` or `before` setting is on, and how to exempt this package on npm 12.
+
+### Security
+
+- Release workflows: the Docker and `.mcpb` jobs run the test suite before they publish, as the npm job already did. A manual run of the Docker workflow from `main` no longer pushes `latest`. The npm job installs a pinned npm instead of `npm@latest`, and `mcp-publisher` is pinned to a release and checked against its sha256 before it runs with the job's OIDC token.
+- CI builds the Docker image on every pull request (nothing is pushed) and checks that it starts.
 
 ## [3.2.1] - 2026-10-19
 

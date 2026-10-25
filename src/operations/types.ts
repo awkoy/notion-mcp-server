@@ -106,6 +106,15 @@ export type OperationDef<TParams = unknown, TResult = unknown> = {
   domain: OperationDomain;
   /** Removes or hides content (trash/archive/delete). Defaults to false. */
   destructive?: boolean;
+  /**
+   * For an operation only some calls of which remove content: given one
+   * parsed item, a sentence saying what it would remove, or null when it
+   * removes nothing. Such a call is confirmed under NOTION_CONFIRM_DESTRUCTIVE
+   * like a `destructive` operation. The operation stays out of the
+   * `destructive` access group, which names whole operations, so its handler
+   * refuses just the removing calls when that group is blocked.
+   */
+  destructiveWhen?: (item: Record<string, unknown>) => string | null;
   example: unknown;
   exampleBatch?: unknown;
   rollback?: RollbackFn;

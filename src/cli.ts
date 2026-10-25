@@ -73,13 +73,14 @@ Environment:
   PORT                       HTTP listen port (default 3000; 0 = OS-assigned)
   HOST                       HTTP bind address (default 127.0.0.1; 0.0.0.0 only with MCP_AUTH_TOKEN)
   MCP_AUTH_TOKEN             HTTP: require "Authorization: Bearer <token>" on /mcp
+  MCP_ALLOW_UNAUTHENTICATED  HTTP: true starts a non-loopback HOST without MCP_AUTH_TOKEN
   MCP_ALLOWED_HOSTS          HTTP: comma-list for the DNS-rebinding Host allowlist
   MCP_ALLOWED_ORIGINS        HTTP: comma-list for the browser Origin allowlist
 
 Docs:
   README          ${REPO}#readme
-  Configuration   ${REPO}#-configuration
-  HTTP transport  ${REPO}#-remote--http-transport
+  Configuration   ${REPO}#configuration
+  HTTP transport  ${REPO}#remote--http-transport
   Changelog       ${REPO}/blob/main/CHANGELOG.md
 `;
 }
