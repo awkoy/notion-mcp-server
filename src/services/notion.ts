@@ -21,7 +21,7 @@ type SupportedFetch = NonNullable<
 // The proxy named by the standard env vars, or null when there is none. Read
 // on every request rather than once at import so a variable set after the
 // module loaded (tests, a wrapper that injects config late) is honoured.
-function proxyUrl(): string | null {
+export function proxyUrl(): string | null {
   return (
     process.env.HTTPS_PROXY ||
     process.env.https_proxy ||
@@ -50,9 +50,10 @@ function proxyAgent(): HttpsProxyAgent<string> | undefined {
  * `https_proxy`, `HTTP_PROXY` or `http_proxy` when one is set.
  *
  * Every request the server sends goes through here — the Notion SDK's API
- * calls via the adapter below, and the two direct downloads in
- * src/operations/files.ts (`upload_file`'s `url` source and `get_image`'s
- * signed URL) — so a corporate proxy sees all of them or none. node-fetch is
+ * calls via the adapter below, and the two direct downloads: `upload_file`'s
+ * `url` source (through fetchPublicUrl in src/services/public-fetch.ts, which
+ * adds the address checks, timeout and size cap) and `get_image`'s signed URL
+ * in src/operations/files.ts — so a corporate proxy sees all of them or none. node-fetch is
  * used instead of the global fetch because it accepts a custom `agent`; when
  * no proxy is set the call still goes through node-fetch so behaviour is
  * uniform. The returned `Response` is node-fetch's: `body` is a Node

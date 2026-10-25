@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION_META_KEY,
   SUPPORTED_PROTOCOL_VERSIONS,
 } from "@modelcontextprotocol/server";
-import { isLoopbackHost, unauthenticatedBindError, type HttpConfig } from "../config/http.js";
+import { isLoopbackHost, setActiveTransport, unauthenticatedBindError, type HttpConfig } from "../config/http.js";
 import { CONFIG } from "../config/index.js";
 import { createServer, logAccessSummary, verifyNotionAuth } from "./index.js";
 import { checkAuth } from "./auth.js";
@@ -224,6 +224,7 @@ export async function startHttp(
 ): Promise<HttpHandle> {
   const bindError = unauthenticatedBindError(config);
   if (bindError) throw new Error(bindError);
+  setActiveTransport("http");
 
   // Legacy leg: one transport per session; the connected server lives behind it.
   const transports: Record<string, NodeStreamableHTTPServerTransport> = {};

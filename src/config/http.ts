@@ -1,5 +1,19 @@
 export type TransportKind = "stdio" | "http";
 
+// The transport this process is serving. startHttp sets it; stdio is the
+// default, as in parseHttpConfig. Read by operations whose safe behaviour
+// depends on who can reach them: upload_file refuses local paths over HTTP
+// unless NOTION_UPLOAD_ROOT is set, because there the caller is remote.
+let activeTransport: TransportKind = "stdio";
+
+export function setActiveTransport(kind: TransportKind): void {
+  activeTransport = kind;
+}
+
+export function getActiveTransport(): TransportKind {
+  return activeTransport;
+}
+
 export type HttpConfig = {
   transport: TransportKind;
   port: number;

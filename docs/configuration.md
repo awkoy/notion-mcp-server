@@ -68,7 +68,35 @@ What the model sees:
 
 ### Uploads
 
-`upload_file` takes its bytes as `base64`, a public `url`, or a local `path` that the server reads directly. A `path` source can read any file the server process can, so when a model composes the path, set `NOTION_UPLOAD_ROOT` to confine it. Relative paths resolve inside the root, and symlinks are resolved before the check so they can't point out of it. `mode: "multi"` sends a large file in 5 MB parts, and the MIME type is inferred from the file name when `content_type` isn't passed.
+`upload_file` takes its bytes as `base64`, a public `url`, or a local `path` that the server reads directly. The model composes the source, so the server guards the two it reads itself.
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `NOTION_UPLOAD_ROOT` | — | Directory a `path` source is confined to. `/` turns confinement off. |
+| `NOTION_UPLOAD_MAX_BYTES` | `1073741824` (1 GiB) | Largest file accepted from any source. |
+| `NOTION_UPLOAD_URL_TIMEOUT_MS` | `30000` | Time limit for a `url` source: DNS, every redirect and the body. |
+| `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` | — | `true` (or `1`, `yes`, `on`) lets a `url` source reach private addresses. |
+
+**Paths.** With `NOTION_UPLOAD_ROOT` set, relative paths resolve inside the root and anything landing outside is refused with `path_not_allowed`. Symlinks are resolved before the check, so a link inside the root can't point out of it. Inside the root nothing is filtered: dotfiles such as `.env` and `.git` upload like any other file. Over HTTP that makes the root everything a caller can read, so pick a directory that holds only files you would hand them. Without a root:
+
+- Over the HTTP transport, path sources are refused. The caller may not be on the server's machine, and could otherwise read any file the server can.
+- Over stdio, a path whose real location goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`, `.git`) is refused, and so is one under a system or app-data folder:
+  - `/proc`, `/sys` and `/dev` (`/proc/self/environ` holds the server's own environment, `NOTION_TOKEN` included), `/run/secrets` and `/var/run/secrets`;
+  - on macOS, `~/Library`, where Claude Desktop, Cursor, Windsurf and VS Code keep their MCP config, except iCloud Drive (`~/Library/Mobile Documents`) and `~/Library/CloudStorage`;
+  - on Windows, `~\AppData`, `%APPDATA%` and `%LOCALAPPDATA%`;
+  - `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` when they are set.
+
+  This is a heuristic that catches the usual credential stores, not a sandbox: set a root to be sure, or `NOTION_UPLOAD_ROOT=/` to turn it off.
+
+The server stats the file before reading it and refuses anything that isn't a regular file (a directory, `/dev/zero`, a FIFO) or is over the size limit. It opens the file without following a symlink and checks that the open file is the one it stat'ed, so a file swapped in between is refused.
+
+**URLs.** Only `http` and `https`. Before each request the server resolves the host and refuses it unless every address it gets back is public: loopback, private ranges, carrier-grade NAT, link-local (cloud metadata at `169.254.169.254` and `fd00:ec2::254`), multicast and reserved ranges are all out, as are IPv6 forms that carry one of those IPv4 addresses. The connection is pinned to the addresses it checked, so DNS can't answer differently a moment later. Redirects are followed by hand, at most five, and each hop is checked the same way. The body is streamed and the fetch stops when it passes the size limit or the timeout. Behind `HTTPS_PROXY` the proxy makes the connection, so the server checks its own DNS answer and the proxy's resolution is up to the proxy. The server still has to resolve the name itself: where only the proxy can, URL sources fail with `fetch_failed` unless `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true`, which skips the check and the lookup. Set `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` when uploads legitimately come from an intranet host.
+
+**Size and mode.** Notion takes a file in one request up to 20 MiB and in 5 to 20 MiB parts above that. Omit `mode` and the size picks it; `mode: "single"` on a file over 20 MiB is refused with `too_large`. Notion's own limit per file is 5 MiB on free workspaces and 5 GiB on paid ones. The server holds the whole file in memory while it uploads, about twice its size at the peak, so keep `NOTION_UPLOAD_MAX_BYTES` within what the host can spare.
+
+**Content type.** It is inferred from the file name when `content_type` isn't passed. An extension the server doesn't know is sent as `application/octet-stream`, and Notion works out the type from the file name. A file name with no extension needs an explicit `content_type`. CAD and 3D files (`dwg`, `dxf`, `step`, `stl`, `obj`, `glb`, …) attach as file blocks.
+
+**Error codes.** `path_not_allowed` (outside the root, a dot-named path or a system or app-data folder, or any path over HTTP without a root), `validation_error` (a path that doesn't exist or can't be read, or isn't a regular file), `url_refused` (a scheme other than http(s), or a host that resolves to a non-public address), `too_large`, `timeout`, and `fetch_failed` (DNS failure, a non-2xx answer, too many redirects).
 
 ### File URLs and `notion-file:` refs
 
@@ -87,7 +115,7 @@ Both resolvers re-read the object through the Notion API, so a ref stays valid a
 
 ## Proxy
 
-`HTTPS_PROXY` / `HTTP_PROXY` (lowercase also accepted) route all outbound traffic through an HTTP(S) proxy: Notion API calls, the downloads in `get_image`, and `upload_file`'s `url` source.
+`HTTPS_PROXY` / `HTTP_PROXY` (lowercase also accepted) route all outbound traffic through an HTTP(S) proxy: Notion API calls, the downloads in `get_image`, and `upload_file`'s `url` source. For the `url` source the private-address check runs on the server's own DNS answer, since the proxy opens the connection. So the server must be able to resolve names itself; on a network where only the proxy can, set `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` to skip the check, or URL uploads fail with `fetch_failed`.
 
 ## Logs
 
