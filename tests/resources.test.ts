@@ -36,6 +36,20 @@ describe("readNotionResource", () => {
     });
   });
 
+  it("leads an incomplete page with a comment saying so", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValueOnce({
+      markdown: "# Hello",
+      truncated: true,
+      unknown_block_ids: ["b-1"],
+    });
+
+    const res = await readNotionResource("page", "page-123");
+
+    expect(res.mimeType).toBe("text/markdown");
+    expect(res.text).toMatch(/^<!-- notion-mcp-server: This markdown is not the whole page: .* -->\n# Hello$/);
+    expect(res.text).toContain("Do not replace the whole page");
+  });
+
   it("reads a database as JSON", async () => {
     notionStub.dataSources.retrieve.mockResolvedValueOnce({
       id: "ds-1",

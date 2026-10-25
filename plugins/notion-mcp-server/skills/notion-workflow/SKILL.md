@@ -25,7 +25,7 @@ Most tasks follow the same path: find the thing, read it, then change it in as f
 | Block ids, to edit one block | `get_block_children` | `{ block_id }` |
 | A database's columns and options | `get_data_source` | `{ data_source_id }` |
 
-Prefer `get_page_markdown` to walking blocks. One call returns the whole body, and it round-trips with `update_page_markdown`.
+Prefer `get_page_markdown` to walking blocks. One call returns the body, and it round-trips with `update_page_markdown`. When it returns `truncated: true` or `unknown_block_ids`, the markdown is missing blocks: don't replace the page with `update_page_markdown`, which would delete them. Edit with `insert_content`, `append_blocks` or `update_block` instead.
 
 ## 3. Query a database with `where`
 
