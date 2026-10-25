@@ -5,6 +5,8 @@ export type HttpConfig = {
   port: number;
   host: string;
   authToken?: string;
+  /** MCP_ALLOW_UNAUTHENTICATED: serve a non-loopback HOST without MCP_AUTH_TOKEN. */
+  allowUnauthenticated: boolean;
   allowedHosts: string[];
   allowedOrigins: string[];
 };
@@ -40,8 +42,36 @@ export function parseHttpConfig(env: NodeJS.ProcessEnv): HttpConfig {
   const authTokenRaw = (env.MCP_AUTH_TOKEN ?? "").trim();
   const authToken = authTokenRaw === "" ? undefined : authTokenRaw;
 
+  const allowUnauthenticated = ["true", "1", "yes", "on"].includes(
+    (env.MCP_ALLOW_UNAUTHENTICATED ?? "").trim().toLowerCase()
+  );
+
   const allowedHosts = parseList(env.MCP_ALLOWED_HOSTS);
   const allowedOrigins = parseList(env.MCP_ALLOWED_ORIGINS);
 
-  return { transport, port, host, authToken, allowedHosts, allowedOrigins };
+  return { transport, port, host, authToken, allowUnauthenticated, allowedHosts, allowedOrigins };
+}
+
+/** Bind addresses only this machine can reach: 127.0.0.0/8, ::1 and `localhost`. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (h === "localhost" || h === "::1") return true;
+  return /^(::ffff:)?127(\.\d{1,3}){3}$/.test(h);
+}
+
+/**
+ * Why this config must not start, or null when it may. Whoever reaches /mcp
+ * acts as NOTION_TOKEN, so a bind other machines can reach needs
+ * MCP_AUTH_TOKEN — unless the operator says, with MCP_ALLOW_UNAUTHENTICATED,
+ * that something in front of it (an authenticating proxy, a private network)
+ * already does that job.
+ */
+export function unauthenticatedBindError(config: HttpConfig): string | null {
+  if (config.authToken || config.allowUnauthenticated || isLoopbackHost(config.host)) {
+    return null;
+  }
+  return (
+    `Refusing to serve HTTP on ${config.host} without MCP_AUTH_TOKEN: anyone who can reach it would act as your NOTION_TOKEN. ` +
+    `Set MCP_AUTH_TOKEN, bind HOST=127.0.0.1, or set MCP_ALLOW_UNAUTHENTICATED=true if an authenticating proxy sits in front.`
+  );
 }

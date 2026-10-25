@@ -9,7 +9,7 @@ The plugin contains two things:
 
 ## Requirements
 
-- Node.js 20 or later, so that `npx` can run the server.
+- Node.js 22 or later, so that `npx` can run the server.
 - A Notion token. Open [app.notion.com/developers/tokens](https://app.notion.com/developers/tokens), choose **+ New token**, pick your workspace and copy the `ntn_…` value. A Personal Access Token sees everything you can see. An Internal Integration secret also works, but it sees only the pages shared with that integration.
 
 ## Install
