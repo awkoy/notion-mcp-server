@@ -5,12 +5,9 @@ import { tryHandler } from "../utils/handler.js";
 import { slimBlock, slimList } from "../utils/slim.js";
 import { parseMarkdownToBlocks } from "../markdown/parse.js";
 import type { OperationResult } from "./types.js";
-import {
-  asSdk,
-  type AppendBlockBody,
-  type AppendBlockChildren,
-  type UpdateBlockBody,
-} from "../utils/notion-types.js";
+import { asSdk, type UpdateBlockBody } from "../utils/notion-types.js";
+import { appendBlockTree, PartialWriteError, type WrittenBlock } from "../utils/write-blocks.js";
+import { toErrorEnvelope } from "../utils/error.js";
 import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
 import { notionId } from "../schema/id.js";
 
@@ -70,21 +67,17 @@ register({
         ? { type: "after_block" as const, after_block: { id: after } }
         : undefined;
     const notion = await getClient();
-    const body = {
-      block_id,
-      children: asSdk<AppendBlockChildren>(blocks),
-      ...(positionArg ? { position: positionArg } : {}),
-    };
-    const response = await notion.blocks.children.append(asSdk<AppendBlockBody>(body));
-    // Notion returns just the new blocks for default/end/after positions, but
-    // the full updated child set for `position: "start"` (new blocks appear
-    // first). Slice to the requested count so the response stays bounded.
-    // If the response is shorter than expected (shouldn't happen, but be safe),
-    // surface only what we got and skip ID emission rather than return wrong IDs.
-    const canMapIds = response.results.length >= blocks.length;
-    const newBlocks = canMapIds
-      ? response.results.slice(0, blocks.length)
-      : response.results;
+    let newBlocks: WrittenBlock[];
+    try {
+      newBlocks = await appendBlockTree(notion, block_id, blocks, positionArg);
+    } catch (error) {
+      if (!(error instanceof PartialWriteError)) throw error;
+      return partialAppendError(error, blocks.length);
+    }
+    // If Notion returned fewer blocks than were sent (shouldn't happen, but be
+    // safe), surface only what we got and skip ID emission rather than return
+    // wrong IDs.
+    const canMapIds = newBlocks.length >= blocks.length;
     if (verbose) {
       return {
         ok: true,
@@ -103,6 +96,24 @@ register({
     };
   }),
 });
+
+/**
+ * Content past Notion's per-request limits goes in several requests, so an
+ * append can stop part way. Say how far it got and where the rest goes;
+ * dispatch adds that the call was partly applied.
+ */
+function partialAppendError(error: PartialWriteError, total: number): OperationResult {
+  const envelope = toErrorEnvelope(error.failure);
+  const last = error.written[error.written.length - 1];
+  return {
+    ok: false,
+    error: {
+      ...envelope,
+      message: `${envelope.message} The content was too large or too deeply nested for one request, so it went in several, and ${error.written.length} of its ${total} top-level blocks were appended before one failed; the last one appended is ${last.id}.`,
+      fix: `${envelope.fix ? `${envelope.fix} ` : ""}Append the blocks after the first ${error.written.length} with after: "${last.id}".`,
+    },
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // get_block
@@ -333,14 +344,11 @@ register({
         const blocks = op.markdown
           ? parseMarkdownToBlocks(op.markdown)
           : (op.children ?? []);
-        const r = await notion.blocks.children.append(
-          asSdk<AppendBlockBody>({
-            block_id: op.block_id,
-            children: asSdk<AppendBlockChildren>(blocks),
-          })
-        );
-        const canMapIds = r.results.length >= blocks.length;
-        const newBlocks = canMapIds ? r.results.slice(0, blocks.length) : r.results;
+        if (blocks.length === 0) throw new Error("append needs markdown or children with at least one block");
+        const newBlocks = await appendBlockTree(notion, op.block_id, blocks).catch((error: unknown) => {
+          throw error instanceof PartialWriteError ? error.failure : error;
+        });
+        const canMapIds = newBlocks.length >= blocks.length;
         results.push(
           verbose
             ? { op: "append", appended: blocks.length, results: newBlocks.map((x) => slimBlock(x, true)) }

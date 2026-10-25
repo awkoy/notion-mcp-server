@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isFullPage, type PageObjectResponse } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
+import { clearWrite } from "../services/call-context.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { toErrorEnvelope } from "../utils/error.js";
@@ -15,6 +16,7 @@ import {
 import { DEFAULT_PAGE_LIMIT, paginateAll } from "../utils/paginate.js";
 import type { OperationError, OperationResult } from "./types.js";
 import { parseMarkdownToBlocks } from "../markdown/parse.js";
+import { appendBlockTree, nextBlockRequest } from "../utils/write-blocks.js";
 import { PARENT_SCHEMA } from "../schema/page.js";
 import { ICON_SCHEMA } from "../schema/icon.js";
 import { FILE_SCHEMA } from "../schema/file.js";
@@ -199,19 +201,75 @@ register({
         ? parseMarkdownToBlocks(params.markdown)
         : params.children;
 
+    // The page carries the leading blocks that fit in one request whole;
+    // pages.create returns no block ids, so a block whose children have to
+    // follow later starts the part appended after it.
+    let inline = children ?? [];
+    let tail: typeof inline = [];
+    if (inline.length) {
+      const first = nextBlockRequest(inline);
+      const cut = first.later.length ? first.later[0].index : first.send.length;
+      tail = inline.slice(cut);
+      inline = inline.slice(0, cut);
+    }
+
     const notion = await getClient();
     const body = {
       parent: rowParent,
       properties,
-      ...(children && children.length ? { children } : {}),
+      ...(inline.length ? { children: inline } : {}),
       ...(params.template ? { template: params.template } : {}),
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),
     };
     const response = await notion.pages.create(asSdk<CreatePageBody>(body));
+    if (tail.length) {
+      const failed = await appendBlockTree(notion, response.id, tail).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      if (failed !== undefined) return abandonPartialPage(notion, response.id, failed);
+    }
     return withWarnings({ ok: true, data: slimPage(response, params.verbose ?? false) }, warnings);
   }),
 });
+
+/**
+ * A page whose content ran past Notion's per-request limits is written in
+ * several requests. When a later one fails, trash the page, so the failed
+ * call leaves nothing behind and a retry doesn't make a second copy.
+ */
+async function abandonPartialPage(
+  notion: Awaited<ReturnType<typeof getClient>>,
+  pageId: string,
+  failure: unknown
+): Promise<OperationResult> {
+  const envelope = toErrorEnvelope(failure);
+  const trashed = await notion.pages
+    .update(asSdk<UpdatePageBody>({ page_id: pageId, in_trash: true }))
+    .then(
+      () => true,
+      () => false
+    );
+  // A trashed page is the whole of what the call wrote, so a retry is safe.
+  if (trashed) clearWrite();
+  return {
+    ok: false,
+    error: {
+      ...envelope,
+      message: trashed
+        ? `${envelope.message} The content was too large or too deeply nested for one request, and writing the rest of it after the page was created failed, so the page (${pageId}) was moved to trash.`
+        : `${envelope.message} The content was too large or too deeply nested for one request, and writing the rest of it after the page was created failed. Moving the page to trash failed too, so page ${pageId} is left with part of its content.`,
+      ...(envelope.fix || !trashed
+        ? {
+            fix: [envelope.fix, trashed ? undefined : `Trash page ${pageId} with trash_page before retrying.`]
+              .filter(Boolean)
+              .join(" "),
+          }
+        : {}),
+    },
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // set_page_title

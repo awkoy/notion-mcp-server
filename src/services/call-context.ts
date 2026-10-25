@@ -43,3 +43,10 @@ export function markWrite(): void {
   const call = storage.getStore();
   if (call) call.wrote = true;
 }
+
+// For a handler that undid what its call changed (create_page trashing a page
+// it could not finish): the failure then leaves nothing to read back.
+export function clearWrite(): void {
+  const call = storage.getStore();
+  if (call) call.wrote = false;
+}
