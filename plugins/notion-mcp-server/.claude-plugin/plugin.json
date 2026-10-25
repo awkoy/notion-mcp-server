@@ -1,7 +1,7 @@
 {
   "name": "notion-mcp-server",
   "displayName": "Notion MCP Server (community)",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "Read and write Notion with a token: search pages, query databases with typed filters, read and write pages as markdown, and batch edits. Runs the open-source notion-mcp-server locally; not made by Notion.",
   "author": {
     "name": "Yaroslav Boiko",

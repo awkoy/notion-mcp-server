@@ -1,11 +1,11 @@
 {
   "name": "notion-mcp-server",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "Token-auth Notion MCP server: pages, databases, blocks, comments, files and templates behind three context-efficient tools (read, write, describe), with batched writes and markdown round-trip.",
   "mcpServers": {
     "notion": {
       "command": "npx",
-      "args": ["-y", "notion-mcp-server@3.2.1"]
+      "args": ["-y", "notion-mcp-server@3.3.0"]
     }
   },
   "settings": [

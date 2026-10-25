@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.0] - 2026-10-25
 
 ### Added
 
@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking for one HTTP setup: a non-loopback `HOST` needs `MCP_AUTH_TOKEN`.** Bound to `0.0.0.0` or a LAN address without a token, anyone who could reach the port acted with your `NOTION_TOKEN`; the server only printed a warning. It now refuses to start. Set `MCP_AUTH_TOKEN`, bind `HOST=127.0.0.1`, or set `MCP_ALLOW_UNAUTHENTICATED=true` when an authenticating proxy sits in front. Loopback binds and stdio are unchanged.
 - **Idle HTTP sessions close.** 2025-era clients open a session per connection, and a client that went away without `DELETE` left its session in memory for the life of the process. A session with no request and no open stream for 30 minutes is now closed, and at 1,000 open sessions the longest-idle one makes room, or a new client gets `503` when every session is busy. 2026-07-28 clients are stateless and unaffected.
 - **Node.js 22 or later.** Node 20 left support in April 2026. `engines`, the `.mcpb` manifest and the plugin README say 22, and CI runs on 22 and 24.
-- Dependencies: `@modelcontextprotocol/server` 2.3.1 (was 2.2.0) and `@modelcontextprotocol/node` 2.1.1 (was 2.1.0). The lockfile also pins `zod` 4.6.6. Dev-only: `@modelcontextprotocol/client` 2.3.1, `vitest` 5.0.3.
+- Dependencies: `@modelcontextprotocol/server` 2.3.1 (was 2.2.0) and `@modelcontextprotocol/node` 2.1.1 (was 2.1.0). The lockfile also pins `@notionhq/client` 5.27.1 (was 5.27.0) and `zod` 4.6.7 (was 4.6.5), so the Docker image and the `.mcpb` bundle ship them. Dev-only: `@modelcontextprotocol/client` 2.3.1, `vitest` 5.0.5.
 - The Gemini CLI extension runs `notion-mcp-server@3.2.1`, pinned like the plugins, instead of whatever npm serves as latest.
 - The auth error's fix no longer mentions an OAuth gateway the server doesn't have.
 - **An idempotency key is bound to its batch** ([#109](https://github.com/awkoy/notion-mcp-server/pull/109), thanks @insane66613). The key used to cache by operation and key alone, so a different batch sent under a reused key got the first batch's result back and never ran. Now the key is bound to the operation, the items and `atomic` (not `concurrency`) for 5 minutes.
