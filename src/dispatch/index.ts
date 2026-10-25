@@ -9,10 +9,9 @@ import type {
 } from "../operations/types.js";
 import { begin, complete, release } from "./idempotency.js";
 import { mapWithConcurrency } from "./concurrency.js";
-import { rateLimiter } from "./rate-limit.js";
-import { isRetryableErrorCode, withRetry } from "./retry.js";
+import { withCallContext } from "../services/call-context.js";
 import { buildValidationError } from "../utils/learning-error.js";
-import { toErrorEnvelope } from "../utils/error.js";
+import { partlyAppliedError, toErrorEnvelope } from "../utils/error.js";
 import {
   isOperationAllowed,
   operationNotAllowedError,
@@ -150,20 +149,25 @@ export async function dispatch(
   return runSingle(def, payload);
 }
 
-// Run the handler under the shared rate limiter, retrying on transient SDK
-// failures. Token is acquired inside withRetry so each retry attempt counts
-// against the per-second budget instead of bursting on retry storms.
+// Run the handler once. Each Notion request it sends is paced and retried on
+// its own (PacedClient in services/notion.ts), so the handler is never run
+// again. A write that fails after one of its requests changed something in
+// Notion says so in its error, so the model does not repeat the whole call.
 function runHandlerWithLimitAndRetry(
   def: OperationDef,
   params: unknown
 ): Promise<OperationResult> {
-  return withRetry(
-    async () => {
-      await rateLimiter.acquire();
-      return def.handler(params);
-    },
-    { isRetryableResult: (r) => r.ok === false && isRetryableErrorCode(r.error.code) }
-  );
+  return withCallContext(def.access, async (call) => {
+    const partly = () => def.access === "write" && call.wrote;
+    try {
+      const result = await def.handler(params);
+      if (result.ok || !partly()) return result;
+      return { ...result, error: partlyAppliedError(result.error) };
+    } catch (error) {
+      if (!partly()) throw error;
+      return { ok: false, error: partlyAppliedError(toErrorEnvelope(error)) };
+    }
+  });
 }
 
 async function runSingle(

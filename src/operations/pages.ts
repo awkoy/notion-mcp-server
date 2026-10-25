@@ -4,8 +4,6 @@ import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
 import { toErrorEnvelope } from "../utils/error.js";
-import { rateLimiter } from "../dispatch/rate-limit.js";
-import { withRetry } from "../dispatch/retry.js";
 import {
   incompleteListProperties,
   isIncompleteListProperty,
@@ -681,11 +679,10 @@ function propertiesLabel(names: readonly string[]): string {
  * every reference past the 25th. A list longer than the walk cap keeps
  * `has_more: true`, which slimPage reports in `truncated_properties`.
  *
- * Dispatch paid one rate-limit token for the handler, which covers
- * pages.retrieve, so each property call takes its own token and retries on
- * its own: a 429 here must not re-run the whole handler. A property whose
- * walk fails keeps the page object's values, flagged as cut, and its reason
- * goes in `unread`, so the page read still succeeds.
+ * Each property call is paced and retried on its own by the client
+ * (PacedClient in services/notion.ts). A property whose walk still fails
+ * keeps the page object's values, flagged as cut, and its reason goes in
+ * `unread`, so the page read still succeeds.
  */
 async function withFullListProperties(
   notion: Awaited<ReturnType<typeof getClient>>,
@@ -717,14 +714,11 @@ async function walkListProperty(
 ): Promise<{ values: unknown[]; truncated: boolean }> {
   const { results, truncated } = await paginateAll(
     async (cursor) => {
-      const r = await withRetry(async () => {
-        await rateLimiter.acquire();
-        return notion.pages.properties.retrieve({
-          page_id: pageId,
-          property_id: propertyId,
-          page_size: LIST_PROPERTY_PAGE_SIZE,
-          ...(cursor ? { start_cursor: cursor } : {}),
-        });
+      const r = await notion.pages.properties.retrieve({
+        page_id: pageId,
+        property_id: propertyId,
+        page_size: LIST_PROPERTY_PAGE_SIZE,
+        ...(cursor ? { start_cursor: cursor } : {}),
       });
       return r.object === "list"
         ? { results: r.results, has_more: r.has_more, next_cursor: r.next_cursor }

@@ -41,7 +41,6 @@ vi.mock("../src/services/notion.js", () => ({
 
 import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
-import { rateLimiter } from "../src/dispatch/rate-limit.js";
 
 beforeAll(async () => {
   await initOperations();
@@ -1072,24 +1071,6 @@ describe("get_page include_properties reads full relation and people lists", () 
     expect(res.warnings).toHaveLength(1);
     expect(res.warnings![0]).toContain('"Tasks"');
     expect(res.warnings![0]).toContain("set_page_property");
-  });
-
-  it("takes a rate-limit token for every property page it reads", async () => {
-    notionStub.pages.retrieve.mockResolvedValue(
-      pageWith({ Tasks: { id: "rel1", type: "relation", relation: refs(25, "r"), has_more: true } })
-    );
-    const all = refs(130, "r");
-    notionStub.pages.properties.retrieve
-      .mockResolvedValueOnce(itemPage("relation", all.slice(0, 100), "c-2"))
-      .mockResolvedValueOnce(itemPage("relation", all.slice(100), null));
-    const acquire = vi.spyOn(rateLimiter, "acquire");
-    try {
-      await dispatch("get_page", { page_id: "p-1", include_properties: true });
-      // One for pages.retrieve (taken by dispatch), one per properties.retrieve page.
-      expect(acquire).toHaveBeenCalledTimes(3);
-    } finally {
-      acquire.mockRestore();
-    }
   });
 
   it("keeps the page object's values and warns when a list cannot be read", async () => {

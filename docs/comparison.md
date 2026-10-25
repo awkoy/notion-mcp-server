@@ -26,7 +26,7 @@ Both authenticate with a token and run locally, so this is the like-for-like com
 | **Batch mutations** | Not documented | Universal `{ items: [...] }` envelope, up to **10 in parallel** |
 | **Atomic batches + rollback** | Not documented | `atomic: true` stops on the first failure and archives what the batch already created, best effort |
 | **Idempotency** | Not documented | `idempotency_key` binds to the operation, the items and atomic mode for 5 minutes: an exact retry gets the cached result, reuse for a different batch is rejected |
-| **Rate-limit handling** | 429s bubble up | Token-bucket limiter (3 req/s default) and exponential backoff that honors `Retry-After` |
+| **Rate-limit handling** | 429s bubble up | Token-bucket limiter on every Notion request (3 req/s default). Each request retries on its own: on 429 and 529 always, on 5xx and timeouts only when it is safe to repeat (GETs and reads). Waits out `Retry-After` (header or body), up to 60 s per call |
 | **Response shapes** | Raw Notion SDK JSON | **Slim shapers** drop noise by default. `verbose: true` returns the raw shape, within 4 tokens of what the official server returns. |
 | **Database queries** | Raw `properties` bag per row | **Flattened** name → value map (all 20+ property types): 16,629 → 3,143 tokens on the benchmark's 25-row query |
 | **Writing properties** | Full Notion property JSON | Plain values: `{ Status: "Done", Due: "2026-10-01", Tags: ["a"] }`, typed from the data source schema (cached 5 min). Wrong names and options are rejected with the valid ones. |
