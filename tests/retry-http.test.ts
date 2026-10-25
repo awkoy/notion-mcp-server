@@ -13,6 +13,7 @@ import { initOperations } from "../src/operations/index.js";
 import { dispatch } from "../src/dispatch/index.js";
 import { getClient } from "../src/services/notion.js";
 import { withCallContext } from "../src/services/call-context.js";
+import { rateLimiter } from "../src/dispatch/rate-limit.js";
 
 // node-fetch's own Response, as production gets it: its `headers` is
 // node-fetch's Headers class, not the global one.
@@ -114,6 +115,50 @@ describe("dispatch over the real SDK — retries", () => {
       const res = await dispatch("get_block", { block_id: BLOCK });
       expect(errorCode(res)).toBe("service_unavailable");
       expect(http.methods).toHaveLength(5);
+    });
+  });
+
+  describe("pacing", () => {
+    const refs = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `r-${i}` }));
+    const listPage = (values: unknown[], next: string | null) => ({
+      object: "list",
+      type: "property_item",
+      results: values.map((relation) => ({ object: "property_item", type: "relation", relation })),
+      has_more: next !== null,
+      next_cursor: next,
+    });
+
+    it("takes a token for every request, and a 429 on one property page retries only that page", async () => {
+      const all = refs(130);
+      const http = script(
+        ok({
+          object: "page",
+          id: PAGE,
+          url: "https://notion.so/p",
+          parent: { type: "data_source_id", data_source_id: "ds-1" },
+          in_trash: false,
+          properties: {
+            Name: { id: "title", type: "title", title: [{ plain_text: "Row" }] },
+            Tasks: { id: "rel1", type: "relation", relation: all.slice(0, 25), has_more: true },
+          },
+        }),
+        ok(listPage(all.slice(0, 100), "c-2")),
+        notionError(429, "rate_limited", { headers: NOW }),
+        ok(listPage(all.slice(100), null))
+      );
+      const acquire = vi.spyOn(rateLimiter, "acquire");
+      try {
+        const res = (await dispatch("get_page", { page_id: PAGE, include_properties: true })) as {
+          ok: boolean;
+          data: { properties: Record<string, unknown[]> };
+        };
+        expect(res.ok).toBe(true);
+        expect(res.data.properties.Tasks).toHaveLength(130);
+        expect(http.methods).toEqual(["GET", "GET", "GET", "GET"]);
+        expect(acquire).toHaveBeenCalledTimes(4);
+      } finally {
+        acquire.mockRestore();
+      }
     });
   });
 
