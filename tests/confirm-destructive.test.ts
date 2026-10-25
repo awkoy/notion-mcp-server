@@ -440,3 +440,98 @@ describe("confirm destructive: id-only targets", () => {
     });
   });
 });
+
+describe("confirm destructive: update_data_source deleting properties", () => {
+  const DS = {
+    object: "data_source",
+    id: "ds-1",
+    url: "u",
+    title: [{ plain_text: "Tasks" }],
+    description: [],
+    parent: { type: "database_id", database_id: "db-1" },
+    properties: {},
+  };
+
+  it("a null property is confirmed, and the prompt names it", async () => {
+    notionStub.dataSources.update.mockResolvedValue(DS);
+    await withFlag("true", async () => {
+      const { body } = await execute(client, "update_data_source", {
+        data_source_id: "ds-1",
+        properties: { Old: null, Priority: { type: "select", select: { options: [] } } },
+      });
+      expect(body.ok).toBe(true);
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0].message).toContain("update_data_source");
+      expect(prompts[0].message).toContain('the property "Old"');
+      expect(prompts[0].message).not.toContain("Priority");
+      expect(notionStub.dataSources.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("declined: the schema is left alone", async () => {
+    answer = { action: "decline" };
+    await withFlag("true", async () => {
+      const { body } = await execute(client, "update_data_source", {
+        data_source_id: "ds-1",
+        properties: { Old: null },
+      });
+      expect(body.error?.code).toBe("confirmation_declined");
+      expect(notionStub.dataSources.update).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a schema change that deletes nothing does not prompt", async () => {
+    notionStub.dataSources.update.mockResolvedValue(DS);
+    await withFlag("true", async () => {
+      const { body } = await execute(client, "update_data_source", {
+        data_source_id: "ds-1",
+        properties: { Priority: { type: "select", select: { options: [] } } },
+      });
+      expect(body.ok).toBe(true);
+      expect(prompts).toHaveLength(0);
+    });
+  });
+
+  it("a batch asks once, about the deleting items only", async () => {
+    notionStub.dataSources.update.mockResolvedValue(DS);
+    await withFlag("true", async () => {
+      await execute(client, "update_data_source", {
+        items: [
+          { data_source_id: "ds-1", properties: { A: null, B: null } },
+          { data_source_id: "ds-2", title: [{ type: "text", text: { content: "Renamed" } }] },
+        ],
+      });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0].message).toContain("1 of 2 items");
+      expect(prompts[0].message).toContain('the properties "A", "B"');
+    });
+  });
+
+  it("NOTION_BLOCKED_OPERATIONS=destructive refuses the deletion without asking, and keeps the rest of the operation", async () => {
+    process.env.NOTION_BLOCKED_OPERATIONS = "destructive";
+    configureOperationAccess();
+    notionStub.dataSources.update.mockResolvedValue(DS);
+    try {
+      await withFlag("true", async () => {
+        const { body } = await execute(client, "update_data_source", {
+          data_source_id: "ds-1",
+          properties: { Old: null },
+        });
+        expect(body.error?.code).toBe("operation_not_allowed");
+        expect(body.error?.message).toContain('"Old"');
+        expect(prompts).toHaveLength(0);
+        expect(notionStub.dataSources.update).not.toHaveBeenCalled();
+
+        const rename = await execute(client, "update_data_source", {
+          data_source_id: "ds-1",
+          properties: { Priority: { type: "select", select: { options: [] } } },
+        });
+        expect(rename.body.ok).toBe(true);
+        expect(notionStub.dataSources.update).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      delete process.env.NOTION_BLOCKED_OPERATIONS;
+      configureOperationAccess();
+    }
+  });
+});

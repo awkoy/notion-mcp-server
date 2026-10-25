@@ -172,7 +172,7 @@ export function toErrorEnvelope(error: unknown): OperationError {
     return {
       code: "auth_error",
       message: `Notion auth failed: ${error.message}`,
-      fix: "Set NOTION_TOKEN env var, or configure OAuth credentials if using the auth gateway.",
+      fix: "Set NOTION_TOKEN in your MCP client config to a personal access token or an integration token, then restart the server.",
     };
   }
   if (error instanceof Error) {

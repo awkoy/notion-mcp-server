@@ -41,6 +41,7 @@ RUN --mount=type=cache,id=npm-$TARGETARCH,target=/root/.npm,sharing=locked \
     npm ci --omit=dev --ignore-scripts
 
 COPY --from=builder /app/build ./build
+COPY LICENSE ./
 
 USER node
 

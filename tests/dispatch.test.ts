@@ -33,7 +33,14 @@ beforeAll(() => {
   register(singleDef);
 
   // Batchable with rollback support
-  const BatchSchema = z.object({ value: z.number() });
+  // value 666 makes validation itself throw, standing in for any unexpected
+  // throw between taking an idempotency key and caching the result.
+  const BatchSchema = z.object({
+    value: z.number().refine((v) => {
+      if (v === 666) throw new Error("boom");
+      return true;
+    }),
+  });
   const batchDef: OperationDef<z.infer<typeof BatchSchema>, { id: string; value: number }> = {
     name: FAKE_BATCH_OP,
     description: "fake batch op",
@@ -134,21 +141,95 @@ describe("dispatch — batch", () => {
     );
   });
 
-  it("dedupes batch invocations sharing the same idempotency_key", async () => {
-    const key = `key-${Date.now()}`;
+  it("dedupes identical keyed batches without rerunning side effects", async () => {
+    const key = `key-${Date.now()}-dedupe`;
     tracker.created.length = 0;
     const first = await dispatch(FAKE_BATCH_OP, {
       items: [{ value: 200 }],
       idempotency_key: key,
+      concurrency: 1,
     });
     const createdAfterFirst = tracker.created.length;
+    expect((first as any).idempotency_receipt).toEqual({ decision: "accepted" });
+
     const second = await dispatch(FAKE_BATCH_OP, {
       items: [{ value: 200 }],
       idempotency_key: key,
+      concurrency: 9,
     });
-    // Same cached result is returned and no new side effects ran.
-    expect(second).toEqual(first);
+    expect(second).toEqual({
+      ...(first as any),
+      idempotency_receipt: { decision: "deduplicated", replay_of: "original" },
+    });
     expect(tracker.created.length).toBe(createdAfterFirst);
+  });
+
+  it("rejects reuse of an idempotency key for different items or atomic mode", async () => {
+    const key = `key-${Date.now()}-conflict`;
+    await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 201 }],
+      idempotency_key: key,
+      atomic: false,
+    });
+
+    const changedItems = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 202 }],
+      idempotency_key: key,
+      atomic: false,
+    });
+    expect((changedItems as any).error.code).toBe("idempotency_conflict");
+
+    const changedAtomic = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 201 }],
+      idempotency_key: key,
+      atomic: true,
+    });
+    expect((changedAtomic as any).error.code).toBe("idempotency_conflict");
+  });
+
+  it("treats a null idempotency key as no key", async () => {
+    const res = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 204 }],
+      idempotency_key: null,
+    });
+    expect((res as any).ok).toBe(true);
+    expect((res as any).idempotency_receipt).toBeUndefined();
+  });
+
+  it("does not cache a keyed batch in which no item ran", async () => {
+    const key = `key-${Date.now()}-invalid`;
+    const invalid = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: "not a number" }],
+      idempotency_key: key,
+    });
+    expect((invalid as any).summary.failed).toBe(1);
+    // The corrected batch runs under the same key instead of hitting a conflict.
+    const corrected = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 205 }],
+      idempotency_key: key,
+    });
+    expect((corrected as any).ok).toBe(true);
+    expect((corrected as any).idempotency_receipt).toEqual({ decision: "accepted" });
+  });
+
+  it("frees the key when the batch throws", async () => {
+    const key = `key-${Date.now()}-throw`;
+    await expect(
+      dispatch(FAKE_BATCH_OP, { items: [{ value: 666 }], idempotency_key: key })
+    ).rejects.toThrow("boom");
+    const retry = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 206 }],
+      idempotency_key: key,
+    });
+    expect((retry as any).ok).toBe(true);
+  });
+
+  it("rejects an empty idempotency key", async () => {
+    const res = await dispatch(FAKE_BATCH_OP, {
+      items: [{ value: 203 }],
+      idempotency_key: "   ",
+    });
+    expect((res as any).error.code).toBe("invalid_idempotency_key");
   });
 });
 

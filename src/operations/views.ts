@@ -4,7 +4,7 @@ import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import type { OperationResult } from "./types.js";
 import { tryHandler } from "../utils/handler.js";
-import { slimView, slimPage } from "../utils/slim.js";
+import { slimView, slimPage, truncatedRowWarnings } from "../utils/slim.js";
 import { mapWithConcurrency } from "../dispatch/concurrency.js";
 import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
 import {
@@ -311,6 +311,7 @@ register({
           next_cursor: first.next_cursor ?? null,
           ...(truncated ? { truncated: true } : {}),
         },
+        ...truncatedRowWarnings(rows),
       };
     }
 
@@ -359,6 +360,7 @@ register({
         truncated,
         pages_walked: pagesWalked,
       },
+      ...truncatedRowWarnings(rows),
     };
   }),
 });

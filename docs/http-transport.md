@@ -13,6 +13,8 @@ Both current protocol generations are served, picked per request from what the c
 | **MCP 2026-07-28** | The stateless path. Every `POST` stands alone: no session, `server/discover`, cache hints on every list. |
 | **2024-11-05 … 2025-11-25** | Sessions via the `mcp-session-id` header, plus the `GET` stream and `DELETE`. A `GET` or `DELETE` without a session id is answered 405. |
 
+A 2025-era session with no request and no open stream for 30 minutes is closed, and its id then gets a 404, which tells the client to start a new one. At most 1,000 sessions stay open: a new one closes the longest-idle session, or gets `503` when every session has a request or stream in flight.
+
 Checking it locally:
 
 ```bash
@@ -23,7 +25,7 @@ npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0
 
 ## Docker
 
-Inside a container `127.0.0.1` is the container's own loopback, so `HOST=0.0.0.0` is what makes the published port reachable. A non-loopback bind is exactly where `MCP_AUTH_TOKEN` is needed:
+Inside a container `127.0.0.1` is the container's own loopback, so `HOST=0.0.0.0` is what makes the published port reachable. A non-loopback bind is exactly where `MCP_AUTH_TOKEN` is needed, and without it the server refuses to start (`MCP_ALLOW_UNAUTHENTICATED=true` overrides that when a proxy in front does the authentication):
 
 ```bash
 docker run --rm -e NOTION_TOKEN=ntn_xxx -e MCP_TRANSPORT=http -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=change-me \

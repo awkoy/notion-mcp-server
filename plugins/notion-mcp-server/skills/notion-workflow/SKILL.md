@@ -25,7 +25,7 @@ Most tasks follow the same path: find the thing, read it, then change it in as f
 | Block ids, to edit one block | `get_block_children` | `{ block_id }` |
 | A database's columns and options | `get_data_source` | `{ data_source_id }` |
 
-Prefer `get_page_markdown` to walking blocks. One call returns the whole body, and it round-trips with `update_page_markdown`.
+Prefer `get_page_markdown` to walking blocks. One call returns the body, and it round-trips with `update_page_markdown`. When it returns `truncated: true` or `unknown_block_ids`, the markdown is missing blocks: don't replace the page with `update_page_markdown`, which would delete them. Edit with `insert_content`, `append_blocks` or `update_block` instead.
 
 ## 3. Query a database with `where`
 
@@ -81,7 +81,7 @@ When the same write applies to more than one item (rename 30 pages, tick off 12 
 
 - The result has one entry per item. Report the items that failed; don't assume the whole batch worked.
 - `atomic: true` stops at the first failure and archives what the batch already created. Use it when a half-finished result would be worse than none.
-- `idempotency_key` makes a retry safe: the same key and operation return the cached result for five minutes instead of writing twice.
+- `idempotency_key` makes a retry safe: the same batch under the same key returns the cached result for five minutes instead of writing twice. Use a new key for a different batch; reusing one fails with `idempotency_conflict`.
 - `concurrency` defaults to 3 and goes up to 10. Atomic batches always run one item at a time. The server rate-limits and retries on its own.
 
 ## 6. When to call notion_describe
