@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Gemini CLI extension runs `notion-mcp-server@3.2.1`, pinned like the plugins, instead of whatever npm serves as latest.
 - The auth error's fix no longer mentions an OAuth gateway the server doesn't have.
 
+### Changed
+
+- **An idempotency key is bound to its batch** ([#109](https://github.com/awkoy/notion-mcp-server/pull/109), thanks @insane66613). The key used to cache by operation and key alone, so a different batch sent under a reused key got the first batch's result back and never ran. Now the key is bound to the operation, the items and `atomic` (not `concurrency`) for 5 minutes.
+  - An exact retry gets the cached result, with `idempotency_receipt: { decision: "deduplicated" }`. The first call's result carries `{ decision: "accepted" }`.
+  - Anything else under the same key fails with `idempotency_conflict`, including the same items sent to another operation: keys are now global, not per operation.
+  - A retry that arrives while the first call is still running fails with `idempotency_in_progress` instead of running a second copy.
+  - An empty or non-string key fails with `invalid_idempotency_key`; `null` still means no key.
+  - A batch in which no item passed validation is not cached, so the corrected batch can reuse the key.
+
 ### Fixed
 
 - **`get_page_markdown` says when the page is incomplete.** It returns Notion's `truncated` and `unknown_block_ids`, and warns against replacing such a page with `update_page_markdown`, which would delete the blocks missing from the markdown. The `notion://page` resource starts such a page with an HTML comment.

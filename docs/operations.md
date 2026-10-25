@@ -96,7 +96,11 @@ Every mutating operation accepts `{ items: [...] }` and returns a result per ite
 
 - `concurrency` runs up to 10 items in parallel (default 3).
 - `atomic: true` stops at the first failure and archives what the batch already created, best effort.
-- `idempotency_key` returns the cached result when the same key and operation arrive again within 5 minutes, so a retried batch doesn't run twice.
+- `idempotency_key` makes a retry safe. For 5 minutes the key stays bound to the operation, the items and `atomic`; `concurrency` can change.
+  - The same batch again gets the first result back, marked `idempotency_receipt: { decision: "deduplicated" }`, and nothing runs twice.
+  - A different batch under the same key fails with `idempotency_conflict`.
+  - A retry while the first call is still running fails with `idempotency_in_progress`.
+  - A batch in which no item passed validation is not kept, so the corrected batch can reuse the key.
 
 ## Errors and warnings
 
