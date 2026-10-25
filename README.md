@@ -41,7 +41,7 @@ Or install in one click:
 /plugin install notion-mcp-server@awkoy
 ```
 
-The plugin runs the npm release that matches its own version and needs Node.js 20 or later. It also offers a default parent page and a read-only switch; [the plugin's README](./plugins/notion-mcp-server/README.md) has the details.
+The plugin runs the npm release that matches its own version and needs Node.js 22 or later. It also offers a default parent page and a read-only switch; [the plugin's README](./plugins/notion-mcp-server/README.md) has the details.
 
 <details>
 <summary><b>Manual setup: JSON config, Claude Code, Codex, Gemini CLI, Docker</b></summary>
@@ -186,10 +186,11 @@ MCP_TRANSPORT=http PORT=3000 NOTION_TOKEN=ntn_xxx npx -y notion-mcp-server
 | `PORT` | `3000` | listen port (`0` = OS-assigned) |
 | `HOST` | `127.0.0.1` | bind address; `0.0.0.0` exposes it externally (**only with `MCP_AUTH_TOKEN`**) |
 | `MCP_AUTH_TOKEN` | — | when set, every `/mcp` request must send `Authorization: Bearer <token>` |
+| `MCP_ALLOW_UNAUTHENTICATED` | off | `true` lets a non-loopback `HOST` start without `MCP_AUTH_TOKEN`, for when an authenticating proxy sits in front |
 | `MCP_ALLOWED_HOSTS` | localhost + bound host | comma-list for the DNS-rebinding `Host` allowlist |
 | `MCP_ALLOWED_ORIGINS` | localhost origins | comma-list for the browser `Origin` allowlist |
 
-> ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback, the default, that means local processes only. Before binding a non-loopback `HOST`, set `MCP_AUTH_TOKEN` and put an authenticating reverse proxy in front.
+> ⚠️ **Whoever reaches `/mcp` acts as your `NOTION_TOKEN`.** On loopback, the default, that means local processes only. A non-loopback `HOST` refuses to start without `MCP_AUTH_TOKEN`; put TLS in front of it too.
 
 Over HTTP, `upload_file` takes no local paths unless `NOTION_UPLOAD_ROOT` is set, since the caller may not be on the server's machine. Base64 and URL sources work as usual, see [Files](#files).
 

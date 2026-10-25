@@ -97,6 +97,17 @@ describe("MCP wrapper: getPrompt happy paths", () => {
     expect(text).toMatch(/7\s*days?/i);
   });
 
+  // `arguments` is optional in prompts/get; clients such as the Inspector
+  // leave it out for a prompt with no required arguments. SDK 2.2.0 parsed
+  // the missing object as an error ("expected object, received undefined").
+  it.each(["weekly_review", "daily_log"])(
+    "%s works when the request carries no arguments object",
+    async (name) => {
+      const result = await client.getPrompt({ name });
+      expect(firstUserText(result).length).toBeGreaterThan(0);
+    }
+  );
+
   it("find_pages templates the query into a search_pages call", async () => {
     const result = await client.getPrompt({
       name: "find_pages",

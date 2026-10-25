@@ -11,7 +11,33 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    # The image is built from the tag without going through npm, so it gets
+    # its own test run instead of trusting publish-npm.yml's.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build
+        # tests/cli.test.ts spawns build/index.js.
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,11 +65,13 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` comes from the semver rules (flavor latest=auto) on a
+          # release tag only. A raw `latest` on the default branch would let a
+          # manual run from main overwrite it with unreleased code.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

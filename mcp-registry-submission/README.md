@@ -44,7 +44,7 @@ Not exposed in the catalog entry: `NOTION_RATE_LIMIT` (the default of 3 requests
 limit), `NOTION_DAILY_LOG_PAGE_ID` (used only by one MCP prompt), `HTTPS_PROXY` / `HTTP_PROXY`
 (Docker has its own proxy settings), the upload limits `NOTION_UPLOAD_MAX_BYTES`,
 `NOTION_UPLOAD_URL_TIMEOUT_MS` and `NOTION_UPLOAD_ALLOW_PRIVATE_URLS` (the defaults suit the catalog), and the HTTP transport variables (`MCP_TRANSPORT`, `PORT`, `HOST`,
-`MCP_AUTH_TOKEN`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`), because the catalog runs the image over
+`MCP_AUTH_TOKEN`, `MCP_ALLOW_UNAUTHENTICATED`, `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`), because the catalog runs the image over
 stdio. The full list is in `notion-mcp-server --help` and the main README.
 
 ## Updating the entry

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseHttpConfig } from "../src/config/http.js";
+import {
+  isLoopbackHost,
+  parseHttpConfig,
+  unauthenticatedBindError,
+} from "../src/config/http.js";
 
 describe("parseHttpConfig", () => {
   it("defaults to stdio with no env", () => {
@@ -51,5 +55,46 @@ describe("parseHttpConfig", () => {
     const c = parseHttpConfig({});
     expect(c.allowedHosts).toEqual([]);
     expect(c.allowedOrigins).toEqual([]);
+  });
+});
+
+describe("isLoopbackHost", () => {
+  it.each(["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "::1", "[::1]", "::ffff:127.0.0.1"])(
+    "%s is loopback",
+    (host) => expect(isLoopbackHost(host)).toBe(true)
+  );
+
+  it.each(["0.0.0.0", "::", "[::]", "192.168.1.10", "example.com", "128.0.0.1", "localhost.example.com"])(
+    "%s is not",
+    (host) => expect(isLoopbackHost(host)).toBe(false)
+  );
+});
+
+describe("unauthenticatedBindError", () => {
+  it("lets a loopback bind start without a token", () => {
+    expect(unauthenticatedBindError(parseHttpConfig({ HOST: "127.0.0.1" }))).toBeNull();
+    expect(unauthenticatedBindError(parseHttpConfig({}))).toBeNull();
+  });
+
+  it("refuses a non-loopback bind without MCP_AUTH_TOKEN and names the ways out", () => {
+    const error = unauthenticatedBindError(parseHttpConfig({ HOST: "0.0.0.0" }));
+    expect(error).toContain("0.0.0.0");
+    expect(error).toContain("MCP_AUTH_TOKEN");
+    expect(error).toContain("MCP_ALLOW_UNAUTHENTICATED");
+  });
+
+  it("lets a non-loopback bind start with a token", () => {
+    expect(
+      unauthenticatedBindError(parseHttpConfig({ HOST: "0.0.0.0", MCP_AUTH_TOKEN: "s" }))
+    ).toBeNull();
+  });
+
+  it("lets a non-loopback bind start without a token only when explicitly allowed", () => {
+    expect(
+      unauthenticatedBindError(parseHttpConfig({ HOST: "0.0.0.0", MCP_ALLOW_UNAUTHENTICATED: "true" }))
+    ).toBeNull();
+    expect(
+      unauthenticatedBindError(parseHttpConfig({ HOST: "0.0.0.0", MCP_ALLOW_UNAUTHENTICATED: "no" }))
+    ).not.toBeNull();
   });
 });

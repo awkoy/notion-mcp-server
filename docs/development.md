@@ -25,7 +25,7 @@ claude mcp add notion -s user -e NOTION_TOKEN=ntn_xxx -- node "$(pwd)/build/inde
 - Notion SDK `@notionhq/client` v5, pinned to `Notion-Version: 2026-03-11`.
 - Zod 4 payload validation. Error envelopes carry draft-7 JSON Schema with `$defs` deduplication.
 - Markdown to Notion blocks via `remark` / `remark-gfm`. Page-level markdown reads and writes use Notion's own markdown endpoints.
-- A bounded-concurrency batch worker (default 3, max 10), a shared token-bucket rate limiter, and `withRetry` with exponential backoff around every dispatched call.
+- A bounded-concurrency batch worker (default 3, max 10), a shared token-bucket rate limiter that paces every Notion request, and `withRetry` around every Notion request (the SDK client's `request`). It is the only retry layer: the SDK client is built with `retry: false`, and dispatch runs each handler once. Any request retries on 429 and 529; GETs and the requests of read operations also retry on 5xx and timeouts. A server's `Retry-After` is waited out as given, up to 60 s per call. A write that fails after part of it was applied says so in its error.
 - An in-memory idempotency cache (5-minute TTL, 512 entries).
 - Slim shapers per entity type, with a `verbose: true` opt-out.
 - Vitest covers the markdown parser, shapers, schema emitter, dispatcher, batch semantics (partial success, atomic rollback, idempotency), access control and the HTTP transport.

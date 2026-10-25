@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { z } from "zod";
 import {
   DEFAULT_RATE_PER_SECOND,
@@ -10,6 +10,12 @@ import {
 import { register } from "../src/operations/registry.js";
 import type { OperationDef, OperationName } from "../src/operations/types.js";
 import { dispatch } from "../src/dispatch/index.js";
+import { configureOperationAccess } from "../src/operations/access.js";
+import { getClient } from "../src/services/notion.js";
+
+// vi.mock is hoisted above the imports, so the stub it hands out must be too.
+const { fetchStub } = vi.hoisted(() => ({ fetchStub: vi.fn() }));
+vi.mock("node-fetch", () => ({ default: fetchStub }));
 
 const ONE_SECOND_MS = 1_000;
 
@@ -80,43 +86,81 @@ describe("rate limiter — env configuration", () => {
 });
 
 describe("dispatch — rate-limiter integration", () => {
+  // The limiter paces Notion HTTP requests, not handler calls: the synthetic
+  // op sends `n` requests through the real SDK client, and the stubbed
+  // node-fetch stamps each one as it goes out.
   const OP_NAME = "list_users" as OperationName;
-  let counter = 0;
+  const originalToken = process.env.NOTION_TOKEN;
+  let calls = 0;
   const stamps: number[] = [];
 
-  beforeEach(() => {
-    counter = 0;
-    stamps.length = 0;
+  beforeAll(() => {
+    process.env.NOTION_TOKEN = "ntn_rate_limit_test";
     const def: OperationDef<{ n: number }, { n: number }> = {
       name: OP_NAME,
       description: "rate-limit synthetic op",
       batchable: true,
-      access: "write",
-      domain: "pages",
+      access: "read",
+      domain: "users",
       schema: z.object({ n: z.number() }),
-      example: { n: 0 },
+      example: { n: 1 },
       handler: async ({ n }) => {
-        counter++;
-        stamps.push(Date.now());
+        calls++;
+        const notion = await getClient();
+        for (let i = 0; i < n; i++) await notion.users.me({});
         return { ok: true, data: { n } };
       },
     };
     register(def);
+    configureOperationAccess();
+  });
+
+  beforeEach(() => {
+    calls = 0;
+    fetchStub.mockReset();
+    fetchStub.mockImplementation(async () => {
+      stamps.push(Date.now());
+      return new Response(JSON.stringify({ object: "user", id: "u1", type: "bot", bot: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    stamps.length = 0;
   });
 
   afterEach(() => {
     configureRateLimiter();
   });
 
+  afterAll(() => {
+    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
+    else process.env.NOTION_TOKEN = originalToken;
+  });
+
   it("caps batch execution at the configured rate", async () => {
     const rate = 20;
     configureRateLimiter(rate);
     const N = 30;
-    const items = Array.from({ length: N }, (_, i) => ({ n: i }));
+    const items = Array.from({ length: N }, () => ({ n: 1 }));
     const res = await dispatch(OP_NAME, { items, concurrency: 10 });
 
     expect(res.ok).toBe(true);
-    expect(counter).toBe(N);
+    expect(calls).toBe(N);
+    expect(stamps).toHaveLength(N);
+    expect(maxInAnyWindow(stamps, ONE_SECOND_MS)).toBeLessThanOrEqual(rate + 1);
+  });
+
+  it("takes a token for every request a handler sends, not one per call", async () => {
+    const rate = 20;
+    configureRateLimiter(rate);
+    // 8 calls of 3 requests each: one token per call would let all 24
+    // requests out in about 0.4 s.
+    const items = Array.from({ length: 8 }, () => ({ n: 3 }));
+    const res = await dispatch(OP_NAME, { items, concurrency: 8 });
+
+    expect(res.ok).toBe(true);
+    expect(calls).toBe(8);
+    expect(stamps).toHaveLength(24);
     expect(maxInAnyWindow(stamps, ONE_SECOND_MS)).toBeLessThanOrEqual(rate + 1);
   });
 });
