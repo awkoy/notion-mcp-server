@@ -169,6 +169,8 @@ To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a 
 - **Local paths.** Set `NOTION_UPLOAD_ROOT` to the directory uploads may come from; paths outside it are refused, symlinks included. Without it, path sources are off over HTTP, and over stdio a path is refused when it goes through a dot-named file or directory (`~/.ssh`, `~/.aws`, `.env`) or lies under a system or app-data folder (`/proc`, `/dev`, `~/Library`, `%APPDATA%`), where MCP clients keep your token. `NOTION_UPLOAD_ROOT=/` turns the limit off. Inside a root every file is readable, `.env` and `.git` included, so over HTTP pick a root that holds only files you would hand to whoever can call the server.
 - **URLs.** http and https only. Every hop, redirects included, must resolve to a public address, so loopback, private networks and cloud metadata endpoints are refused; `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` lifts that for an intranet. The fetch stops after `NOTION_UPLOAD_URL_TIMEOUT_MS` (30 s) or once the body passes the size limit.
 
+`upload_to_property` does the same upload and writes the result straight into a page's files property, and it is batchable: one call stores many files. `upload_file` is not batchable, so the same job there costs one call per file plus a `set_page_properties`.
+
 Notion's signed file URLs are about 500 tokens each and expire within an hour. `NOTION_FILE_URLS=ref` replaces them in responses with short `notion-file:` refs that `get_file_url` and `get_image` resolve on demand. [How refs work →](./docs/configuration.md#files)
 
 ## Remote / HTTP transport
@@ -203,7 +205,7 @@ Docker, health checks and protocol versions: [docs/http-transport.md](./docs/htt
 
 ## Tools and operations
 
-Three tools, whichever of the 46 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
+Three tools, whichever of the 47 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
 
 ### Per-tool permissions
 
@@ -213,7 +215,7 @@ The read/write split lets you approve reads once and keep writes behind a prompt
 { "permissions": { "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"] } }
 ```
 
-### Operations menu (46 ops, plus two aliases)
+### Operations menu (47 ops, plus two aliases)
 
 | Area | Operations |
 | --- | --- |
@@ -224,7 +226,7 @@ The read/write split lets you approve reads once and keep writes behind a prompt
 | **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
 | **Users** | `list_users`, `get_user`, `get_bot_user` (alias: `get_self`) |
-| **Files** | `upload_file`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
+| **Files** | `upload_file`, `upload_to_property`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
 
 ## FAQ
 
