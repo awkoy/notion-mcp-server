@@ -116,6 +116,16 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
     "notifications": { "mode": "silent" }
   }
 }
+
+// upload a file and store it in a files property in one call
+{
+  "operation": "upload_to_property",
+  "payload": {
+    "source": { "type": "path", "path": "~/Desktop/report.pdf" },
+    "page_id": "<page-id>",
+    "property": "Attachment"
+  }
+}
 ```
 
 ## Silent page writes

@@ -80,6 +80,9 @@ const notionStub = {
       append: vi.fn<(args: any) => Promise<{ results: { id: string }[] }>>(),
     },
   },
+  pages: {
+    update: vi.fn<(args: any) => Promise<{ id: string }>>(),
+  },
 };
 
 // Only getClient is replaced: proxyAwareFetch stays real (it is what the URL
@@ -128,6 +131,7 @@ beforeAll(async () => {
 beforeEach(() => {
   for (const fn of Object.values(notionStub.fileUploads)) fn.mockReset();
   notionStub.blocks.children.append.mockReset();
+  notionStub.pages.update.mockReset();
   fetchStub.mockReset();
   lookupStub.mockReset();
   lookupStub.mockResolvedValue([{ address: PUBLIC_IP, family: 4 }]);
@@ -1724,5 +1728,115 @@ describe("upload_file (attach_to)", () => {
     expect(res.error.fix).toContain("append_blocks");
     expect(res.error.fix).toContain("fu-att");
     expect(res.error.fix).toContain('"image"');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_to_property
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("upload_to_property", () => {
+  const PAGE_BARE = "3ab5030fc6e5801eb170cd93167dd607";
+  const PAGE = "3ab5030f-c6e5-801e-b170-cd93167dd607";
+  const source = { type: "base64", data: Buffer.from("x").toString("base64") };
+
+  beforeEach(() => {
+    notionStub.fileUploads.create.mockResolvedValue({ id: "fu-prop", status: "pending" });
+    notionStub.fileUploads.send.mockResolvedValue({
+      id: "fu-prop",
+      status: "uploaded",
+      filename: "report.pdf",
+      content_type: "application/pdf",
+    });
+    notionStub.pages.update.mockResolvedValue({ id: PAGE });
+  });
+
+  it("uploads and sets the files property in one call", async () => {
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE_BARE,
+      property: "Attachment",
+    });
+    assertOk(res);
+    expect(res.data).toMatchObject({
+      file_upload_id: "fu-prop",
+      page_id: PAGE,
+      property: "Attachment",
+    });
+
+    // One upload, one property write — no separate set_page_properties call.
+    expect(notionStub.fileUploads.create).toHaveBeenCalledTimes(1);
+    expect(notionStub.pages.update).toHaveBeenCalledTimes(1);
+    const body = notionStub.pages.update.mock.calls[0][0];
+    expect(body.page_id).toBe(PAGE);
+    expect(body.properties).toEqual({
+      Attachment: {
+        files: [
+          { type: "file_upload", file_upload: { id: "fu-prop" }, name: "report.pdf" },
+        ],
+      },
+    });
+  });
+
+  it("takes a Notion URL as page_id", async () => {
+    await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: "https://www.notion.so/Q3-plan-3ab5030fc6e5801eb170cd93167dd607",
+      property: "Attachment",
+    });
+    expect(notionStub.pages.update.mock.calls[0][0].page_id).toBe(PAGE);
+  });
+
+  it("keeps the file_upload_id when the property write fails", async () => {
+    notionStub.pages.update.mockRejectedValue(new Error("Attachment is not a files property"));
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "Attachment",
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("attach_failed");
+    expect(res.error.message).toContain("fu-prop");
+    expect(res.error.message).toContain("Attachment is not a files property");
+    expect(res.error.fix).toContain("fu-prop");
+    expect(res.error.fix).toContain("set_page_properties");
+  });
+
+  it("writes nothing when the upload itself fails", async () => {
+    notionStub.fileUploads.send.mockRejectedValue(new Error("Notion is down"));
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "Attachment",
+    });
+    assertErr(res);
+    expect(notionStub.pages.update).not.toHaveBeenCalled();
+  });
+
+  it("requires filename for a source that carries no name", async () => {
+    const res = await dispatch("upload_to_property", {
+      source,
+      page_id: PAGE,
+      property: "Attachment",
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("validation_error");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+  });
+
+  it("uploads a batch in one call", async () => {
+    const res = await dispatch("upload_to_property", {
+      items: [
+        { filename: "a.pdf", source, page_id: PAGE, property: "Attachment" },
+        { filename: "b.pdf", source, page_id: PAGE, property: "Attachment" },
+      ],
+    });
+    expect((res as any).summary).toEqual({ total: 2, succeeded: 2, failed: 0 });
+    expect(notionStub.fileUploads.create).toHaveBeenCalledTimes(2);
+    expect(notionStub.pages.update).toHaveBeenCalledTimes(2);
   });
 });

@@ -6,9 +6,9 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (49 total: 47 ops + trash_page + get_self aliases)", () => {
+  it("registers every name in the OperationName union (50 total: 48 ops + trash_page + get_self aliases)", () => {
     const names = operationNames();
-    expect(names.length).toBe(49);
+    expect(names.length).toBe(50);
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
   });
@@ -24,6 +24,7 @@ describe("operations registry", () => {
 
   it("includes the file upload ops", () => {
     expect(getOperation("upload_file")).toBeDefined();
+    expect(getOperation("upload_to_property")).toBeDefined();
     expect(getOperation("list_file_uploads")).toBeDefined();
     expect(getOperation("get_file_upload")).toBeDefined();
   });
