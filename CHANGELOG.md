@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A fresh install starts on Node 22 again.** `@notionhq/client` was declared as `^5.22.0`, so a new install got the latest client, and from 5.30.0 its CommonJS build no longer exposes `Client` as a named export Node 22 can detect. The server stopped at startup with `SyntaxError: Named export 'Client' not found`; Node 24 was unaffected. The client is now pinned to 5.27.1, the version the lockfile, the Docker image and the `.mcpb` bundle already ship. ([#135](https://github.com/awkoy/notion-mcp-server/issues/135))
+
 ## [3.3.0] - 2026-10-25
 
 ### Added
