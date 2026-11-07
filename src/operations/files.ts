@@ -16,6 +16,7 @@ import type {
   AppendBlockChildren,
   CreateFileUploadBody,
   SendFileUploadBody,
+  UpdatePageBody,
 } from "../utils/notion-types.js";
 import { FILE_REF_PREFIX, blockFileRef, parseFileRef } from "../utils/file-ref.js";
 import { notionId } from "../schema/id.js";
@@ -715,6 +716,82 @@ async function uploadFile({
   });
   return finish(completed);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_to_property
+// ──────────────────────────────────────────────────────────────────────────
+
+const UploadToPropertyParams = z.object({
+  page_id: notionId().describe("Page or database row that holds the files property."),
+  property: z
+    .string()
+    .describe('Name of the files property, exactly as the column is titled (e.g. "Attachment").'),
+  filename: z
+    .string()
+    .optional()
+    .describe(
+      "Required for base64 and url sources. Optional for a path source — defaults to the file's basename."
+    ),
+  content_type: z
+    .string()
+    .optional()
+    .describe("Defaults to the type for the filename's extension."),
+  source: SourceSchema,
+});
+
+register({
+  name: "upload_to_property",
+  access: "write",
+  domain: "files",
+  description:
+    "Upload a file and store it in a page's files property in one call.\n\n`upload_file` returns a `file_upload_id` and its `attach_to` appends a block, so reaching a files property takes a second call with set_page_properties. This does both, and takes the same sources as upload_file.\n\nBatchable: pass payload { items: [...] } to upload many files in one call. `upload_file` is not batchable, so N files cost N upload calls plus one set_page_properties — this costs one call.\n\nIf the upload succeeds and setting the property fails, the error names the file_upload_id so it can be placed without uploading again.",
+  batchable: true,
+  schema: UploadToPropertyParams,
+  example: {
+    source: { type: "path", path: "~/Desktop/report.pdf" },
+    page_id: "<page-id>",
+    property: "Attachment",
+  },
+  handler: tryHandler(
+    async ({ page_id, property, filename, content_type, source }): Promise<OperationResult> => {
+      const uploaded = await uploadFile({ source, filename, content_type });
+      if (!uploaded.ok) return uploaded;
+      const data = uploaded.data as { file_upload_id: string; filename?: string };
+      const notion = await getClient();
+      try {
+        await notion.pages.update(
+          asSdk<UpdatePageBody>({
+            page_id,
+            properties: {
+              [property]: {
+                files: [
+                  {
+                    type: "file_upload",
+                    file_upload: { id: data.file_upload_id },
+                    ...(data.filename ? { name: data.filename } : {}),
+                  },
+                ],
+              },
+            },
+          })
+        );
+        return { ok: true, data: { ...data, page_id, property } };
+      } catch (err) {
+        // Same reasoning as attach_to: the upload is paid for, so never let a
+        // thrown error hide the id that can still be placed.
+        const reason = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          error: {
+            code: "attach_failed",
+            message: `Uploaded as file_upload_id ${data.file_upload_id}, but setting "${property}" on ${page_id} failed: ${reason}`,
+            fix: `The upload is done — do not re-upload. Set it with set_page_properties: { page_id: "${page_id}", properties: { "${property}": [{ file_upload_id: "${data.file_upload_id}" }] } }. If the error says the property is not a files property, check the column's exact title and type.`,
+          },
+        };
+      }
+    }
+  ),
+});
 
 // ──────────────────────────────────────────────────────────────────────────
 // list_file_uploads

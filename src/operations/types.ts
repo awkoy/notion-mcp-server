@@ -45,6 +45,7 @@ export type OperationName =
   | "get_bot_user"
   | "get_self"
   | "upload_file"
+  | "upload_to_property"
   | "list_file_uploads"
   | "get_file_upload"
   | "get_file_url"
