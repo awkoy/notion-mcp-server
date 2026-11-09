@@ -19,6 +19,14 @@ function shouldIncludeSchema(issues: ZodError["issues"]): boolean {
   return issues.some((i) => i.path.length > 0);
 }
 
+// A .superRefine() rule knows the remedy for its own failure and can pass it
+// as params.fix; the generic hints below only know the failure's shape.
+function customFix(issues: ZodError["issues"]): string | undefined {
+  const first = issues[0];
+  const fix = first?.code === "custom" ? first.params?.fix : undefined;
+  return typeof fix === "string" ? fix : undefined;
+}
+
 export function buildValidationError(
   def: OperationDef,
   zodError: ZodError
@@ -52,8 +60,10 @@ export function buildValidationError(
     ...(includeSchema ? { schema: schemaForError } : {}),
     example: def.example,
     ...(def.exampleBatch ? { example_batch: def.exampleBatch } : {}),
-    fix: includeSchema
-      ? "Match the example shape. The schema above shows the failing field; call notion_describe for the full operation schema. For batch mode, wrap items in { items: [...] }."
-      : "A working example is included above. Match the example shape and retry. For batch mode, wrap items in { items: [...] }.",
+    fix:
+      customFix(zodError.issues) ??
+      (includeSchema
+        ? "Match the example shape. The schema above shows the failing field; call notion_describe for the full operation schema. For batch mode, wrap items in { items: [...] }."
+        : "A working example is included above. Match the example shape and retry. For batch mode, wrap items in { items: [...] }."),
   };
 }

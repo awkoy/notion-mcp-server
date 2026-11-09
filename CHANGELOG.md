@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Silent page writes.** `create_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page`, `trash_page` and `restore_page` take an optional `notifications: { mode: "silent" | "default" }`. `silent` skips page update, @mention and Person property notifications for that change; database automations, reminders and connection webhooks still run. `update_page_markdown` and `move_page` don't have it, because Notion's endpoints behind them don't accept the parameter.
+- **`filter_properties` on `search_pages` and page writes.** `search_pages`, `create_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page`, `trash_page` and `restore_page` take a list of property names or ids, and Notion returns only those properties. It shortens `verbose: true` responses: about 80% on a 24-property row, measured live. The default response carries no properties, so its size does not change. See [docs/operations.md](docs/operations.md#fewer-properties-in-a-response).
+- **Typed databases in `create_database`.** `database_type` (`tasks`, `projects` or `skills`) builds the database from Notion's canonical schema for that type, so `properties` and `title` become optional; without a title the database is named after its type. Passing it together with `properties` fails validation before any request, with a `fix` that says which field to remove. `create_database`, `get_data_source` and the other database and data source results return a type Notion reports as `database_type`.
+- **`query_meeting_notes`.** Reads AI meeting notes through Notion's `POST /v1/blocks/meeting_notes/query`, with an optional `filter`, `sort` and `limit` (up to 50). A note comes back slimmed to its id, title, status, times, calendar and recording details and the ids of its summary, notes and transcript blocks; `verbose: true` returns Notion's block objects. The endpoint has no cursor, so when more notes match, `has_more` comes with a warning to narrow the filter. It needs a plan with AI meeting notes and returns only notes the token's user attends.
+
 ## [3.3.1] - 2026-11-05
 
 ### Changed
@@ -257,7 +266,7 @@ Distribution release — no runtime changes to the server itself.
 
 ### Added
 
-- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-46-ops-plus-two-aliases).
+- **Database views.** Six new operations for Notion database views (GitHub #18): `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view`. `query_view` runs a view's stored filters/sorts and returns hydrated rows by default (set `hydrate: false` for ordered ids only), surfacing `total_count` and `truncated`; it hides Notion's create-then-paginate query mechanics. `list_views` hydrates Notion's id-only refs to `{id, name, type}` by default. `create_view` / `update_view` reuse the `where` filter shorthand and accept a raw `configuration` for type-specific layout (calendar/board/timeline/chart/map require it; a missing config is rejected locally with a fix rather than a raw API 400). `delete_view` is destructive and honors `NOTION_READ_ONLY` / the allow/block lists. See [README → Operations menu](./README.md#operations-menu-47-ops-plus-two-aliases).
 
 ### Changed
 

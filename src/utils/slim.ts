@@ -19,6 +19,7 @@ import type {
   PartialDataSourceObjectResponse,
   PartialPageObjectResponse,
   PartialUserObjectResponse,
+  QueryMeetingNotesResponse,
   RichTextItemResponse,
   UserObjectResponse,
 } from "@notionhq/client";
@@ -341,6 +342,7 @@ export function slimDatabase(db: DatabaseResponse, verbose = false) {
     ...(db.in_trash ? { in_trash: true } : {}),
     ...(db.is_inline ? { is_inline: true } : {}),
     ...(db.is_locked ? { is_locked: true } : {}),
+    ...(db.database_type ? { database_type: db.database_type } : {}),
     data_sources: db.data_sources.map((s) => ({ id: s.id, name: s.name })),
     ...(db.icon ? { icon: db.icon.type } : {}),
   };
@@ -374,6 +376,7 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
     title: extractRichText(ds.title),
     ...(description ? { description } : {}),
     parent: ds.parent,
+    ...(ds.database_type ? { database_type: ds.database_type } : {}),
     // name → property-type map, with the option names for select-like
     // properties and the target of a relation: exactly what a caller needs to
     // write a row or a filter without a verbose:true round-trip.
@@ -403,6 +406,38 @@ export function slimView(view: unknown, verbose = false) {
     ...(v.type !== undefined ? { type: v.type } : {}),
     ...(v.filter ? { filter: v.filter } : {}),
     ...(Array.isArray(v.sorts) && v.sorts.length ? { sorts: v.sorts } : {}),
+  };
+}
+
+type MeetingNoteResponse = QueryMeetingNotesResponse["results"][number];
+
+// A meeting note block. Default keeps what identifies the note, its calendar
+// and recording times, and the ids of its summary/notes/transcript blocks
+// (flattened from `children`), which is what get_block_children reads next.
+export function slimMeetingNote(note: MeetingNoteResponse, verbose = false) {
+  if (verbose) return note;
+  const body: Partial<MeetingNoteResponse["meeting_notes"]> = note.meeting_notes ?? {};
+  const event = body.calendar_event;
+  const recording = body.recording;
+  return {
+    id: note.id,
+    title: richTextField(body.title),
+    ...(body.status ? { status: body.status } : {}),
+    created_time: note.created_time,
+    last_edited_time: note.last_edited_time,
+    ...(note.created_by?.id ? { created_by: note.created_by.id } : {}),
+    ...(event
+      ? {
+          calendar_event: {
+            start_time: event.start_time,
+            end_time: event.end_time,
+            ...(event.attendees?.length ? { attendees: event.attendees } : {}),
+          },
+        }
+      : {}),
+    ...(recording?.start_time || recording?.end_time ? { recording } : {}),
+    ...(body.children ?? {}),
+    ...(note.in_trash ? { in_trash: true } : {}),
   };
 }
 

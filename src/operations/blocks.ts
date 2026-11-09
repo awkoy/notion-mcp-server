@@ -2,10 +2,10 @@ import { z } from "zod";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
-import { slimBlock, slimList } from "../utils/slim.js";
+import { slimBlock, slimList, slimMeetingNote } from "../utils/slim.js";
 import { parseMarkdownToBlocks } from "../markdown/parse.js";
 import type { OperationResult } from "./types.js";
-import { asSdk, type UpdateBlockBody } from "../utils/notion-types.js";
+import { asSdk, type QueryMeetingNotesBody, type UpdateBlockBody } from "../utils/notion-types.js";
 import { appendBlockTree, PartialWriteError, type WrittenBlock } from "../utils/write-blocks.js";
 import { toErrorEnvelope } from "../utils/error.js";
 import { BLOCK_INPUT_SCHEMA } from "../schema/blocks.js";
@@ -169,6 +169,147 @@ register({
       page_size: page_size ?? 100,
     });
     return { ok: true, data: slimList(response, slimBlock, verbose ?? false) };
+  }),
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// query_meeting_notes
+// ──────────────────────────────────────────────────────────────────────────
+
+const MEETING_NOTE_PROPERTIES = [
+  "title",
+  "attendees",
+  "created_time",
+  "created_by",
+  "last_edited_time",
+  "last_edited_by",
+] as const;
+
+const MAX_MEETING_NOTES_LIMIT = 50;
+const MAX_MEETING_NOTES_CLAUSES = 100;
+
+const MeetingNotesPropertyFilter = z.object({
+  property: z.enum([...MEETING_NOTE_PROPERTIES, "notion://meeting_notes/attendees"]),
+  // Loose: which of `value`/`use_end` applies depends on the operator, and
+  // Notion checks that pairing, so nothing here should drop a field.
+  filter: z.looseObject({
+    operator: z.enum([
+      "string_is",
+      "string_is_not",
+      "string_contains",
+      "string_does_not_contain",
+      "string_starts_with",
+      "string_ends_with",
+      "person_contains",
+      "person_does_not_contain",
+      "date_is",
+      "date_is_before",
+      "date_is_after",
+      "date_is_on_or_before",
+      "date_is_on_or_after",
+      "date_is_within",
+      "date_is_relative_to",
+      "is_empty",
+      "is_not_empty",
+    ]),
+    value: z
+      .unknown()
+      .optional()
+      .describe(
+        'Omit for is_empty/is_not_empty. Text: { type: "exact", value: "standup" }. People: [{ type: "relative", value: "me" }] or [{ type: "exact", value: { table: "notion_user", id: "<user-id>" } }]. Dates: { type: "relative", value: "one_week_ago" } or { type: "exact", value: { type: "date", start_date: "2026-05-01" } }.'
+      ),
+    use_end: z.boolean().optional().describe("Dates only: compare against the end of a date range."),
+  }),
+});
+
+const MeetingNotesFilter = z.union([
+  MeetingNotesPropertyFilter,
+  z.object({
+    operator: z.enum(["and", "or"]),
+    filters: z
+      .array(
+        z.union([
+          MeetingNotesPropertyFilter,
+          z.object({
+            operator: z.enum(["and", "or"]),
+            filters: z.array(MeetingNotesPropertyFilter).max(MAX_MEETING_NOTES_CLAUSES),
+          }),
+        ])
+      )
+      .max(MAX_MEETING_NOTES_CLAUSES),
+  }),
+]);
+
+const QueryMeetingNotesParams = z.object({
+  filter: MeetingNotesFilter.optional().describe(
+    "One property filter { property, filter: { operator, value } }, or { operator: 'and'|'or', filters: [...] } with one level of nesting."
+  ),
+  sort: z
+    .array(
+      z.object({
+        property: z.enum(MEETING_NOTE_PROPERTIES),
+        direction: z.enum(["ascending", "descending"]),
+      })
+    )
+    .max(MAX_MEETING_NOTES_CLAUSES)
+    .optional()
+    .describe("Earlier entries take precedence."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_MEETING_NOTES_LIMIT)
+    .optional()
+    .describe(`Max notes to return (default ${MAX_MEETING_NOTES_LIMIT}). The endpoint has no cursor.`),
+  verbose: VERBOSE,
+});
+
+register({
+  name: "query_meeting_notes",
+  access: "read",
+  domain: "blocks",
+  description:
+    "Query AI meeting notes the integration's user attends, with an optional filter, sort and limit (max 50, no cursor). Read a note's content with get_block_children on its summary_block_id, notes_block_id or transcript_block_id.",
+  batchable: false,
+  schema: QueryMeetingNotesParams,
+  example: {
+    filter: {
+      property: "created_time",
+      filter: { operator: "date_is_on_or_after", value: { type: "relative", value: "one_week_ago" } },
+    },
+    sort: [{ property: "created_time", direction: "descending" }],
+    limit: 20,
+  },
+  handler: tryHandler(async ({ filter, sort, limit, verbose }): Promise<OperationResult> => {
+    const notion = await getClient();
+    // Notion's reference shows a single property filter at the root, but the
+    // API rejects one ("body.filter.operator should be defined", confirmed
+    // live), so it goes out as a one-clause `and`.
+    const rootFilter = filter && "property" in filter ? { operator: "and", filters: [filter] } : filter;
+    const response = await notion.blocks.meetingNotes.query(
+      asSdk<QueryMeetingNotesBody>({
+        ...(rootFilter !== undefined ? { filter: rootFilter } : {}),
+        ...(sort !== undefined ? { sort } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      })
+    );
+    const data = verbose
+      ? response
+      : {
+          results: response.results.map((note) => slimMeetingNote(note)),
+          has_more: response.has_more ?? false,
+        };
+    return {
+      ok: true,
+      data,
+      ...(response.has_more
+        ? {
+            warnings: [
+              `More meeting notes match than the ${response.results.length} returned, and this endpoint has no cursor. Narrow the filter (a created_time range, for example) or change the sort to reach the rest.`,
+            ],
+          }
+        : {}),
+    };
   }),
 });
 
