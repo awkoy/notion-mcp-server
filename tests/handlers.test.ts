@@ -865,6 +865,141 @@ describe("create_database uses initial_data_source shape", () => {
   });
 });
 
+describe("create_database with database_type", () => {
+  const parent = { type: "page_id", page_id: "p-1" };
+  const props = { Name: { type: "title", title: {} } };
+  const typedDb = {
+    object: "database",
+    id: "db-typed",
+    url: "u",
+    title: [{ plain_text: "Tasks" }],
+    description: [],
+    parent: { type: "page_id", page_id: "p-1" },
+    data_sources: [{ id: "ds-typed", name: "Tasks" }],
+    icon: null,
+    in_trash: false,
+    is_inline: false,
+    is_locked: false,
+    database_type: "tasks",
+  };
+  type Failure = { ok: false; error: { code: string; message: string; fix: string } };
+
+  it("sends database_type and neither title nor initial_data_source when title is omitted", async () => {
+    notionStub.databases.create.mockResolvedValue(typedDb);
+    const res = await dispatch("create_database", { parent, database_type: "tasks" });
+    expect((res as { ok: boolean }).ok).toBe(true);
+    const call = notionStub.databases.create.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).toEqual({ parent, database_type: "tasks", is_inline: false });
+  });
+
+  it("sends the title when one is given", async () => {
+    notionStub.databases.create.mockResolvedValue(typedDb);
+    await dispatch("create_database", { parent, database_type: "projects", title: "Roadmap" });
+    const call = notionStub.databases.create.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.database_type).toBe("projects");
+    expect(call.title).toEqual([{ type: "text", text: { content: "Roadmap" } }]);
+    expect(call).not.toHaveProperty("initial_data_source");
+  });
+
+  it("keeps sending an empty title for an untyped database", async () => {
+    notionStub.databases.create.mockResolvedValue(typedDb);
+    await dispatch("create_database", { parent, properties: props });
+    const call = notionStub.databases.create.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.title).toEqual([]);
+    expect(call).not.toHaveProperty("database_type");
+  });
+
+  it.each([
+    ["properties", { properties: props }],
+    ["properties", { properties: {} }],
+    ["initial_data_source", { initial_data_source: { properties: props } }],
+  ])("rejects database_type with %s before any request", async (field, extra) => {
+    const res = (await dispatch("create_database", {
+      parent,
+      database_type: "tasks",
+      ...extra,
+    })) as Failure;
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.message).toContain(`\`${field}\``);
+    expect(res.error.fix).toContain(`Remove \`${field}\``);
+    expect(notionStub.databases.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects the combination per item in a batch", async () => {
+    notionStub.databases.create.mockResolvedValue(typedDb);
+    const res = (await dispatch("create_database", {
+      items: [{ parent, database_type: "tasks", properties: props }, { parent, database_type: "skills" }],
+      concurrency: 1,
+    })) as { results: Array<{ ok: boolean; error?: { code: string; fix: string } }> };
+    expect(res.results[0].ok).toBe(false);
+    expect(res.results[0].error?.code).toBe("validation_error");
+    expect(res.results[0].error?.fix).toContain("Remove `properties`");
+    expect(res.results[1].ok).toBe(true);
+    expect(notionStub.databases.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires properties or database_type, and names both in the fix", async () => {
+    const res = (await dispatch("create_database", { parent, title: "No schema" })) as Failure;
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.fix).toContain("`properties`");
+    expect(res.error.fix).toContain("`database_type`");
+    expect(notionStub.databases.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown type", async () => {
+    const res = (await dispatch("create_database", { parent, database_type: "wiki" })) as Failure;
+    expect(res.error.code).toBe("validation_error");
+    expect(notionStub.databases.create).not.toHaveBeenCalled();
+  });
+
+  it("points a raw initial_data_source at properties", async () => {
+    const res = (await dispatch("create_database", {
+      parent,
+      initial_data_source: { properties: props },
+    })) as Failure;
+    expect(res.error.code).toBe("validation_error");
+    expect(res.error.fix).toContain("top-level `properties`");
+    expect(notionStub.databases.create).not.toHaveBeenCalled();
+  });
+
+  it("returns database_type in the slim create_database response", async () => {
+    notionStub.databases.create.mockResolvedValue(typedDb);
+    const res = (await dispatch("create_database", { parent, database_type: "tasks" })) as {
+      data: Record<string, unknown>;
+    };
+    expect(res.data.database_type).toBe("tasks");
+  });
+
+  it("omits a null database_type from the slim response", async () => {
+    notionStub.databases.create.mockResolvedValue({ ...typedDb, database_type: null });
+    const res = (await dispatch("create_database", { parent, properties: props })) as {
+      data: Record<string, unknown>;
+    };
+    expect(res.data).not.toHaveProperty("database_type");
+  });
+
+  it("returns database_type from get_data_source", async () => {
+    notionStub.dataSources.retrieve.mockResolvedValue({
+      object: "data_source",
+      id: "ds-typed",
+      url: "u",
+      title: [{ plain_text: "Tasks" }],
+      description: [],
+      parent: { type: "database_id", database_id: "db-typed" },
+      properties: { "Task name": { type: "title", title: {} } },
+      icon: null,
+      in_trash: false,
+      database_type: "skills",
+    });
+    const res = (await dispatch("get_data_source", { data_source_id: "ds-typed" })) as {
+      data: Record<string, unknown>;
+    };
+    expect(res.data.database_type).toBe("skills");
+  });
+});
+
 describe("archive_page / restore_page use in_trash", () => {
   it("archive_page sends in_trash: true (not legacy archived)", async () => {
     notionStub.pages.update.mockResolvedValue({

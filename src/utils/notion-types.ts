@@ -38,6 +38,7 @@ export type UpdateDataSourceBody = UpdateDataSourceParameters;
 export type AppendBlockBody = AppendBlockChildrenParameters;
 export type AppendBlockChildren = AppendBlockChildrenParameters["children"];
 export type UpdateBlockBody = UpdateBlockParameters;
+export type QueryMeetingNotesBody = Parameters<ClientType["blocks"]["meetingNotes"]["query"]>[0];
 export type CreateCommentBody = CreateCommentParameters;
 export type UpdateCommentBody = UpdateCommentParameters;
 export type CreateFileUploadBody = CreateFileUploadParameters;

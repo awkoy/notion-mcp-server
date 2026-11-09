@@ -41,6 +41,49 @@ import { normalizeNotionId, notionId } from "../schema/id.js";
 
 const VERBOSE = z.boolean().optional();
 
+const NOTIFICATIONS = z
+  .object({
+    mode: z
+      .enum(["default", "silent"])
+      .describe("`silent` skips page update, @mention and Person property notifications for this change. `default` is Notion's standard behaviour."),
+  })
+  .optional()
+  .describe("Controls the notifications Notion sends people about this change. Omit for the standard behaviour. Database automations, reminders and connection webhooks still run, and page history and audit logs still record the change.");
+
+const FILTER_PROPERTIES = z
+  .array(z.string().min(1))
+  .min(1)
+  .optional()
+  .describe(
+    "Property names or ids to return from Notion; the rest are left out of the response. Only changes what `verbose: true` shows, since the default response carries no properties. `title` is kept unless verbose is set."
+  );
+
+/**
+ * The query part of a request that takes Notion's filter_properties.
+ *
+ * The slim page and title ranking read the title property, so a filter that
+ * left it out would blank the title; `title` is the fixed id of every title
+ * property, whatever it is named. The SDK runs each value through
+ * decodeURIComponent, because property ids arrive percent-encoded, and that
+ * throws on a name with a bare `%`, so such a name is encoded first.
+ */
+function filterPropertiesQuery(
+  filter: readonly string[] | undefined,
+  keepTitle: boolean
+): { filter_properties?: string[] } {
+  if (!filter) return {};
+  const names = keepTitle && !filter.includes("title") ? [...filter, "title"] : filter;
+  return {
+    filter_properties: names.map((name) => {
+      try {
+        decodeURIComponent(name);
+        return name;
+      } catch {
+        return encodeURIComponent(name);
+      }
+    }),
+  };
+}
 
 function resolveParent(
   parent: z.infer<typeof PARENT_SCHEMA> | undefined
@@ -104,6 +147,8 @@ const CreatePageParams = z
       .describe("Create the page from a Notion template. The API forbids `markdown`/`children` alongside a template; only data_source_id parents support templates."),
     icon: ICON_SCHEMA.nullable().optional(),
     cover: FILE_SCHEMA.nullable().optional(),
+    notifications: NOTIFICATIONS,
+    filter_properties: FILTER_PROPERTIES,
     verbose: VERBOSE,
   })
   .refine((v) => !(v.markdown && v.children), {
@@ -221,14 +266,16 @@ register({
       ...(params.template ? { template: params.template } : {}),
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),
+      ...(params.notifications ? { notifications: params.notifications } : {}),
+      ...filterPropertiesQuery(params.filter_properties, !params.verbose),
     };
     const response = await notion.pages.create(asSdk<CreatePageBody>(body));
     if (tail.length) {
-      const failed = await appendBlockTree(notion, response.id, tail).then(
+      const failed = await appendBlockTree(notion, response.id, tail, undefined, params.notifications).then(
         () => undefined,
         (error: unknown) => error
       );
-      if (failed !== undefined) return abandonPartialPage(notion, response.id, failed);
+      if (failed !== undefined) return abandonPartialPage(notion, response.id, failed, params.notifications);
     }
     return withWarnings({ ok: true, data: slimPage(response, params.verbose ?? false) }, warnings);
   }),
@@ -242,11 +289,18 @@ register({
 async function abandonPartialPage(
   notion: Awaited<ReturnType<typeof getClient>>,
   pageId: string,
-  failure: unknown
+  failure: unknown,
+  notifications: UpdatePageBody["notifications"]
 ): Promise<OperationResult> {
   const envelope = toErrorEnvelope(failure);
   const trashed = await notion.pages
-    .update(asSdk<UpdatePageBody>({ page_id: pageId, in_trash: true }))
+    .update(
+      asSdk<UpdatePageBody>({
+        page_id: pageId,
+        in_trash: true,
+        ...(notifications ? { notifications } : {}),
+      })
+    )
     .then(
       () => true,
       () => false
@@ -278,6 +332,8 @@ async function abandonPartialPage(
 const SetPageTitleParams = z.object({
   page_id: notionId(),
   title: z.string(),
+  notifications: NOTIFICATIONS,
+  filter_properties: FILTER_PROPERTIES,
   verbose: VERBOSE,
 });
 
@@ -295,7 +351,7 @@ register({
       { page_id: "<page-id-2>", title: "Renamed 2" },
     ],
   },
-  handler: tryHandler(async ({ page_id, title, verbose }) => {
+  handler: tryHandler(async ({ page_id, title, notifications, filter_properties, verbose }) => {
     const notion = await getClient();
     const response = await notion.pages.update(
       asSdk<UpdatePageBody>({
@@ -303,6 +359,8 @@ register({
         properties: {
           title: { title: [{ type: "text", text: { content: title } }] },
         },
+        ...(notifications ? { notifications } : {}),
+        ...filterPropertiesQuery(filter_properties, !verbose),
       })
     );
     return { ok: true, data: slimPage(response, verbose ?? false) };
@@ -334,6 +392,8 @@ const SetPagePropertyParams = z.preprocess(
     page_id: notionId(),
     name: z.string().describe("Property name as shown in Notion. `title` always addresses the title property."),
     value: PROPERTY_VALUE_SCHEMA,
+    notifications: NOTIFICATIONS,
+    filter_properties: FILTER_PROPERTIES,
     verbose: VERBOSE,
   })
 );
@@ -357,12 +417,17 @@ register({
       { page_id: "<page-id>", name: "Score", value: 42 },
     ],
   },
-  handler: tryHandler(async ({ page_id, name, value, verbose }) => {
+  handler: tryHandler(async ({ page_id, name, value, notifications, filter_properties, verbose }) => {
     const prepared = await prepareProperties({ [name]: value }, () => rowSchemaForPage(page_id));
     if (!prepared.ok) return prepared;
     const notion = await getClient();
     const response = await notion.pages.update(
-      asSdk<UpdatePageBody>({ page_id, properties: prepared.properties })
+      asSdk<UpdatePageBody>({
+        page_id,
+        properties: prepared.properties,
+        ...(notifications ? { notifications } : {}),
+        ...filterPropertiesQuery(filter_properties, !verbose),
+      })
     );
     return withWarnings({ ok: true, data: slimPage(response, verbose ?? false) }, prepared.warnings);
   }),
@@ -403,6 +468,8 @@ const SetPagePropertiesParams = z.preprocess(
       .describe(
         "Property name → value, written in one API call. Plain values are typed from the data source schema: { Status: 'Done', Score: 42, Done: true, 'Due Date': '2026-01-01', Tags: ['a', 'b'], Notes: null }."
       ),
+    notifications: NOTIFICATIONS,
+    filter_properties: FILTER_PROPERTIES,
     verbose: VERBOSE,
   })
 );
@@ -430,12 +497,17 @@ register({
       { page_id: "<page-id-2>", properties: { Status: "Done" } },
     ],
   },
-  handler: tryHandler(async ({ page_id, properties, verbose }) => {
+  handler: tryHandler(async ({ page_id, properties, notifications, filter_properties, verbose }) => {
     const prepared = await prepareProperties(properties, () => rowSchemaForPage(page_id));
     if (!prepared.ok) return prepared;
     const notion = await getClient();
     const response = await notion.pages.update(
-      asSdk<UpdatePageBody>({ page_id, properties: prepared.properties })
+      asSdk<UpdatePageBody>({
+        page_id,
+        properties: prepared.properties,
+        ...(notifications ? { notifications } : {}),
+        ...filterPropertiesQuery(filter_properties, !verbose),
+      })
     );
     return withWarnings({ ok: true, data: slimPage(response, verbose ?? false) }, prepared.warnings);
   }),
@@ -445,12 +517,22 @@ register({
 // archive_page / restore_page
 // ──────────────────────────────────────────────────────────────────────────
 
-const PageIdParams = z.object({ page_id: notionId(), verbose: VERBOSE });
+const PageIdParams = z.object({
+  page_id: notionId(),
+  notifications: NOTIFICATIONS,
+  filter_properties: FILTER_PROPERTIES,
+  verbose: VERBOSE,
+});
 
-const archivePageHandler = tryHandler(async ({ page_id, verbose }: z.infer<typeof PageIdParams>) => {
+const archivePageHandler = tryHandler(async ({ page_id, notifications, filter_properties, verbose }: z.infer<typeof PageIdParams>) => {
   const notion = await getClient();
   const response = await notion.pages.update(
-    asSdk<UpdatePageBody>({ page_id, in_trash: true })
+    asSdk<UpdatePageBody>({
+      page_id,
+      in_trash: true,
+      ...(notifications ? { notifications } : {}),
+      ...filterPropertiesQuery(filter_properties, !verbose),
+    })
   );
   return { ok: true as const, data: slimPage(response, verbose ?? false) };
 });
@@ -489,10 +571,15 @@ register({
   batchable: true,
   schema: PageIdParams,
   example: { page_id: "<page-id>" },
-  handler: tryHandler(async ({ page_id, verbose }) => {
+  handler: tryHandler(async ({ page_id, notifications, filter_properties, verbose }) => {
     const notion = await getClient();
     const response = await notion.pages.update(
-      asSdk<UpdatePageBody>({ page_id, in_trash: false })
+      asSdk<UpdatePageBody>({
+        page_id,
+        in_trash: false,
+        ...(notifications ? { notifications } : {}),
+        ...filterPropertiesQuery(filter_properties, !verbose),
+      })
     );
     return { ok: true, data: slimPage(response, verbose ?? false) };
   }),
@@ -567,6 +654,7 @@ const SearchPagesParams = z.object({
     .max(1000)
     .optional()
     .describe("Max pages to fetch when paginate=true (default 10, ~1000 items with page_size=100)."),
+  filter_properties: FILTER_PROPERTIES,
   verbose: VERBOSE,
 }).superRefine((params, ctx) => {
   if (params.ranking !== "title_relevance") return;
@@ -599,8 +687,10 @@ register({
   batchable: false,
   schema: SearchPagesParams,
   example: { query: "smoke test", page_size: 10 },
-  handler: tryHandler(async ({ query, sort_direction, ranking, page_size, start_cursor, paginate, page_limit, verbose }): Promise<OperationResult> => {
+  handler: tryHandler(async ({ query, sort_direction, ranking, page_size, start_cursor, paginate, page_limit, filter_properties, verbose }): Promise<OperationResult> => {
     const notion = await getClient();
+    // Ranking reads the title even when the raw page goes back to the caller.
+    const filter = filterPropertiesQuery(filter_properties, !verbose || ranking === "title_relevance");
     // Slim pages and databases look alike; the object kind says which id
     // goes where (a database id is not a valid create_page parent).
     const slimKind = (item: Parameters<typeof slimItem>[0], v?: boolean) => ({
@@ -614,7 +704,7 @@ register({
     if (ranking === "title_relevance") {
       const titleQuery = query!.trim(); // Validated by SearchPagesParams.
       const requested = page_size ?? 10;
-      const response = await notion.search({ query: titleQuery, page_size: 100 });
+      const response = await notion.search({ query: titleQuery, page_size: 100, ...filter });
       // Rank raw results using a compact, consistently shaped title, then
       // convert them to the caller's selected (slim or verbose) representation.
       const ranked = rankTitleSearch(
@@ -641,6 +731,7 @@ register({
             ...sort,
             page_size: page_size ?? 100,
             start_cursor: cursor,
+            ...filter,
           });
           return { results: r.results, has_more: r.has_more, next_cursor: r.next_cursor };
         },
@@ -661,6 +752,7 @@ register({
       ...sort,
       page_size: page_size ?? 10,
       start_cursor,
+      ...filter,
     });
     return { ok: true, data: slimList(response, slimKind, verbose ?? false) };
   }),

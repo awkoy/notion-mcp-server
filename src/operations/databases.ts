@@ -37,17 +37,66 @@ const MAX_ITEM_LIMIT = 1000;
 // create_database
 // ──────────────────────────────────────────────────────────────────────────
 
-const CreateDatabaseParams = z.object({
-  parent: PARENT_SCHEMA.optional(),
-  title: z.string().optional().describe("Plain-text title shortcut."),
-  title_rich: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional().describe("Rich-text title; overrides `title`."),
-  description: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
-  properties: z.record(z.string(), DATABASE_PROPERTY_SCHEMA),
-  is_inline: z.boolean().optional(),
-  icon: ICON_SCHEMA.nullable().optional(),
-  cover: FILE_SCHEMA.nullable().optional(),
-  verbose: VERBOSE,
-});
+const CreateDatabaseParams = z
+  .object({
+    parent: PARENT_SCHEMA.optional(),
+    title: z
+      .string()
+      .optional()
+      .describe("Plain-text title shortcut. With `database_type` it can be left out: the database is then named after its type."),
+    title_rich: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional().describe("Rich-text title; overrides `title`."),
+    description: z.array(TEXT_RICH_TEXT_ITEM_REQUEST_SCHEMA).optional(),
+    database_type: z
+      .enum(["tasks", "projects", "skills"])
+      .optional()
+      .describe(
+        "Build the database from Notion's canonical schema for this type instead of `properties`. tasks: Task name, Assignee, Status, Due. projects: Project name, Owner, Dates, Status. skills: Skill name, Description, Files, Tags, Created by. Names follow the language of the token's owner, so read them from the response's data source with get_data_source; add columns with update_data_source. Cannot be combined with `properties`."
+      ),
+    properties: z
+      .record(z.string(), DATABASE_PROPERTY_SCHEMA)
+      .optional()
+      .describe("Map of name → property definition. Required unless `database_type` is set, and cannot be combined with it."),
+    // Kept in the schema (rather than dropped) so it fails with a pointer:
+    // z.object strips unknown keys, so a caller sending Notion's own field name
+    // next to `database_type` would otherwise get a database without that schema.
+    initial_data_source: z
+      .unknown()
+      .optional()
+      .describe("Not accepted here. Pass the schema as `properties`, which the server sends as initial_data_source."),
+    is_inline: z.boolean().optional(),
+    icon: ICON_SCHEMA.nullable().optional(),
+    cover: FILE_SCHEMA.nullable().optional(),
+    verbose: VERBOSE,
+  })
+  .superRefine((v, ctx) => {
+    const fail = (message: string, fix: string, path: string[] = []) =>
+      ctx.addIssue({ code: "custom", message, path, params: { fix } });
+    const schemaField =
+      v.properties !== undefined
+        ? "properties"
+        : v.initial_data_source !== undefined
+          ? "initial_data_source"
+          : undefined;
+    if (v.database_type !== undefined) {
+      if (schemaField) {
+        fail(
+          `\`database_type\` cannot be combined with \`${schemaField}\`: Notion builds the schema from the type.`,
+          `Remove \`${schemaField}\` to get Notion's canonical ${v.database_type} schema (add columns afterwards with update_data_source), or remove \`database_type\` to define the whole schema yourself in \`properties\`.`
+        );
+      }
+    } else if (v.initial_data_source !== undefined) {
+      fail(
+        "`initial_data_source` is not a field of create_database.",
+        "Move its `properties` map to a top-level `properties` field; the server sends it as initial_data_source."
+      );
+    } else if (v.properties === undefined) {
+      fail(
+        "Pass `properties` or `database_type`.",
+        "Pass `properties`, a map of name → property definition, or `database_type` (tasks, projects or skills) for Notion's canonical schema.",
+        ["properties"]
+      );
+    }
+  });
 
 function resolveParent(parent: z.infer<typeof PARENT_SCHEMA> | undefined) {
   if (parent) return parent;
@@ -60,23 +109,30 @@ register({
   name: "create_database",
   access: "write",
   domain: "databases",
-  description: "Create a new database. Properties is a map of name → property-type definition.",
+  description:
+    "Create a new database, either from `properties` (a map of name → property-type definition) or from `database_type` (tasks, projects or skills) for Notion's canonical schema.",
   batchable: true,
   schema: CreateDatabaseParams,
-  example: {
-    title: "Tasks",
-    properties: {
-      Name: { type: "title", title: {} },
-      Status: {
-        type: "select",
-        select: {
-          options: [
-            { name: "Open", color: "blue" },
-            { name: "Done", color: "green" },
-          ],
+  example: { database_type: "tasks", title: "Sprint tasks" },
+  exampleBatch: {
+    items: [
+      { database_type: "projects" },
+      {
+        title: "Tasks",
+        properties: {
+          Name: { type: "title", title: {} },
+          Status: {
+            type: "select",
+            select: {
+              options: [
+                { name: "Open", color: "blue" },
+                { name: "Done", color: "green" },
+              ],
+            },
+          },
         },
       },
-    },
+    ],
   },
   rollback: async (data) => {
     if (typeof data !== "object" || data === null) return;
@@ -105,9 +161,12 @@ register({
     const notion = await getClient();
     const body = {
       parent,
-      title: titleRich,
+      // No title on a typed database means Notion names it after the type.
+      ...(params.database_type && titleRich.length === 0 ? {} : { title: titleRich }),
       ...(params.description ? { description: params.description } : {}),
-      initial_data_source: { properties: params.properties },
+      ...(params.database_type
+        ? { database_type: params.database_type }
+        : { initial_data_source: { properties: params.properties } }),
       is_inline: params.is_inline ?? false,
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),

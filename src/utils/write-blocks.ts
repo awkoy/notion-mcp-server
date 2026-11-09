@@ -115,7 +115,8 @@ export async function appendBlockTree(
   notion: Pick<Client, "blocks">,
   parentId: string,
   blocks: Block[],
-  position?: AppendPosition
+  position?: AppendPosition,
+  notifications?: AppendBlockBody["notifications"]
 ): Promise<WrittenBlock[]> {
   const written: WrittenBlock[] = [];
   let rest = blocks;
@@ -128,6 +129,7 @@ export async function appendBlockTree(
           block_id: parentId,
           children: asSdk<AppendBlockChildren>(request.send),
           ...(at ? { position: at } : {}),
+          ...(notifications ? { notifications } : {}),
         })
       );
       // Notion returns just the new blocks, except for position start, where
@@ -143,7 +145,7 @@ export async function appendBlockTree(
         );
       }
       for (const { index, children } of request.later) {
-        await appendBlockTree(notion, created[index].id, children);
+        await appendBlockTree(notion, created[index].id, children, undefined, notifications);
       }
       if (placeAfter) {
         at = { type: "after_block", after_block: { id: created[created.length - 1].id } };

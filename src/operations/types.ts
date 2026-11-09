@@ -16,6 +16,7 @@ export type OperationName =
   | "append_blocks"
   | "get_block"
   | "get_block_children"
+  | "query_meeting_notes"
   | "update_block"
   | "delete_block"
   | "batch_mixed_blocks"

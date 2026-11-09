@@ -22,7 +22,7 @@ Rules:
 - One line on stderr at startup says what resolved. Check it first when the config doesn't behave:
 
 ```text
-Operation access: 22/48 enabled (allow=read; block=(none))
+Operation access: 23/49 enabled (allow=read; block=(none))
 ```
 
 ### Per-operation reference
@@ -30,7 +30,7 @@ Operation access: 22/48 enabled (allow=read; block=(none))
 | Family | Read | Write |
 | --- | --- | --- |
 | `pages` | `search_pages` `get_page` `get_page_markdown` | `create_page` `set_page_title` `set_page_property` `set_page_properties` `update_page_markdown` `move_page` `restore_page` `archive_page`† `trash_page`† |
-| `blocks` | `get_block` `get_block_children` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
+| `blocks` | `get_block` `get_block_children` `query_meeting_notes` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
 | `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
 | `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |
 | `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |

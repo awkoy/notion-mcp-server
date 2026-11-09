@@ -158,7 +158,7 @@ HTTP variables are in [Remote / HTTP transport](#remote--http-transport). Upgrad
 { "env": { "NOTION_ALLOWED_OPERATIONS": "read,append_blocks,add_page_comment" } }
 ```
 
-Disabled operations disappear from the tool schemas, so the model never sees them. The server prints what resolved at startup, for example `Operation access: 22/48 enabled (allow=read; block=(none))`.
+Disabled operations disappear from the tool schemas, so the model never sees them. The server prints what resolved at startup, for example `Operation access: 23/49 enabled (allow=read; block=(none))`.
 
 To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a destructive operation runs, your client shows a yes/no dialog naming the target. The client has to support MCP elicitation. The full rules, the per-operation list and the limits of per-operation control are in [docs/configuration.md](./docs/configuration.md#restricting-operations).
 
@@ -203,7 +203,7 @@ Docker, health checks and protocol versions: [docs/http-transport.md](./docs/htt
 
 ## Tools and operations
 
-Three tools, whichever of the 46 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
+Three tools, whichever of the 47 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
 
 ### Per-tool permissions
 
@@ -213,12 +213,12 @@ The read/write split lets you approve reads once and keep writes behind a prompt
 { "permissions": { "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"] } }
 ```
 
-### Operations menu (46 ops, plus two aliases)
+### Operations menu (47 ops, plus two aliases)
 
 | Area | Operations |
 | --- | --- |
 | **Pages** | `create_page`, `get_page`, `set_page_title`, `set_page_property`, `set_page_properties`, `archive_page` (alias: `trash_page`), `restore_page`, `search_pages`, `move_page`, `get_page_markdown`, `update_page_markdown` |
-| **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `update_block`, `delete_block`, `batch_mixed_blocks` |
+| **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `query_meeting_notes`, `update_block`, `delete_block`, `batch_mixed_blocks` |
 | **Databases** | `create_database`, `query_database`, `update_database`, `delete_database` |
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `delete_data_source`, `list_data_source_templates` |
 | **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
