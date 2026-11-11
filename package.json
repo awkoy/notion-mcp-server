@@ -55,7 +55,7 @@
   "dependencies": {
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
-    "@notionhq/client": "5.29.0",
+    "@notionhq/client": "5.30.0",
     "https-proxy-agent": "9.1.0",
     "node-fetch": "3.3.2",
     "remark-gfm": "^4.0.1",
