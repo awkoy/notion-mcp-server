@@ -165,6 +165,25 @@ describe("confirm destructive: the prompt", () => {
     });
   });
 
+  it("asks before replace: true wipes a files property", async () => {
+    // upload_to_property is the only files-domain operation that removes
+    // something, and it targets a page.
+    answer = { action: "decline" };
+    await withFlag("true", async () => {
+      const { body } = await execute(client, "upload_to_property", {
+        page_id: "p-1",
+        property: "Attachment",
+        replace: true,
+        filename: "a.txt",
+        source: { type: "base64", data: "eA==" },
+      });
+      expect(body.error?.code).toBe("confirmation_declined");
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0].message).toContain("upload_to_property");
+      expect(notionStub.pages.update).not.toHaveBeenCalled();
+    });
+  });
+
   it("accepts '1' as on", async () => {
     await withFlag("1", async () => {
       await execute(client, "archive_page", { page_id: "p-1" });

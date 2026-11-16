@@ -44,11 +44,11 @@ const NAMED_SOURCE_FIELDS = {
   filename: z
     .string()
     .optional()
-    .describe("Required for base64 and url sources. Optional for a path source — defaults to the file's basename."),
+    .describe("Required for base64 and url; from the basename for a path."),
   content_type: z
     .string()
     .optional()
-    .describe("Defaults to the type for the filename's extension."),
+    .describe("From the filename's extension."),
 };
 
 const Base64Source = z.object({
@@ -745,36 +745,15 @@ async function uploadFile({
 
 const UploadToPropertyParams = z
   .object({
-    page_id: notionId().describe("Page or database row that holds the files property."),
-    property: z
-      .string()
-      .describe('Name of the files property, exactly as the column is titled (e.g. "Attachment").'),
-    filename: z
-      .string()
-      .optional()
-      .describe(
-        "Required for base64 and url sources. Optional for a path source — defaults to the file's basename."
-      ),
-    content_type: z
-      .string()
-      .optional()
-      .describe("Defaults to the type for the filename's extension."),
-    source: SourceSchema.optional().describe(
-      "One file. Several files for one property go in `sources`, as one request — do not split them into several calls or batch items."
-    ),
-    sources: z
-      .array(NamedSourceSchema)
-      .min(1)
-      .optional()
-      .describe(
-        "Several files written to the property in one request — the way to put more than one file in a cell. Each entry takes `filename` and `content_type` of its own."
-      ),
+    page_id: notionId().describe("Page or database row holding the files property."),
+    property: z.string().describe("Property name, exactly as titled."),
+    ...NAMED_SOURCE_FIELDS,
+    source: SourceSchema.optional().describe("One file."),
+    sources: z.array(NamedSourceSchema).min(1).optional().describe("Several files in one request."),
     replace: z
       .boolean()
       .optional()
-      .describe(
-        "Default false: the property keeps the files it already holds and the new ones are appended. true replaces the whole list. Notion throws away anything a write does not mention, so the current list is read first and passed back."
-      ),
+      .describe("Default false: keeps the files already there. true replaces the list."),
   })
   .refine((v) => (v.source === undefined) !== (v.sources === undefined), {
     message: "Pass exactly one of `source` (one file) or `sources` (several).",
@@ -783,14 +762,14 @@ const UploadToPropertyParams = z
 type ExistingFile = { type?: string; name?: string; file?: unknown; external?: unknown };
 
 // Notion drops entries a write does not name, so appending reads the list first
-// and passes every entry back; a hosted `file` survives that verbatim.
+// and passes every entry back verbatim: an entry whose shape we do not know is
+// still one Notion returned, and carrying it beats dropping it.
 function keptFiles(value: unknown): ExistingFile[] {
   const files = (value as { files?: unknown } | undefined)?.files;
   if (!Array.isArray(files)) return [];
-  return files.filter((f): f is ExistingFile => {
-    const e = f as ExistingFile;
-    return typeof e === "object" && e !== null && (e.file !== undefined || e.external !== undefined);
-  });
+  return files.filter(
+    (f): f is ExistingFile => typeof f === "object" && f !== null && !Array.isArray(f)
+  );
 }
 
   // Two writes to one property each read the list before either lands, so the
@@ -812,11 +791,42 @@ function serializeCellWrite<T>(key: string, run: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function currentFiles(page_id: string, property: string): Promise<ExistingFile[]> {
+// The read is keyed by name, the write takes a name or an id: an id here would
+// read as empty and the write would replace what it could not see.
+async function readCell(
+  page_id: string,
+  property: string
+): Promise<{ kept: ExistingFile[] } | { error: OperationError }> {
   const notion = await getClient();
   const page = await notion.pages.retrieve({ page_id });
-  const props = (page as { properties?: Record<string, unknown> }).properties;
-  return keptFiles(props?.[property]);
+  const props = (page as { properties?: Record<string, { type?: string }> }).properties;
+  // `props[property]` would answer for inherited names ("constructor"), so the
+  // lookup is own-key only.
+  const cell = props && Object.hasOwn(props, property) ? props[property] : undefined;
+  if (!cell?.type) {
+    const names = Object.entries(props ?? {})
+      .filter(([, p]) => p?.type === "files")
+      .map(([name]) => name);
+    return {
+      error: {
+        code: "unknown_property",
+        message: `Page ${page_id} has no property "${property}".`,
+        fix: names.length
+          ? `Its files properties are ${names.join(", ")}. Pass one of those names, not an id.`
+          : "That page has no files property to upload into.",
+      },
+    };
+  }
+  if (cell.type !== "files") {
+    return {
+      error: {
+        code: "property_type_mismatch",
+        message: `Property "${property}" is a ${cell.type} property, not files.`,
+        fix: `Pass the name of a files property.`,
+      },
+    };
+  }
+  return { kept: keptFiles(cell) };
 }
 
 register({
@@ -824,10 +834,7 @@ register({
   access: "write",
   domain: "files",
   description:
-    "Upload one or more files and store them in a page's files property in one call.\n" +
-    "`upload_file` returns a `file_upload_id` and its `attach_to` appends a block, so reaching a files property takes a second call with set_page_properties, whose shape no schema or example shows. This does both, and takes the same sources and guards as upload_file.\n" +
-    "The property keeps what it already holds: the current list is read and passed back with the new entries appended. Pass `replace: true` to overwrite instead.\n" +
-    "Use `sources` to put several files in one request. Writes to the same page and property are run one at a time, so a batch that reaches one cell from several items keeps every file; one item with `sources` is still the cheaper way.",
+    "Upload one or more files into a page's files property, in one call. Appends to what is there; `replace: true` overwrites the list. Several files go in one request as `sources`.",
   batchable: true,
   schema: UploadToPropertyParams,
   // `replace: true` drops the whole list, and Notion keeps no history of it.
@@ -863,7 +870,12 @@ register({
         const entries =
           sources ?? [{ ...(source as Source), filename, content_type }];
         const notion = await getClient();
-        const kept = replace ? [] : await currentFiles(page_id, property);
+        let kept: ExistingFile[] = [];
+        if (!replace) {
+          const cell = await readCell(page_id, property);
+          if ("error" in cell) return { ok: false, error: cell.error };
+          kept = cell.kept;
+        }
 
         const uploaded: { file_upload_id: string; filename?: string; expiry_time?: string }[] = [];
         for (const entry of entries) {
@@ -940,19 +952,19 @@ register({
             )
             .join(", ");
           const expiry = uploaded.find((u) => u.expiry_time)?.expiry_time;
-          const clock = expiry ? ` The uploads expire at ${expiry}, and an unplaced one is gone after that.` : "";
-          const drops =
+          const clock = expiry ? ` The uploads expire at ${expiry}.` : "";
+          const loses =
             kept.length === 0
               ? ""
-              : ` This call names only the files uploaded now, so the ${
+              : ` and drops the ${
                   kept.length === 1 ? "file" : `${kept.length} files`
-                } already in "${property}" are not in it and Notion drops whatever a write does not name.`;
+                } already in "${property}" — call upload_to_property again without replace to keep them, at the cost of uploading these files twice.`;
           return {
             ok: false,
             error: {
               code: "attach_failed",
               message: `Uploaded as ${ids.join(", ")}, but setting "${property}" on ${page_id} failed: ${reason}`,
-              fix: `The upload is done — do not re-upload. Set it with set_page_properties, which takes the typed form: { page_id: "${page_id}", properties: { "${property}": { files: [${files}] } } }.${clock}${drops} Placing them this way overwrites the list. If the files already in it have to survive, do nothing here: they cannot be named in this call, so call upload_to_property again with replace left out instead, which reads the list and sends it back — at the cost of uploading these files a second time. If the error says the property is not a files property, check the column's exact title and type.`,
+              fix: `Uploaded already — do not re-upload. Set them with set_page_properties: { page_id: "${page_id}", properties: { "${property}": { files: [${files}] } } }. That call replaces the whole list${loses}${clock}`,
             },
           };
         }

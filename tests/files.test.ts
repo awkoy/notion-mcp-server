@@ -1879,6 +1879,65 @@ describe("upload_to_property", () => {
     // The typed form, because the shorthand refuses file_upload_id.
     expect(res.error.fix).toContain("files:");
     expect(res.error.fix).toContain('{ file_upload: { id: "fu-prop" }, name: "report.pdf" }');
+    // The files already there cannot be named in that call, so the fix says so.
+    expect(res.error.fix).toContain('drops the file already in "Attachment"');
+  });
+
+  it("refuses a property the page does not have, before uploading anything", async () => {
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "Attachments",
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("unknown_property");
+    expect(res.error.fix).toContain("Attachment");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.pages.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a property that holds something other than files", async () => {
+    notionStub.pages.retrieve.mockResolvedValue({
+      id: PAGE,
+      properties: { Attachment: { type: "title", title: [] } },
+    });
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "Attachment",
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("property_type_mismatch");
+    expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
+    expect(notionStub.pages.update).not.toHaveBeenCalled();
+  });
+
+  it("carries back an entry whose shape it does not recognise", async () => {
+    // Notion returned it, so a write that does not name it would delete it.
+    const odd = { type: "file", name: "ghost.pdf" };
+    notionStub.pages.retrieve.mockResolvedValue(pageWith([EXISTING, odd]));
+    await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "Attachment",
+    });
+    expect(writtenFiles()).toContainEqual(odd);
+  });
+
+  it("treats a name JavaScript already has on every object as unknown", async () => {
+    const res = await dispatch("upload_to_property", {
+      filename: "report.pdf",
+      source,
+      page_id: PAGE,
+      property: "constructor",
+    });
+    assertErr(res);
+    expect(res.error.code).toBe("unknown_property");
+    expect(res.error.message).not.toContain("undefined");
+    expect(notionStub.pages.update).not.toHaveBeenCalled();
   });
 
   it("suggests a call the property schema accepts, so the fix can actually run", async () => {
@@ -1907,8 +1966,7 @@ describe("upload_to_property", () => {
     expect(res.error.fix).not.toContain("...");
     expect(res.error.fix).not.toContain("kept.pdf");
     // Instead it says what that omission costs.
-    expect(res.error.fix).toContain("already in \"Attachment\"");
-    expect(res.error.fix).toContain("Notion drops whatever a write does not name");
+    expect(res.error.fix).toContain("replaces the whole list");
   });
 
   it("replace: true is refused when destructive operations are blocked", async () => {
