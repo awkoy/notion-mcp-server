@@ -12,6 +12,12 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # 5.30.x exports Client through a getter Node 22 cannot see, so
+      # `import { Client }` throws at startup on Node 22 (#135, #142).
+      # Drop this once a release starts on Node 22 again.
+      - dependency-name: "@notionhq/client"
+        versions: ["5.30.x"]
 
   # GitHub Actions — keep the SHA pins current (Dependabot bumps SHA + comment).
   - package-ecosystem: github-actions
