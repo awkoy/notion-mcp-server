@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-11-19
+
+### Added
+
+- **`upload_to_property`.** Uploads one or more files and puts them into a page's files property in the same call, from the same `base64`, `url` and `path` sources as `upload_file`, under the same guards. It appends to the files the property already holds; `replace: true` overwrites the list, counts as destructive (refused while `destructive` is blocked, confirmed under `NOTION_CONFIRM_DESTRUCTIVE`). `sources` carries several files in one request, and batch items that reach the same page and property run one at a time, so none of them drops another's file. A property name the page doesn't have, or one that isn't a files property, is refused before anything is uploaded. Contributed by @ggggggggggz in #136.
+
+### Changed
+
+- Dependencies: the lockfile now pins `hono` 4.13.18 (was 4.13.12), so the Docker image and the `.mcpb` bundle ship it. npm installs resolve their own dependency tree and are unchanged. No code changes.
+
 ## [3.4.0] - 2026-11-09
 
 ### Added
