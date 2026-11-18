@@ -772,7 +772,7 @@ function keptFiles(value: unknown): ExistingFile[] {
   );
 }
 
-  // Two writes to one property each read the list before either lands, so the
+// Two writes to one property each read the list before either lands, so the
 // second would send back a list read before the first one and drop its file.
 // Writes to the same page and property therefore run one at a time.
 const cellWrites = new Map<string, Promise<unknown>>();
