@@ -1,6 +1,6 @@
 # Tools, calls and resources
 
-The [README](../README.md#tools-and-operations) lists the 47 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
+The [README](../README.md#tools-and-operations) lists the 48 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
 
 ## Three tools
 
@@ -114,6 +114,16 @@ Every id field (`page_id`, `block_id`, `database_id`, `view_id`, …) also accep
     "name": "Owner",
     "value": ["<user-id>"],
     "notifications": { "mode": "silent" }
+  }
+}
+
+// upload a file and store it in a files property in one call
+{
+  "operation": "upload_to_property",
+  "payload": {
+    "source": { "type": "path", "path": "~/Desktop/report.pdf" },
+    "page_id": "<page-id>",
+    "property": "Attachment"
   }
 }
 ```

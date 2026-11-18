@@ -6,6 +6,7 @@ import { getClient, proxyAwareFetch } from "../services/notion.js";
 import { bodyStream, discardBody, fetchPublicUrl } from "../services/public-fetch.js";
 import { getActiveTransport } from "../config/http.js";
 import { register } from "./registry.js";
+import { destructiveGroupBlocked } from "./access.js";
 import { tryHandler } from "../utils/handler.js";
 import { readCapped } from "../utils/read-capped.js";
 import { dotSegment, sensitiveZones, zoneOf, type Zone } from "../utils/upload-paths.js";
@@ -16,6 +17,7 @@ import type {
   AppendBlockChildren,
   CreateFileUploadBody,
   SendFileUploadBody,
+  UpdatePageBody,
 } from "../utils/notion-types.js";
 import { FILE_REF_PREFIX, blockFileRef, parseFileRef } from "../utils/file-ref.js";
 import { notionId } from "../schema/id.js";
@@ -38,25 +40,46 @@ const FILE_UPLOAD_STATUS = ["pending", "uploaded", "expired", "failed"] as const
 
 const VERBOSE = z.boolean().optional();
 
-const SourceSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("base64"),
-    data: z.string().describe("Base64-encoded file bytes."),
-  }),
-  z.object({
-    type: z.literal("url"),
-    url: z
-      .url({ protocol: /^https?$/ })
-      .describe("Public http(s) URL the server fetches the bytes from. Hosts that resolve to private, loopback or link-local addresses are refused, redirects included."),
-  }),
-  z.object({
-    type: z.literal("path"),
-    path: z
-      .string()
-      .describe(
-        "Local filesystem path (absolute, or ~-relative). The server reads the file directly — bytes never pass through the tool call, so this is the fastest, cheapest source for files on the same machine as the server. Confined to NOTION_UPLOAD_ROOT when it is set."
-      ),
-  }),
+const NAMED_SOURCE_FIELDS = {
+  filename: z
+    .string()
+    .optional()
+    .describe("Required for base64 and url; from the basename for a path."),
+  content_type: z
+    .string()
+    .optional()
+    .describe("From the filename's extension."),
+};
+
+const Base64Source = z.object({
+  type: z.literal("base64"),
+  data: z.string().describe("Base64-encoded file bytes."),
+});
+
+const UrlSource = z.object({
+  type: z.literal("url"),
+  url: z
+    .url({ protocol: /^https?$/ })
+    .describe("Public http(s) URL the server fetches the bytes from. Hosts that resolve to private, loopback or link-local addresses are refused, redirects included."),
+});
+
+const PathSource = z.object({
+  type: z.literal("path"),
+  path: z
+    .string()
+    .describe(
+      "Local filesystem path (absolute, or ~-relative). The server reads the file directly — bytes never pass through the tool call, so this is the fastest, cheapest source for files on the same machine as the server. Confined to NOTION_UPLOAD_ROOT when it is set."
+    ),
+});
+
+const SourceSchema = z.discriminatedUnion("type", [Base64Source, UrlSource, PathSource]);
+
+// The same three sources, carrying the name and type a list entry needs. A
+// path derives both from its basename, so they stay optional here.
+const NamedSourceSchema = z.discriminatedUnion("type", [
+  Base64Source.extend(NAMED_SOURCE_FIELDS),
+  UrlSource.extend(NAMED_SOURCE_FIELDS),
+  PathSource.extend(NAMED_SOURCE_FIELDS),
 ]);
 
 type Source = z.infer<typeof SourceSchema>;
@@ -715,6 +738,239 @@ async function uploadFile({
   });
   return finish(completed);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// upload_to_property
+// ──────────────────────────────────────────────────────────────────────────
+
+const UploadToPropertyParams = z
+  .object({
+    page_id: notionId().describe("Page or database row holding the files property."),
+    property: z.string().describe("Property name, exactly as titled."),
+    ...NAMED_SOURCE_FIELDS,
+    source: SourceSchema.optional().describe("One file."),
+    sources: z.array(NamedSourceSchema).min(1).optional().describe("Several files in one request."),
+    replace: z
+      .boolean()
+      .optional()
+      .describe("Default false: keeps the files already there. true replaces the list."),
+  })
+  .refine((v) => (v.source === undefined) !== (v.sources === undefined), {
+    message: "Pass exactly one of `source` (one file) or `sources` (several).",
+  });
+
+type ExistingFile = { type?: string; name?: string; file?: unknown; external?: unknown };
+
+// Notion drops entries a write does not name, so appending reads the list first
+// and passes every entry back verbatim: an entry whose shape we do not know is
+// still one Notion returned, and carrying it beats dropping it.
+function keptFiles(value: unknown): ExistingFile[] {
+  const files = (value as { files?: unknown } | undefined)?.files;
+  if (!Array.isArray(files)) return [];
+  return files.filter(
+    (f): f is ExistingFile => typeof f === "object" && f !== null && !Array.isArray(f)
+  );
+}
+
+// Two writes to one property each read the list before either lands, so the
+// second would send back a list read before the first one and drop its file.
+// Writes to the same page and property therefore run one at a time.
+const cellWrites = new Map<string, Promise<unknown>>();
+
+function serializeCellWrite<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = cellWrites.get(key) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  const tail = next.then(
+    () => {},
+    () => {}
+  );
+  cellWrites.set(key, tail);
+  void tail.then(() => {
+    if (cellWrites.get(key) === tail) cellWrites.delete(key);
+  });
+  return next;
+}
+
+// The read is keyed by name, the write takes a name or an id: an id here would
+// read as empty and the write would replace what it could not see.
+async function readCell(
+  page_id: string,
+  property: string
+): Promise<{ kept: ExistingFile[] } | { error: OperationError }> {
+  const notion = await getClient();
+  const page = await notion.pages.retrieve({ page_id });
+  const props = (page as { properties?: Record<string, { type?: string }> }).properties;
+  // `props[property]` would answer for inherited names ("constructor"), so the
+  // lookup is own-key only.
+  const cell = props && Object.hasOwn(props, property) ? props[property] : undefined;
+  if (!cell?.type) {
+    const names = Object.entries(props ?? {})
+      .filter(([, p]) => p?.type === "files")
+      .map(([name]) => name);
+    return {
+      error: {
+        code: "unknown_property",
+        message: `Page ${page_id} has no property "${property}".`,
+        fix: names.length
+          ? `Its files properties are ${names.join(", ")}. Pass one of those names, not an id.`
+          : "That page has no files property to upload into.",
+      },
+    };
+  }
+  if (cell.type !== "files") {
+    return {
+      error: {
+        code: "property_type_mismatch",
+        message: `Property "${property}" is a ${cell.type} property, not files.`,
+        fix: `Pass the name of a files property.`,
+      },
+    };
+  }
+  return { kept: keptFiles(cell) };
+}
+
+register({
+  name: "upload_to_property",
+  access: "write",
+  domain: "files",
+  description:
+    "Upload one or more files into a page's files property, in one call. Appends to what is there; `replace: true` overwrites the list. Several files go in one request as `sources`.",
+  batchable: true,
+  schema: UploadToPropertyParams,
+  // `replace: true` drops the whole list, and Notion keeps no history of it.
+  destructiveWhen: (item) =>
+    item.replace === true
+      ? "It replaces the whole list this property holds, so the files already there are dropped and cannot be recovered."
+      : null,
+  example: {
+    sources: [
+      { type: "path", path: "~/Desktop/report.pdf" },
+      { type: "path", path: "~/Desktop/data.csv" },
+      { type: "path", path: "~/Desktop/chart.png" },
+    ],
+    page_id: "<page-id>",
+    property: "Attachment",
+  },
+  handler: tryHandler(
+    async (params): Promise<OperationResult> =>
+      // One write per page and property at a time: the read, the uploads
+      // and the write below must not interleave with another call's.
+      serializeCellWrite(JSON.stringify([params.page_id, params.property]), async () => {
+        const { page_id, property, filename, content_type, source, sources, replace } = params;
+        if (replace && destructiveGroupBlocked()) {
+          return {
+            ok: false,
+            error: {
+              code: "operation_not_allowed",
+              message: `replace: true drops every file in "${property}" on ${page_id}, and NOTION_BLOCKED_OPERATIONS blocks destructive operations on this server.`,
+              fix: "Leave replace out: the default keeps the files already in the property and appends the new ones.",
+            },
+          };
+        }
+        const entries =
+          sources ?? [{ ...(source as Source), filename, content_type }];
+        const notion = await getClient();
+        let kept: ExistingFile[] = [];
+        if (!replace) {
+          const cell = await readCell(page_id, property);
+          if ("error" in cell) return { ok: false, error: cell.error };
+          kept = cell.kept;
+        }
+
+        const uploaded: { file_upload_id: string; filename?: string; expiry_time?: string }[] = [];
+        for (const entry of entries) {
+          const res = await uploadFile({
+            source: entry as Source,
+            filename: entry.filename,
+            content_type: entry.content_type,
+          }).catch((err: unknown) => ({
+            ok: false as const,
+            error: {
+              code: "upload_failed",
+              message: err instanceof Error ? err.message : String(err),
+              fix: "Nothing was written to the property. Retry the whole call.",
+            },
+          }));
+          if (!res.ok) {
+            // Name what is already uploaded, so a retry does not send it twice.
+            const done = uploaded.map((u) => u.file_upload_id);
+            if (done.length === 0) return res;
+            return {
+              ok: false,
+              error: {
+                ...res.error,
+                message: `${res.error.message} (already uploaded, and still unplaced: ${done.join(", ")})`,
+                fix: `${res.error.fix} The files uploaded before this one are kept — place them with set_page_properties rather than uploading again.`,
+              },
+            };
+          }
+          const data = res.data as { file_upload_id: string; filename?: string; expiry_time?: string };
+          uploaded.push(data);
+        }
+
+        const added = uploaded.map((u) => ({
+          type: "file_upload" as const,
+          file_upload: { id: u.file_upload_id },
+          ...(u.filename ? { name: u.filename } : {}),
+        }));
+        const ids = uploaded.map((u) => u.file_upload_id);
+
+        try {
+          await notion.pages.update(
+            asSdk<UpdatePageBody>({
+              page_id,
+              properties: {
+                [property]: { files: [...kept, ...added] },
+              },
+            })
+          );
+          return {
+            ok: true,
+            data: {
+              page_id,
+              property,
+              file_upload_ids: ids,
+              // What a one-file caller would read off upload_file's result.
+              ...(ids.length === 1
+                ? { file_upload_id: ids[0], filename: uploaded[0].filename }
+                : {}),
+              replaced: replace === true,
+            },
+          };
+        } catch (err) {
+          // Same reasoning as attach_to: the upload is paid for, so never let a
+          // thrown error hide the ids that can still be placed.
+          const reason = err instanceof Error ? err.message : String(err);
+          // Only what this call uploaded: set_page_properties takes `file_upload`
+          // and `external`, so echoing a hosted `file` would make the fix invalid.
+          const files = added
+            .map(
+              (f) =>
+                `{ file_upload: { id: ${JSON.stringify(f.file_upload.id)} }${
+                  f.name ? `, name: ${JSON.stringify(f.name)}` : ""
+                } }`
+            )
+            .join(", ");
+          const expiry = uploaded.find((u) => u.expiry_time)?.expiry_time;
+          const clock = expiry ? ` The uploads expire at ${expiry}.` : "";
+          const loses =
+            kept.length === 0
+              ? ""
+              : ` and drops the ${
+                  kept.length === 1 ? "file" : `${kept.length} files`
+                } already in "${property}" — call upload_to_property again without replace to keep them, at the cost of uploading these files twice.`;
+          return {
+            ok: false,
+            error: {
+              code: "attach_failed",
+              message: `Uploaded as ${ids.join(", ")}, but setting "${property}" on ${page_id} failed: ${reason}`,
+              fix: `Uploaded already — do not re-upload. Set them with set_page_properties: { page_id: "${page_id}", properties: { "${property}": { files: [${files}] } } }. That call replaces the whole list${loses}${clock}`,
+            },
+          };
+        }
+      })
+  ),
+});
 
 // ──────────────────────────────────────────────────────────────────────────
 // list_file_uploads

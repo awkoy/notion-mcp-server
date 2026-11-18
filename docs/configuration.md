@@ -22,7 +22,7 @@ Rules:
 - One line on stderr at startup says what resolved. Check it first when the config doesn't behave:
 
 ```text
-Operation access: 23/49 enabled (allow=read; block=(none))
+Operation access: 23/50 enabled (allow=read; block=(none))
 ```
 
 ### Per-operation reference
@@ -36,13 +36,15 @@ Operation access: 23/49 enabled (allow=read; block=(none))
 | `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
 | `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
 | `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
-| `files` | `list_file_uploads` `get_file_upload` `get_file_url` `get_image` | `upload_file` |
+| `files` | `list_file_uploads` `get_file_upload` `get_file_url` `get_image` | `upload_file` `upload_to_property` |
 
 † = also in the `destructive` group. `trash_page` is an alias of `archive_page`.
 
 `update_data_source` stays out of the group, but a call that sets a property to `null` deletes that column and its values on every page. While `destructive` is blocked, such a call is refused with `operation_not_allowed`; the rest of a schema update still runs.
 
-**Limitations.** Apart from that `null` check, control is per operation, not per parameter. `update_page_markdown` is a write operation that can replace a page's whole body, and blocking `destructive` does not disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP prompts may still mention disabled operations, but running them is rejected.
+`upload_to_property` stays out of the group too. By default it appends to the files a property holds; `replace: true` overwrites the list, and Notion keeps no copy of the files it drops. While `destructive` is blocked, a `replace: true` call is refused with `operation_not_allowed`; without `replace` it appends as usual.
+
+**Limitations.** Apart from those two checks, control is per operation, not per parameter. `update_page_markdown` is a write operation that can replace a page's whole body, and blocking `destructive` does not disable it. For a guaranteed no-mutation deployment use `NOTION_ALLOWED_OPERATIONS=read` or `NOTION_READ_ONLY=true`. MCP prompts may still mention disabled operations, but running them is rejected.
 
 ## Confirming destructive operations
 
@@ -53,7 +55,7 @@ How the question reaches the client depends on the protocol revision it speaks:
 - **2025-era clients** get an `elicitation/create` request.
 - **MCP 2026-07-28 clients** get an `input_required` result. The retry carries a sealed `requestState` that only matches the call it was minted for, so an answer can't be replayed onto a different call.
 
-An `update_data_source` call that sets a property to `null` is confirmed the same way, and the dialog names the properties it deletes. A schema update that deletes nothing doesn't prompt.
+An `update_data_source` call that sets a property to `null` is confirmed the same way, and the dialog names the properties it deletes. A schema update that deletes nothing doesn't prompt. An `upload_to_property` call with `replace: true` is confirmed the same way; one that appends doesn't prompt.
 
 What never prompts: restores (`restore_page`, and `delete_database` / `delete_data_source` with `in_trash: false`) and a `batch_mixed_blocks` call with no `delete` entry. A blocked operation is rejected with `operation_not_allowed` before anyone is asked.
 
@@ -68,7 +70,7 @@ What the model sees:
 
 ### Uploads
 
-`upload_file` takes its bytes as `base64`, a public `url`, or a local `path` that the server reads directly. The model composes the source, so the server guards the two it reads itself.
+`upload_file` and `upload_to_property` take their bytes as `base64`, a public `url`, or a local `path` that the server reads directly. The model composes the source, so the server guards the two it reads itself.
 
 | Env var | Default | Effect |
 | --- | --- | --- |

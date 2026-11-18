@@ -56,6 +56,7 @@ const KIND_BY_DOMAIN: Partial<Record<OperationDomain, TargetKind>> = {
   blocks: "block",
   comments: "comment",
   views: "view",
+  files: "page",
 };
 
 const ID_FIELDS = [
