@@ -33,6 +33,7 @@ export type OperationName =
   | "get_view"
   | "query_view"
   | "create_view"
+  | "ensure_dashboard_widget"
   | "update_view"
   | "delete_view"
   | "list_comments"

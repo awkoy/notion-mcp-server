@@ -6,9 +6,10 @@ beforeAll(async () => {
 });
 
 describe("operations registry", () => {
-  it("registers every name in the OperationName union (50 total: 48 ops + trash_page + get_self aliases)", () => {
+  it("registers every name in the OperationName union (51 total, including Dashboard widget reconciliation)", () => {
     const names = operationNames();
-    expect(names.length).toBe(50);
+    expect(names.length).toBe(51);
+    expect(names).toContain("ensure_dashboard_widget");
     expect(names).toContain("trash_page");
     expect(names).toContain("get_self");
   });
@@ -18,6 +19,7 @@ describe("operations registry", () => {
     expect(getOperation("get_view")).toBeDefined();
     expect(getOperation("query_view")).toBeDefined();
     expect(getOperation("create_view")).toBeDefined();
+    expect(getOperation("ensure_dashboard_widget")).toBeDefined();
     expect(getOperation("update_view")).toBeDefined();
     expect(getOperation("delete_view")).toBeDefined();
   });
