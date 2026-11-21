@@ -937,6 +937,10 @@ register({
 
 const GetPageMarkdownParams = z.object({
   page_id: notionId(),
+  markdown_version: z.enum(["v1", "v2"]).optional()
+    .describe("Opt into Notion-flavored Markdown v2; default remains the API's current v1 until migration."),
+  include_transcript: z.boolean().optional()
+    .describe("Include meeting-note transcripts in the rendered Markdown, if authorized."),
 });
 
 /**
@@ -968,9 +972,13 @@ register({
   batchable: true,
   schema: GetPageMarkdownParams,
   example: { page_id: "<page-id>" },
-  handler: tryHandler(async ({ page_id }) => {
+  handler: tryHandler(async ({ page_id, markdown_version, include_transcript }) => {
     const notion = await getClient();
-    const response = await notion.pages.retrieveMarkdown({ page_id });
+    const response = await notion.pages.retrieveMarkdown({
+      page_id,
+      ...(markdown_version !== undefined ? { markdown_version } : {}),
+      ...(include_transcript !== undefined ? { include_transcript } : {}),
+    });
     const truncated = response.truncated ?? false;
     const unknownBlockIds = response.unknown_block_ids ?? [];
     const warning = incompleteMarkdownWarning(truncated, unknownBlockIds);
@@ -982,9 +990,12 @@ register({
           markdown: response.markdown ?? "",
           truncated,
           unknown_block_ids: unknownBlockIds,
+          ...(response.warnings?.length ? { content_warnings: response.warnings } : {}),
         },
       },
-      warning ? [warning] : []
+      [...(warning ? [warning] : []), ...(response.warnings ?? []).map(
+        (item) => `${item.code}: ${item.message}`
+      )]
     );
   }),
 });
@@ -995,17 +1006,39 @@ register({
 
 const UpdatePageMarkdownParams = z.object({
   page_id: notionId(),
-  markdown: z.string().describe("Markdown content. Replaces the existing body by default; with insert_content it is inserted instead."),
-  insert_content: z
-    .object({
-      position: z.enum(["start", "end"]).describe("Insert at start or end of the page."),
-      after: notionId("block").optional().describe("Block id to insert after (mutually exclusive with position in practice — Notion uses whichever is provided)."),
-    })
-    .optional(),
-  allow_deleting_content: z
-    .boolean()
-    .optional()
-    .describe("Required true when a replace would remove existing blocks; the API rejects destructive replaces without it."),
+  markdown: z.string().optional().describe(
+    "Body to replace or insert. Use content_updates for targeted changes instead."
+  ),
+  content_updates: z.array(z.object({
+    old_str: z.string().min(1).describe("Exact existing text; empty matches are rejected."),
+    new_str: z.string().describe("Replacement content; may be empty to delete selected text."),
+    replace_all_matches: z.boolean().optional(),
+  })).min(1).max(100).optional().describe(
+    "Targeted search-and-replace edits. Mutually exclusive with markdown and insert_content."
+  ),
+  insert_content: z.object({
+    position: z.enum(["start", "end"]).optional(),
+    after: z.string().min(1).optional().describe(
+      'Notion ellipsis-based content selection, e.g. "start text...end text", not a block UUID.'
+    ),
+  }).refine((v) => !(v.after && v.position), {
+    message: "Choose either insert_content.after or insert_content.position, never both.",
+  }).optional(),
+  allow_deleting_content: z.boolean().optional()
+    .describe("Required when an edit would remove child pages or databases."),
+  markdown_version: z.enum(["v1", "v2"]).optional()
+    .describe("Opt into Notion-flavored Markdown v2; omit to retain current v1 behavior."),
+  allow_async: z.boolean().optional()
+    .describe("Return an async task receipt when Notion accepts an asynchronous update."),
+}).superRefine((v, ctx) => {
+  if (v.content_updates && (v.markdown !== undefined || v.insert_content)) {
+    ctx.addIssue({ code: "custom",
+      message: "Pass content_updates or markdown/insert_content, not both." });
+  }
+  if (!v.content_updates && v.markdown === undefined) {
+    ctx.addIssue({ code: "custom",
+      message: "Either markdown or content_updates is required." });
+  }
 });
 
 register({
@@ -1013,7 +1046,7 @@ register({
   access: "write",
   domain: "pages",
   description:
-    "Replace (or insert into) a page's body using Notion's server-side markdown renderer. Skip the local remark pipeline. Replacing deletes every block the new markdown leaves out: if get_page_markdown returned `truncated: true` or any `unknown_block_ids`, do not replace the page — use insert_content or block operations.",
+    "Targeted update_content search-and-replace (preferred), or legacy Markdown replace/insert. Return parser warnings and async task receipts. Replacing whole pages risks deleting inaccessible or truncated blocks; prefer content_updates.",
   batchable: true,
   schema: UpdatePageMarkdownParams,
   example: {
@@ -1021,28 +1054,76 @@ register({
     markdown: "## Updated heading\n\nNew body.",
     allow_deleting_content: true,
   },
-  handler: tryHandler(async ({ page_id, markdown, insert_content, allow_deleting_content }) => {
+  handler: tryHandler(async ({
+    page_id, markdown, insert_content, content_updates,
+    allow_deleting_content, markdown_version, allow_async,
+  }): Promise<OperationResult<unknown>> => {
     const notion = await getClient();
-    const body = insert_content
+    const common = {
+      page_id,
+      ...(markdown_version !== undefined ? { markdown_version } : {}),
+      ...(allow_async !== undefined ? { allow_async } : {}),
+    };
+    const body = content_updates !== undefined
       ? {
-          page_id,
-          type: "insert_content" as const,
-          insert_content: {
-            content: markdown,
-            ...(insert_content.after ? { after: insert_content.after } : {}),
-            position: { type: insert_content.position },
-          },
-        }
-      : {
-          page_id,
-          type: "replace_content" as const,
-          replace_content: {
-            new_str: markdown,
+          ...common, type: "update_content" as const,
+          update_content: {
+            content_updates,
             ...(allow_deleting_content !== undefined ? { allow_deleting_content } : {}),
           },
-        };
+        }
+      : insert_content
+        ? {
+            ...common, type: "insert_content" as const,
+            insert_content: {
+              content: markdown!,
+              ...(insert_content.after !== undefined
+                ? { after: insert_content.after }
+                : insert_content.position !== undefined
+                  ? { position: { type: insert_content.position } }
+                  : {}),
+            },
+          }
+        : {
+            ...common, type: "replace_content" as const,
+            replace_content: {
+              new_str: markdown!,
+              ...(allow_deleting_content !== undefined ? { allow_deleting_content } : {}),
+            },
+          };
     const response = await notion.pages.updateMarkdown(asSdk<UpdatePageMarkdownBody>(body));
-    return { ok: true, data: { page_id: response.id ?? page_id } };
+    const result = response as unknown as {
+      object?: string; id?: string; status?: string; status_url?: string;
+      poll_after_seconds?: number; truncated?: boolean;
+      unknown_block_ids?: string[];
+      warnings?: Array<{ code: string; message: string }>;
+    };
+    if (result.object === "async_task") {
+      return { ok: true, data: {
+        page_id, queued: true, task: {
+          id: result.id, status: result.status,
+          ...(result.status_url ? { status_url: result.status_url } : {}),
+          ...(result.poll_after_seconds !== undefined
+            ? { poll_after_seconds: result.poll_after_seconds } : {}),
+        },
+      } };
+    }
+    const warnings = (result.warnings ?? []).map(
+      ({ code, message }) => `${code}: ${message}`
+    );
+    return {
+      ok: true,
+      data: {
+        page_id: result.id ?? page_id,
+        truncated: result.truncated ?? false,
+        unknown_block_ids: result.unknown_block_ids ?? [],
+        reconciliation_required: Boolean(
+          warnings.length || result.truncated || result.unknown_block_ids?.length
+        ),
+        ...(result.warnings?.length ? { content_warnings: result.warnings } : {}),
+      },
+      ...(warnings.length ? { warnings } : {}),
+    };
   }),
 });
 
