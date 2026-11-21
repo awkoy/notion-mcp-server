@@ -7,7 +7,7 @@ import {
   type McpServer,
   type ServerContext,
 } from "@modelcontextprotocol/server";
-import { isFullBlock, isFullDatabase, isFullDataSource, isFullPage } from "@notionhq/client";
+import { isFullBlock, isFullDatabase, isFullDataSource, isFullPage } from "../utils/notion-sdk-runtime.js";
 import { getOperation } from "../operations/registry.js";
 import {
   CONFIRM_DESTRUCTIVE_ENV_VAR,

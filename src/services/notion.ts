@@ -1,4 +1,4 @@
-import { Client } from "@notionhq/client";
+import { Client } from "../utils/notion-sdk-runtime.js";
 import nodeFetch from "node-fetch";
 import type { RequestInfo, RequestInit, Response } from "node-fetch";
 import { HttpsProxyAgent } from "https-proxy-agent";
