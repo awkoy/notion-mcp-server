@@ -497,6 +497,30 @@ describe("get_page_markdown", () => {
     });
   });
 
+  it("allows opt-in v2 markdown with transcript inclusion", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValue({ markdown: "# v2" });
+    const res = await dispatch("get_page_markdown", {
+      page_id: "p-1", markdown_version: "v2", include_transcript: true,
+    });
+    expect(res).toMatchObject({ ok: true, data: { markdown: "# v2" } });
+    expect(notionStub.pages.retrieveMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1", markdown_version: "v2", include_transcript: true,
+    });
+  });
+
+  it("preserves Notion parser warnings on markdown reads", async () => {
+    notionStub.pages.retrieveMarkdown.mockResolvedValue({
+      markdown: "Body", truncated: false, unknown_block_ids: [],
+      warnings: [{ code: "render_warning", message: "Unrendered content" }],
+    });
+    const res = await dispatch("get_page_markdown", { page_id: "p-1" });
+    expect(res).toMatchObject({
+      ok: true,
+      data: { content_warnings: [{ code: "render_warning" }] },
+      warnings: ["render_warning: Unrendered content"],
+    });
+  });
+
   it("falls back to empty string when SDK omits markdown", async () => {
     notionStub.pages.retrieveMarkdown.mockResolvedValue({});
     const res = await dispatch("get_page_markdown", { page_id: "p-1" });
@@ -581,23 +605,122 @@ describe("update_page_markdown", () => {
     });
   });
 
-  it("forwards insert_content.after when provided", async () => {
+  it("forwards insert_content.after as an ellipsis selector", async () => {
     notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
 
     await dispatch("update_page_markdown", {
       page_id: "p-1",
       markdown: "More",
-      insert_content: { position: "start", after: "block-9" },
+      insert_content: { after: "beginning text...ending text" },
     });
     expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
       page_id: "p-1",
       type: "insert_content",
       insert_content: {
         content: "More",
-        after: "block-9",
-        position: { type: "start" },
+        after: "beginning text...ending text",
       },
     });
+  });
+
+  it("uses v2 targeted updates without replacing the entire page", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({
+      object: "page_markdown", id: "p-1",
+      truncated: false, unknown_block_ids: [],
+    });
+    const res = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown_version: "v2",
+      content_updates: [{ old_str: "Old", new_str: "New" }],
+    });
+    expect(res).toMatchObject({ ok: true, data: { truncated: false } });
+    expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1", markdown_version: "v2", type: "update_content",
+      update_content: {
+        content_updates: [{ old_str: "Old", new_str: "New" }],
+      },
+    });
+  });
+
+  it("passes replace_all_matches and deletion control only inside the edit body", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
+    await dispatch("update_page_markdown", {
+      page_id: "p-1", allow_deleting_content: false,
+      content_updates: [{ old_str: "Old", new_str: "", replace_all_matches: true }],
+    });
+    expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1", type: "update_content",
+      update_content: {
+        content_updates: [{ old_str: "Old", new_str: "", replace_all_matches: true }],
+        allow_deleting_content: false,
+      },
+    });
+  });
+
+  it("does not conceal partial-match parser warnings", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({
+      object: "page_markdown", id: "p-1", truncated: true,
+      unknown_block_ids: ["hidden"],
+      warnings: [{ code: "update_content_no_match", message: "second edit did not match" }],
+    });
+    const res = await dispatch("update_page_markdown", {
+      page_id: "p-1",
+      content_updates: [
+        { old_str: "first", new_str: "one" },
+        { old_str: "second", new_str: "two" },
+      ],
+    });
+    expect(res).toMatchObject({
+      ok: true,
+      data: { truncated: true, unknown_block_ids: ["hidden"],
+        reconciliation_required: true,
+        content_warnings: [{ code: "update_content_no_match" }] },
+      warnings: ["update_content_no_match: second edit did not match"],
+    });
+  });
+
+  it("exposes async task receipt without claiming the content was updated", async () => {
+    notionStub.pages.updateMarkdown.mockResolvedValue({
+      object: "async_task", id: "task-1", status: "queued",
+      status_url: "/v1/async_tasks/task-1", poll_after_seconds: 2,
+    });
+    const res = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown: "Body", allow_async: true,
+    });
+    expect(res).toMatchObject({
+      ok: true, data: { queued: true, task: { id: "task-1", status: "queued" } },
+    });
+    expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+      page_id: "p-1", allow_async: true, type: "replace_content",
+      replace_content: { new_str: "Body" },
+    });
+  });
+
+  it("rejects mixed replacement and targeted edit payloads before the SDK call", async () => {
+    const res = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown: "Whole page",
+      content_updates: [{ old_str: "a", new_str: "b" }],
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing updates and empty old_str values", async () => {
+    const missing = await dispatch("update_page_markdown", { page_id: "p-1" });
+    const empty = await dispatch("update_page_markdown", {
+      page_id: "p-1", content_updates: [{ old_str: "", new_str: "b" }],
+    });
+    expect(missing).toMatchObject({ ok: false });
+    expect(empty).toMatchObject({ ok: false });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous insertion selectors before any SDK write", async () => {
+    const result = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown: "More",
+      insert_content: { after: "begin...end", position: "start" },
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
   });
 });
 
