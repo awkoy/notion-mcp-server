@@ -366,10 +366,60 @@ export function describePropertyDef(def: { type: string; [key: string]: unknown 
   return def.type;
 }
 
+/** Compact sync metadata. Missing health is unknown, not an unhealthy sync. */
+export function slimSyncMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const m = value as Record<string, unknown>;
+  const external = m.external_database_sync as Record<string, unknown> | undefined;
+  const rawHealth = m.health;
+  const h = rawHealth && typeof rawHealth === "object"
+    ? rawHealth as Record<string, unknown> : null;
+  const checks = h?.checks && typeof h.checks === "object"
+    ? h.checks as Record<string, unknown> : null;
+  const error = h?.error && typeof h.error === "object"
+    ? h.error as Record<string, unknown> : null;
+  const legacy = m.sync_state && typeof m.sync_state === "object"
+    ? m.sync_state as Record<string, unknown> : null;
+  const timestamps = ["sync_version_updated_at", "last_execution_succeeded_at",
+    "delta_synced_through_at"] as const;
+  return {
+    ...(external ? { external_database_sync: {
+      ...(typeof external.sync_id === "string" ? { sync_id: external.sync_id } : {}),
+      ...(typeof external.provider === "string" ? { provider: external.provider } : {}),
+    } } : {}),
+    ...(typeof m.sync_id === "string" ? { sync_id: m.sync_id } : {}),
+    ...(typeof m.synced_collection_key === "string" ? { synced_collection_key: m.synced_collection_key } : {}),
+    ...(typeof m.external_collection_type === "string" ? { external_collection_type: m.external_collection_type } : {}),
+    ...(typeof m.resource === "string" ? { resource: m.resource } : {}),
+    ...(Object.prototype.hasOwnProperty.call(m, "health") ? {
+      health: rawHealth === null ? null : h ? {
+        ...(typeof h.ok === "boolean" ? { ok: h.ok } : {}),
+        ...(typeof h.paused === "boolean" ? { paused: h.paused } : {}),
+        ...(typeof h.stage === "string" ? { stage: h.stage } : {}),
+        ...(checks ? { checks: Object.fromEntries(timestamps
+          .filter((k) => typeof checks[k] === "string")
+          .map((k) => [k, checks[k]])) } : {}),
+        ...(error ? { error: {
+          ...(typeof error.code === "string" ? { code: error.code } : {}),
+          ...(typeof error.severity === "string" ? { severity: error.severity } : {}),
+        } } : {}),
+      } : null,
+    } : {}),
+    ...(legacy ? { sync_state: {
+      ...(typeof legacy.syncing === "boolean" || typeof legacy.syncing === "string"
+        ? { syncing: legacy.syncing } : {}),
+      ...Object.fromEntries(["last_synced_at", "last_sync_checkpoint_at", "last_sync_heartbeat_at"]
+        .filter((k) => typeof legacy[k] === "string")
+        .map((k) => [k, legacy[k]])),
+    } } : {}),
+  };
+}
+
 export function slimDataSource(ds: DataSourceResponse, verbose = false) {
   if (verbose) return ds;
   if (!isFullDataSource(ds)) return { id: ds.id };
   const description = extractRichText(ds.description);
+  const syncMetadata = slimSyncMetadata((ds as { sync_metadata?: unknown }).sync_metadata);
   return {
     id: ds.id,
     url: ds.url,
@@ -377,6 +427,7 @@ export function slimDataSource(ds: DataSourceResponse, verbose = false) {
     ...(description ? { description } : {}),
     parent: ds.parent,
     ...(ds.database_type ? { database_type: ds.database_type } : {}),
+    ...(syncMetadata ? { sync_metadata: syncMetadata } : {}),
     // name → property-type map, with the option names for select-like
     // properties and the target of a relation: exactly what a caller needs to
     // write a row or a filter without a verbose:true round-trip.

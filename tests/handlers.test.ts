@@ -306,6 +306,25 @@ describe("list_data_sources", () => {
     });
   });
 
+  it("includes read-only sync metadata without treating null health as unhealthy", async () => {
+    notionStub.databases.retrieve.mockResolvedValue({
+      object: "database", id: "db-1", title: [],
+      data_sources: [{
+        id: "ds-1", name: "Issues",
+        sync_metadata: {
+          external_database_sync: { sync_id: "s-1", provider: "github" },
+          resource: "issues", health: null,
+        },
+      }],
+    });
+    const res = await dispatch("list_data_sources", { database_id: "db-1" });
+    expect(res).toMatchObject({ ok: true, data: { data_sources: [{
+      id: "ds-1", sync_metadata: {
+        external_database_sync: { provider: "github" }, health: null,
+      },
+    }] } });
+  });
+
   it("returns the raw data_sources field when verbose=true", async () => {
     notionStub.databases.retrieve.mockResolvedValue({
       object: "database", title: [],
