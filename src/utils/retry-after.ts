@@ -1,4 +1,4 @@
-import { APIResponseError, UnknownHTTPResponseError } from "@notionhq/client";
+import { APIResponseError, UnknownHTTPResponseError } from "./notion-sdk-runtime.js";
 
 // How long Notion asked us to wait before trying again. It says so in two
 // places: the Retry-After header, and (on 429 and 529 since 2026-09-24) the

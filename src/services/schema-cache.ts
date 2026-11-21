@@ -1,4 +1,4 @@
-import { isFullDatabase, isFullDataSource } from "@notionhq/client";
+import { isFullDatabase, isFullDataSource } from "../utils/notion-sdk-runtime.js";
 import type { DataSourceObjectResponse } from "@notionhq/client";
 import { getClient } from "./notion.js";
 

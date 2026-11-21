@@ -5,7 +5,7 @@ import {
   isFullDataSource,
   isFullPage,
   isFullUser,
-} from "@notionhq/client";
+} from "./notion-sdk-runtime.js";
 import type {
   BlockObjectResponse,
   CommentObjectResponse,

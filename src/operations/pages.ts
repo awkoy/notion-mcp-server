@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { isFullPage, type PageObjectResponse } from "@notionhq/client";
+import { isFullPage } from "../utils/notion-sdk-runtime.js";
+import type { PageObjectResponse } from "@notionhq/client";
 import { getClient } from "../services/notion.js";
 import { clearWrite } from "../services/call-context.js";
 import { register } from "./registry.js";
