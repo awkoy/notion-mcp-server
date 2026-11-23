@@ -414,6 +414,24 @@ register({
 // create_view
 // ──────────────────────────────────────────────────────────────────────────
 
+// Serialize check-then-create Dashboard mutations inside this server process.
+// No local mutex can coordinate separate MCP servers or external Notion writers.
+const dashboardWrites = new Map<string, Promise<void>>();
+// A completed create whose membership readback lagged must not be retried as
+// a fresh create in this process. Keep the ID until a later read confirms it.
+const pendingDashboardWidgetIds = new Map<string, string>();
+
+function serializeDashboardWrite<T>(viewId: string, run: () => Promise<T>): Promise<T> {
+  const previous = dashboardWrites.get(viewId) ?? Promise.resolve();
+  const current = previous.then(run, run);
+  const settled = current.then(() => {}, () => {});
+  dashboardWrites.set(viewId, settled);
+  void settled.then(() => {
+    if (dashboardWrites.get(viewId) === settled) dashboardWrites.delete(viewId);
+  });
+  return current;
+}
+
 // Notion exposes dashboard rows as read-only layout metadata. Never guess
 // row placement or create a duplicate after layout cannot be inspected.
 function checkDashboardCapacity(
@@ -511,6 +529,7 @@ register({
     data_source_id, database_id, view_id, placement,
     name, type, where, filter, sorts, configuration, verbose,
   }) => {
+    const run = async (): Promise<OperationResult<unknown>> => {
     if (REQUIRES_CONFIG[type] && configuration === undefined) {
       return { ok: false, error: {
         code: "missing_view_config",
@@ -554,6 +573,8 @@ register({
     };
     const view = await notion.views.create(asSdk<CreateViewBody>(body));
     return { ok: true, data: slimView(view, verbose ?? false) };
+    };
+    return view_id ? serializeDashboardWrite(view_id, run) : run();
   }),
 });
 
@@ -591,6 +612,7 @@ register({
     view_id, data_source_id, placement, name, type, where, filter,
     sorts, configuration, verbose, dry_run,
   }): Promise<OperationResult<unknown>> => {
+    const run = async (): Promise<OperationResult<unknown>> => {
     if (type === "dashboard") return { ok: false, error: {
       code: "nested_dashboard_not_supported",
       message: "A Dashboard widget cannot itself be another Dashboard.",
@@ -644,9 +666,19 @@ register({
         message: `Widget "${name}" exists with different source, type or filter (or is duplicated).`,
         fix: "Inspect the existing widget and reconcile the intended source/filter before creating.",
       } };
-    if (matches.length === 1) return {
-      ok: true, data: { action: "existing", widget: slimView(matches[0], verbose ?? false), verified: true },
-    };
+    const pendingKey = JSON.stringify([view_id, name]);
+    if (matches.length === 1) {
+      pendingDashboardWidgetIds.delete(pendingKey);
+      return {
+        ok: true, data: { action: "existing", widget: slimView(matches[0], verbose ?? false), verified: true },
+      };
+    }
+    const pendingId = pendingDashboardWidgetIds.get(pendingKey);
+    if (pendingId) return { ok: false, error: {
+      code: "dashboard_widget_verification_pending",
+      message: `Widget "${name}" was created as ${pendingId}, but membership is not yet verifiable.`,
+      fix: "Inspect the Dashboard and created widget before attempting another creation.",
+    } };
     const capacityError = checkDashboardCapacity(dashboard, placement);
     if (capacityError) return { ok: false, error: capacityError };
     if (dry_run) return { ok: true, data: {
@@ -670,10 +702,14 @@ register({
       verified = (child as {dashboard_view_id?: string}).dashboard_view_id === view_id &&
         Boolean(p.configuration?.rows?.some((r) => r.widgets?.some((w) => w.view_id === created.id)));
     } catch { /* The created id remains authoritative; do not retry blindly. */ }
+    if (verified) pendingDashboardWidgetIds.delete(pendingKey);
+    else pendingDashboardWidgetIds.set(pendingKey, created.id);
     return { ok: true, data: {
       action: "created", widget: slimView(created, verbose ?? false), verified,
       ...(verified ? {} : { verification_required: true }),
     } };
+    };
+    return serializeDashboardWrite(view_id, run);
   }),
 });
 

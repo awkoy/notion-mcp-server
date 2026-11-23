@@ -122,6 +122,32 @@ describe("create_view Dashboard widgets", () => {
     expect(stub.views.create).not.toHaveBeenCalled();
   });
 
+  it("serializes Dashboard capacity checks across concurrent creations", async () => {
+    let signalEntered!: () => void;
+    let releaseCreate!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+    let filled = false;
+    stub.views.retrieve.mockImplementation(async () => dashboard([4, 4, filled ? 4 : 3]));
+    stub.views.create.mockImplementation(async () => {
+      signalEntered();
+      await gate;
+      filled = true;
+      return { id: "last-slot", type: "table", name: "Open Items" };
+    });
+
+    const first = dispatch("create_view", widget);
+    await entered;
+    const second = dispatch("create_view", { ...widget, name: "Another Item" });
+    await Promise.resolve();
+    expect(stub.views.create).toHaveBeenCalledTimes(1);
+    releaseCreate();
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.ok).toBe(true);
+    expect(two).toMatchObject({ ok: false, error: { code: "dashboard_full" } });
+    expect(stub.views.create).toHaveBeenCalledTimes(1);
+  });
+
   it("allows a new row when the Dashboard has capacity", async () => {
     stub.views.retrieve.mockResolvedValue(dashboard([4]));
     stub.views.create.mockResolvedValue({
@@ -275,6 +301,70 @@ describe("ensure_dashboard_widget", () => {
     expect(result).toMatchObject({
       ok: true, data: { action: "created", verified: true },
     });
+    expect(stub.views.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes simultaneous ensures without creating duplicate widgets", async () => {
+    let releaseCreate!: () => void;
+    let signalEntered!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    let visible = false;
+    const created = {
+      id: "serial-widget", name: "Open Items", type: "table",
+      data_source_id: "source-1", dashboard_view_id: "dash-1", filter: null,
+    };
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-1"
+        ? visible
+          ? { ...dashboard(), configuration: { rows: [{ widgets: [{ view_id: created.id }] }] } }
+          : dashboard([])
+        : created
+    );
+    stub.views.create.mockImplementation(async () => {
+      signalEntered();
+      await gate;
+      visible = true;
+      return created;
+    });
+
+    const first = dispatch("ensure_dashboard_widget", request);
+    await entered;
+    const second = dispatch("ensure_dashboard_widget", request);
+    await Promise.resolve();
+    expect(stub.views.create).toHaveBeenCalledTimes(1);
+    releaseCreate();
+    const results = await Promise.all([first, second]);
+    expect(results.map((result) => result.ok)).toEqual([true, true]);
+    expect(results[0]).toMatchObject({ data: { action: "created" } });
+    expect(results[1]).toMatchObject({ data: { action: "existing" } });
+    expect(stub.views.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds an unverified creation rather than blindly creating again", async () => {
+    const pendingRequest = { ...request, view_id: "dash-pending" };
+    stub.views.retrieve.mockResolvedValue({ ...dashboard([]), id: "dash-pending" });
+    stub.views.create.mockResolvedValue({
+      id: "pending-widget", name: "Open Items",
+      type: "table", dashboard_view_id: "dash-pending",
+    });
+    const first = await dispatch("ensure_dashboard_widget", pendingRequest);
+    expect(first).toMatchObject({
+      ok: true, data: { action: "created", verified: false, verification_required: true },
+    });
+    const second = await dispatch("ensure_dashboard_widget", pendingRequest);
+    expect(second).toMatchObject({
+      ok: false, error: { code: "dashboard_widget_verification_pending" },
+    });
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-pending"
+        ? { ...dashboard(), id: "dash-pending",
+            configuration: { rows: [{ widgets: [{ view_id: "pending-widget" }] }] } }
+        : { id: "pending-widget", name: "Open Items", type: "table",
+            data_source_id: "source-1", filter: null, dashboard_view_id: "dash-pending" }
+    );
+    const third = await dispatch("ensure_dashboard_widget", pendingRequest);
+    expect(third).toMatchObject({ ok: true, data: { action: "existing" } });
     expect(stub.views.create).toHaveBeenCalledTimes(1);
   });
 

@@ -35,8 +35,14 @@ It never assumes a name match proves the filter or source is correct.
 A newly created widget returns an ID even when immediate Notion readback
 has not yet reflected the change. `verified:false` means reconcile the
 returned ID and dashboard membership before any retry; it does not mean
-creation failed. Do not concurrently ensure the same widget. Keep a stable
-idempotency_key where supported, and do not run cross-case filter migrations.
+creation failed. This server serializes Dashboard create and ensure requests by
+Dashboard ID, preventing same-process check-then-create races. A later ensure
+for the same name is held with `dashboard_widget_verification_pending` until
+the created widget becomes visible in a subsequent membership read. The
+pending-ID guard lives in memory, not in a distributed transaction: another
+server process, a restart, or an external Notion writer can still race.
+Keep a stable idempotency_key where supported; reconcile uncertain outcomes
+before retrying and do not run cross-case filter migrations.
 
 The Dashboard layout's `configuration.rows[].widgets` is read-only:
 the API accepts placement at widget creation, not arbitrary updates to row
