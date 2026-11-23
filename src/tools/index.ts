@@ -20,7 +20,7 @@ import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
 import { confirmDestructiveCall } from "./confirm.js";
 import { log } from "../utils/log.js";
-import { TOOL_PAYLOAD_SCHEMA, normalizeToolPayload } from "./arguments.js";
+import { TOOL_PAYLOAD_SCHEMA } from "./arguments.js";
 
 /**
  * SEP-2549 cache hints for a 2026-07-28 client. What the server lists (tools,
@@ -209,7 +209,7 @@ function registerOperationTool(server: McpServer, access: OperationAccess): void
           },
     },
     ({ operation, payload }, ctx) =>
-      runOperation(server, ctx, tool, operation, normalizeToolPayload(payload))
+      runOperation(server, ctx, tool, operation, payload)
   );
 }
 

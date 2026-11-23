@@ -25,10 +25,19 @@ function parseEncodedPayload(value: string): ToolPayload | null {
 
 export const TOOL_PAYLOAD_SCHEMA = z.union([
   z.record(z.string(), z.unknown()),
-  z.string().refine(
-    (value) => parseEncodedPayload(value) !== null,
-    "Payload string must encode a JSON object (at most three layers)."
-  ),
+  // The input is a string; the handler receives a validated object after one
+  // bounded decode. Avoid parsing the same payload again after Zod validation.
+  z.string().transform((value, ctx) => {
+    const decoded = parseEncodedPayload(value);
+    if (decoded === null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Payload string must encode a JSON object (at most three layers).",
+      });
+      return z.NEVER;
+    }
+    return decoded;
+  }),
 ]);
 
 export function normalizeToolPayload(value: ToolPayload | string): ToolPayload {

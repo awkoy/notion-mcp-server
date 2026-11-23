@@ -71,6 +71,39 @@ describe("Streamable HTTP transport (no auth)", () => {
     await client.close();
   });
 
+  it("advertises object/string payloads and decodes encoded operations over MCP", async () => {
+    const client = new Client({ name: "encoded-payload-it", version: "0.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${noAuth.port}/mcp`))
+    );
+    try {
+      const { tools } = await client.listTools();
+      for (const name of ["notion_read", "notion_write"]) {
+        const tool = tools.find((item) => item.name === name);
+        const schema = tool?.inputSchema as {
+          properties?: { payload?: { anyOf?: Array<{ type?: string }> } };
+        } | undefined;
+        const types = schema?.properties?.payload?.anyOf?.map((part) => part.type);
+        expect(types).toEqual(["object", "string"]);
+      }
+
+      let payload: string = JSON.stringify({});
+      for (let depth = 1; depth <= 3; depth += 1) {
+        const result = await client.callTool({
+          name: "notion_read", arguments: { operation: "get_self", payload },
+        });
+        expect(result.isError).not.toBe(true);
+        payload = JSON.stringify(payload);
+      }
+      const rejected = await client.callTool({
+        name: "notion_read", arguments: { operation: "get_self", payload: "[]" },
+      });
+      expect(rejected.isError).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("serves /health without a session or auth", async () => {
     const res = await fetch(`http://127.0.0.1:${noAuth.port}/health`);
     expect(res.status).toBe(200);
