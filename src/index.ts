@@ -29,6 +29,10 @@ async function main() {
 
 const cli = parseCliArgs(process.argv.slice(2));
 if (cli.kind === "run") {
+  if (cli.requireToken && !process.env.NOTION_TOKEN?.trim()) {
+    process.stderr.write("NOTION_TOKEN is missing or blank; refusing to start.\n");
+    process.exit(1);
+  }
   main().catch((error: unknown) => {
     log.error(
       `Unhandled server error: ${error instanceof Error ? error.message : String(error)}`

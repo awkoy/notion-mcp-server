@@ -61,6 +61,26 @@ describe("command-line flags (spawned build/index.js)", () => {
     expect(stderr).toBe("");
   });
 
+  it.each([undefined, "", "   "])(
+    "--require-token rejects missing or blank injected tokens before starting",
+    async (token) => {
+      // Model an isolated secret-manager child environment, not a real vault.
+      const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot };
+      try {
+        await run(process.execPath, [BIN, "--require-token"], {
+          env: { ...env, NOTION_TOKEN: token },
+          timeout: 10_000,
+        });
+        throw new Error("strict startup unexpectedly succeeded");
+      } catch (err) {
+        const e = err as { code?: unknown; stdout?: string; stderr?: string };
+        expect(e.code).toBe(1);
+        expect(e.stdout).toBe("");
+        expect(e.stderr).toBe("NOTION_TOKEN is missing or blank; refusing to start.\n");
+      }
+    }
+  );
+
   it("rejects an unknown option on stderr with exit code 2", async () => {
     const { code, stdout, stderr } = await spawn("--verison");
 
@@ -74,6 +94,10 @@ describe("command-line flags (spawned build/index.js)", () => {
 describe("parseCliArgs", () => {
   it("runs the server when there are no arguments", () => {
     expect(parseCliArgs([])).toEqual({ kind: "run" });
+  });
+
+  it("opts in to strict token presence without changing default startup", () => {
+    expect(parseCliArgs(["--require-token"])).toEqual({ kind: "run", requireToken: true });
   });
 
   it.each(["--version", "-v"])("%s asks for the version", (flag) => {

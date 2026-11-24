@@ -2,6 +2,67 @@
 
 The [README](../README.md#configuration) covers the token and the environment variables. This page has the details behind the access controls, file handling and logs.
 
+## Bitwarden Secrets Manager (optional)
+
+The server accepts a Notion PAT or integration secret through `NOTION_TOKEN`.
+An external secret manager can inject it at process startup without putting the
+credential in the MCP client configuration. No Bitwarden SDK or vault access is
+needed by the server itself.
+
+With the [Bitwarden Secrets Manager CLI](https://bitwarden.com/help/secrets-manager-cli/)
+(`bws`), create a dedicated project with exactly one secret named `NOTION_TOKEN`
+and grant a machine account read access to that project only. Provision the
+machine account access token through your host's secure mechanism as
+`BWS_ACCESS_TOKEN` for the launcher; do not put either credential in command
+arguments, source files, client JSON, or logs.
+
+Install and verify the server and CLI in advance. With a trusted executable on
+PATH, start the server using the fixed command below (replace the placeholder
+with the project UUID, not a credential):
+
+```sh
+bws run --project-id YOUR_PROJECT_UUID --no-inherit-env -- 'notion-mcp-server --require-token'
+```
+
+The quoted command is also suitable for PowerShell 7. For an MCP client that
+launches a process directly, use the following command/argument structure:
+
+```json
+{
+  "command": "bws",
+  "args": [
+    "run", "--project-id", "YOUR_PROJECT_UUID", "--no-inherit-env",
+    "--", "notion-mcp-server --require-token"
+  ]
+}
+```
+
+The client launcher must securely supply `BWS_ACCESS_TOKEN` to the BWS process,
+not to the MCP server. The project must not contain duplicate secret names,
+shell-control variables (for example PATH or NODE_OPTIONS), or unrelated
+secrets: BWS injects all secrets in the selected project. The fixed command
+never interpolates a credential. Do not enable verbose secret dumping.
+`--no-inherit-env` avoids fallback to a stale inherited `NOTION_TOKEN` and
+normally keeps the BWS access token out of the child environment. BWS still
+inherits PATH and platform-required variables; trust the launcher, executable
+and project configuration. This example starts the default stdio transport.
+Other settings from the parent environment are not automatically passed through,
+including access controls such as `NOTION_READ_ONLY`, operation allow/block lists,
+and upload-root restrictions. Do not replace an existing restricted launcher with
+this example unless those controls are explicitly preserved in a trusted launcher
+or dedicated project. Do not use the example to expose an HTTP endpoint.
+
+A failed BWS retrieval must stop startup; never retry by launching the server
+outside BWS. If the retrieved environment lacks a nonblank `NOTION_TOKEN`,
+`--require-token` exits nonzero before opening a transport, with a fixed
+diagnostic and no credential contents. This checks presence, not validity:
+a revoked or invalid Notion token cannot authorize requests. Rotate the
+secret in Bitwarden and restart the process to pick up the new value.
+
+This is a startup injection pattern, not an MCP operation, account selector,
+runtime vault lookup, or migration tool. Existing `NOTION_TOKEN` launches
+without `--require-token` retain their prior behavior.
+
 ## Restricting operations
 
 `NOTION_ALLOWED_OPERATIONS` (allowlist) and `NOTION_BLOCKED_OPERATIONS` (blocklist) each take a comma-separated list of group presets or exact operation names. `NOTION_READ_ONLY=true` is the same as `NOTION_BLOCKED_OPERATIONS=write` and composes with both lists.
