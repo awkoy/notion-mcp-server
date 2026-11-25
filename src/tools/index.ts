@@ -20,6 +20,7 @@ import { emitJsonSchema } from "../schema/emit.js";
 import { registerAllPrompts } from "../prompts/index.js";
 import { confirmDestructiveCall } from "./confirm.js";
 import { log } from "../utils/log.js";
+import { TOOL_PAYLOAD_SCHEMA } from "./arguments.js";
 
 /**
  * SEP-2549 cache hints for a 2026-07-28 client. What the server lists (tools,
@@ -63,11 +64,9 @@ export const TOOL_BY_ACCESS: Record<OperationAccess, string> = {
   write: "notion_write",
 };
 
-const PAYLOAD_FIELD = z
-  .record(z.string(), z.unknown())
-  .describe(
-    "Operation parameters. Pass either single-op fields directly, or { items: [...], atomic?, idempotency_key?, concurrency? } for batch."
-  );
+const PAYLOAD_FIELD = TOOL_PAYLOAD_SCHEMA.describe(
+  "Operation parameters. Pass an object for a single operation or batch. JSON-encoded object strings are also accepted for client compatibility."
+);
 
 // The error a client sees when it names an operation the enum does not carry.
 // The SDK reports a schema mismatch as an InvalidParams JSON-RPC error whose
@@ -209,7 +208,8 @@ function registerOperationTool(server: McpServer, access: OperationAccess): void
             openWorldHint: true,
           },
     },
-    ({ operation, payload }, ctx) => runOperation(server, ctx, tool, operation, payload)
+    ({ operation, payload }, ctx) =>
+      runOperation(server, ctx, tool, operation, payload)
   );
 }
 
