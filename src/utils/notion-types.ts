@@ -8,7 +8,7 @@
 // the SDK expects on the wire. Prefer these over `as never` so the cast
 // target stays visible and grep-able.
 
-import { Client } from "@notionhq/client";
+import { Client } from "./notion-sdk-runtime.js";
 import type {
   AppendBlockChildrenParameters,
   CreateCommentParameters,

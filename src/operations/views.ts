@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isFullDatabase } from "@notionhq/client";
+import { isFullDatabase } from "../utils/notion-sdk-runtime.js";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import type { OperationResult } from "./types.js";
