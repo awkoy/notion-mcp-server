@@ -22,7 +22,7 @@ Rules:
 - One line on stderr at startup says what resolved. Check it first when the config doesn't behave:
 
 ```text
-Operation access: 23/50 enabled (allow=read; block=(none))
+Operation access: 23/51 enabled (allow=read; block=(none))
 ```
 
 ### Per-operation reference
@@ -33,7 +33,7 @@ Operation access: 23/50 enabled (allow=read; block=(none))
 | `blocks` | `get_block` `get_block_children` `query_meeting_notes` | `append_blocks` `update_block` `delete_block`† `batch_mixed_blocks`† |
 | `databases` | `query_database` | `create_database` `update_database` `delete_database`† |
 | `data_sources` | `list_data_sources` `get_data_source` `list_data_source_templates` | `update_data_source` `delete_data_source`† |
-| `views` | `list_views` `get_view` `query_view` | `create_view` `update_view` `delete_view`† |
+| `views` | `list_views` `get_view` `query_view` | `create_view` `ensure_dashboard_widget` `update_view` `delete_view`† |
 | `comments` | `list_comments` `get_comment` | `add_page_comment` `add_discussion_comment` `update_comment` `delete_comment`† |
 | `users` | `list_users` `get_user` `get_bot_user` `get_self` | — |
 | `files` | `list_file_uploads` `get_file_upload` `get_file_url` `get_image` | `upload_file` `upload_to_property` |

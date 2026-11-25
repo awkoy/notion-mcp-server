@@ -1,9 +1,9 @@
 # Markdown v2 and safe targeted page edits (2026-03-11 API)
 
-The existing `get_page_markdown` and `update_page_markdown` operations now accept
-`markdown_version: "v2"`. This is opt-in: the pinned Notion API version
-still defaults to enhanced Markdown v1. The next API version will default
-to v2 and reject explicit v1. Use matched read/write versions during tests.
+The existing `get_page_markdown` and `update_page_markdown` operations accept
+`markdown_version: "v2"`. It is opt-in: without it, both use Notion's
+enhanced Markdown v1, the default at the pinned API version. Read and
+write a page with the same version.
 
 Read without writing:
 ```json
@@ -38,17 +38,6 @@ ellipsis text selector, not a block ID. Choose exactly one of `after`
 or `position`. Do not combine `content_updates` with `markdown`
 or `insert_content`. Replacing the whole page remains backwards
 compatible but can lose content behind inaccessible or truncated blocks.
-
-## Release gates
-
-- Confirm source builds with `@notionhq/client 5.29.0`.
-- Run handler and operation-registry unit tests.
-- Run full Node 22/24/Docker CI (Windows file path-policy tests are
-  separately tracked as host-specific known failures).
-- On an isolated disposable Notion page, verify read v2, exact-match
-  update, unmatched edit warnings, and `unknown_block_ids` behavior.
-- Do not replace production pages, switch global API versions, or
-  alter the multi-account wrapper in this source-only release.
 
 Primary docs:
 - https://developers.notion.com/reference/retrieve-page-markdown

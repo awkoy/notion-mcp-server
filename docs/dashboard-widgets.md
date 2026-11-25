@@ -50,12 +50,3 @@ geometry. Retrieve views with `verbose:true` to inspect full rows.
 Ordinary `get_view` exposes a small `layout` summary for Dashboard
 views and `dashboard_view_id` on widget views. Live Notion subscription
 and connection permissions may still reject Dashboard API writes.
-
-## Acceptance
-- Build + focused unit tests and full CI
-- Server version and tools schema: `notion_describe(ensure_dashboard_widget)`
-- Create an isolated Dashboard widget with explicit source and filter
-- Read back widget `dashboard_view_id` and Dashboard membership row
-- Re-run ensure, confirm `action:existing` and no second widget
-- Preserve the caller's authorization boundaries and write controls
-- Review the returned ID before retrying an indeterminate network outcome
