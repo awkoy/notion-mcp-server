@@ -450,11 +450,22 @@ export function slimView(view: unknown, verbose = false) {
     type?: string;
     filter?: unknown;
     sorts?: unknown;
+    dashboard_view_id?: string;
+    configuration?: { type?: string; rows?: Array<{ widgets?: unknown[] }> };
   };
   return {
     id: v.id,
     ...(v.name !== undefined ? { name: v.name } : {}),
     ...(v.type !== undefined ? { type: v.type } : {}),
+    ...(v.dashboard_view_id ? { dashboard_view_id: v.dashboard_view_id } : {}),
+    ...(v.type === "dashboard" && Array.isArray(v.configuration?.rows)
+      ? {
+          layout: {
+            rows: v.configuration.rows.length,
+            widgets: v.configuration.rows.reduce((sum, row) => sum + (row.widgets?.length ?? 0), 0),
+          },
+        }
+      : {}),
     ...(v.filter ? { filter: v.filter } : {}),
     ...(Array.isArray(v.sorts) && v.sorts.length ? { sorts: v.sorts } : {}),
   };
