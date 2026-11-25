@@ -60,6 +60,14 @@ describe("MCP serialized operation payload compatibility", () => {
     }
   });
 
+  it("says what a payload must be instead of a bare Invalid input", () => {
+    for (const input of ["plain", "[]", 42, ["a"]]) {
+      const result = TOOL_PAYLOAD_SCHEMA.safeParse(input);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toMatch(/^Payload must be a JSON object/);
+    }
+  });
+
   it("rejects malformed JSON without guessing at corrections", () => {
     const input = '{"page_id":';
     expect(TOOL_PAYLOAD_SCHEMA.safeParse(input).success).toBe(false);

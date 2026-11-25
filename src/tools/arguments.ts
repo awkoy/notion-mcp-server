@@ -38,7 +38,10 @@ export const TOOL_PAYLOAD_SCHEMA = z.union([
     }
     return decoded;
   }),
-]);
+], {
+  // Without this the union reports only "Invalid input".
+  error: () => "Payload must be a JSON object, or a string encoding one (at most three layers of JSON.stringify).",
+});
 
 export function normalizeToolPayload(value: ToolPayload | string): ToolPayload {
   if (typeof value !== "string") return value;
