@@ -33,11 +33,36 @@ Notion responds with an async task. Poll the returned task ID using
 `get_async_task` before claiming that the page was updated.
 Synchronous responses include `truncated` and `unknown_block_ids`.
 
-Legacy `insert_content` is supported, but its `after` value is an
-ellipsis text selector, not a block ID. Choose exactly one of `after`
-or `position`. Do not combine `content_updates` with `markdown`
-or `insert_content`. Replacing the whole page remains backwards
-compatible but can lose content behind inaccessible or truncated blocks.
+Use anchored insertions for surgical placement next to an existing block:
+```json
+{"page_id":"<id>","markdown":"New content","markdown_version":"v2",
+ "insert_content":{"position":{"type":"after_content","anchor":"## Action items"}}}
+```
+`before_content` inserts before the uniquely matched block; both positions
+require `markdown_version:"v2"`. The exact `anchor` must start where a
+block begins and match **one** location, including leading Markdown syntax.
+Read the page with `get_page_markdown` using v2 first. A nonexistent,
+ambiguous, or partial-block anchor is rejected by Notion; never blindly retry
+a potentially applied write.
+
+`insert_content.after` remains available for existing callers, but it is
+a **deprecated ellipsis text selector**, not a block ID. Choose exactly
+one of `after` or `position`. Legacy `position:"start"|"end"` is also
+supported. Do not combine `content_updates` with `markdown` or
+`insert_content`. Replacing the whole page remains backwards compatible
+but can lose content behind inaccessible or truncated blocks.
+
+**Other v2 coverage:** When `create_page` receives `markdown_version:"v2"`
+with a `markdown` body, the original markdown is sent natively to Notion.
+With the version omitted, legacy local GFM-to-block conversion remains
+unchanged. `add_page_comment`, `add_discussion_comment` and `update_comment`
+also accept `markdown_version:"v2"` with a Markdown body. All version
+selectors are rejected if no markdown body is supplied. This is API
+compatibility, not Custom Agent or meeting-note integration.
+
+**SDK compatibility:** `@notionhq/client` 5.32.0 adds typed anchored positions
+and fixes native Node 22 ESM imports. Keep the existing Node 22 interop bridge
+until an independently tested release gate confirms removing it is safe.
 
 Primary docs:
 - https://developers.notion.com/reference/retrieve-page-markdown

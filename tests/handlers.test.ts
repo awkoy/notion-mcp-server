@@ -16,6 +16,7 @@ const notionStub = {
     update: vi.fn(),
   },
   pages: {
+    create: vi.fn(),
     move: vi.fn(),
     retrieve: vi.fn(),
     properties: { retrieve: vi.fn() },
@@ -24,6 +25,7 @@ const notionStub = {
     update: vi.fn(),
   },
   comments: {
+    create: vi.fn(),
     retrieve: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
@@ -575,6 +577,35 @@ describe("get_page_markdown", () => {
   });
 });
 
+describe("create_page Markdown versioning", () => {
+  it("sends explicit v2 markdown natively rather than converting it to GFM blocks", async () => {
+    notionStub.pages.create.mockResolvedValue({
+      id: "new-1", object: "page", properties: {}, parent: { type: "page_id", page_id: "p-root" },
+    });
+    const result = await dispatch("create_page", {
+      parent: { type: "page_id", page_id: "p-root" },
+      title: "V2 document",
+      markdown: "## Heading\n\n<mention-date start=\"2026-11-26\"/>",
+      markdown_version: "v2",
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(notionStub.pages.create).toHaveBeenCalledWith(expect.objectContaining({
+      markdown_version: "v2",
+      markdown: "## Heading\n\n<mention-date start=\"2026-11-26\"/>",
+    }));
+    expect(notionStub.pages.create.mock.calls[0][0]).not.toHaveProperty("children");
+  });
+
+  it("rejects markdown_version without markdown before creating anything", async () => {
+    const result = await dispatch("create_page", {
+      parent: { type: "page_id", page_id: "p-root" }, title: "No body",
+      markdown_version: "v2",
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(notionStub.pages.create).not.toHaveBeenCalled();
+  });
+});
+
 describe("update_page_markdown", () => {
   it("sends replace_content discriminator on default replace", async () => {
     notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
@@ -622,6 +653,49 @@ describe("update_page_markdown", () => {
         position: { type: "end" },
       },
     });
+  });
+
+  it.each(["after_content", "before_content"] as const)(
+    "sends exact v2 %s anchor to SDK", async (type) => {
+      notionStub.pages.updateMarkdown.mockResolvedValue({ id: "p-1" });
+      const result = await dispatch("update_page_markdown", {
+        page_id: "p-1", markdown: "New entry", markdown_version: "v2",
+        insert_content: { position: { type, anchor: "## Action items" } },
+      });
+      expect(result).toMatchObject({ ok: true });
+      expect(notionStub.pages.updateMarkdown).toHaveBeenCalledWith({
+        page_id: "p-1", markdown_version: "v2", type: "insert_content",
+        insert_content: {
+          content: "New entry",
+          position: { type, anchor: "## Action items" },
+        },
+      });
+    }
+  );
+
+  it("rejects anchored insertion with v1 or omitted Markdown version", async () => {
+    for (const markdown_version of [undefined, "v1"]) {
+      const result = await dispatch("update_page_markdown", {
+        page_id: "p-1", markdown: "New entry", ...(markdown_version ? { markdown_version } : {}),
+        insert_content: { position: { type: "after_content", anchor: "## Action items" } },
+      });
+      expect(result).toMatchObject({ ok: false });
+    }
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty anchor and ambiguous anchor/after selectors", async () => {
+    const empty = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown: "New entry", markdown_version: "v2",
+      insert_content: { position: { type: "before_content", anchor: "" } },
+    });
+    const mixed = await dispatch("update_page_markdown", {
+      page_id: "p-1", markdown: "New entry", markdown_version: "v2",
+      insert_content: { position: { type: "before_content", anchor: "## Heading" }, after: "old...text" },
+    });
+    expect(empty).toMatchObject({ ok: false });
+    expect(mixed).toMatchObject({ ok: false });
+    expect(notionStub.pages.updateMarkdown).not.toHaveBeenCalled();
   });
 
   it("forwards insert_content.after as an ellipsis selector", async () => {
@@ -766,7 +840,49 @@ describe("get_comment", () => {
   });
 });
 
+describe("Markdown v2 comment integration", () => {
+  it.each([
+    ["add_page_comment", { page_id: "p-1" }, { parent: { page_id: "p-1" } }],
+    ["add_discussion_comment", { discussion_id: "d-1" }, { discussion_id: "d-1" }],
+  ] as const)("forwards v2 on %s only with markdown", async (operation, ids, expected) => {
+    notionStub.comments.create.mockResolvedValue({ id: "c-v2", rich_text: [] });
+    const result = await dispatch(operation, { ...ids, markdown: "**Comment**", markdown_version: "v2" });
+    expect(result).toMatchObject({ ok: true });
+    expect(notionStub.comments.create).toHaveBeenCalledWith({
+      ...expected, markdown: "**Comment**", markdown_version: "v2",
+    });
+  });
+
+  it("rejects version flags with plain text or rich text before calling Notion", async () => {
+    const page = await dispatch("add_page_comment", {
+      page_id: "p-1", text: "plain", markdown_version: "v2",
+    });
+    const discussion = await dispatch("add_discussion_comment", {
+      discussion_id: "d-1", text: "plain", markdown_version: "v2",
+    });
+    const update = await dispatch("update_comment", {
+      comment_id: "c-1", rich_text: [], markdown_version: "v2",
+    });
+    expect(page).toMatchObject({ ok: false });
+    expect(discussion).toMatchObject({ ok: false });
+    expect(update).toMatchObject({ ok: false });
+    expect(notionStub.comments.create).not.toHaveBeenCalled();
+    expect(notionStub.comments.update).not.toHaveBeenCalled();
+  });
+});
+
 describe("update_comment", () => {
+  it("forwards markdown_version on native v2 comment edit", async () => {
+    notionStub.comments.update.mockResolvedValue({ id: "c-1", rich_text: [] });
+    const res = await dispatch("update_comment", {
+      comment_id: "c-1", markdown: "Updated **body**", markdown_version: "v2",
+    });
+    expect(res).toMatchObject({ ok: true });
+    expect(notionStub.comments.update).toHaveBeenCalledWith({
+      comment_id: "c-1", markdown: "Updated **body**", markdown_version: "v2",
+    });
+  });
+
   it("sends markdown body when markdown is provided", async () => {
     notionStub.comments.update.mockResolvedValue({ id: "c-1" });
 

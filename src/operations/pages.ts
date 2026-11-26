@@ -136,7 +136,8 @@ const CreatePageParams = z
       .describe(
         "Row properties by name. Under a data_source_id parent plain values are enough: { Status: 'Done', Due: '2026-01-01', Tags: ['a', 'b'], Done: true }."
       ),
-    markdown: z.string().optional().describe("Page body as markdown (GFM: headings, lists, - [ ] checkboxes, tables, code). Parsed server-side."),
+    markdown: z.string().optional().describe("Page body as markdown. When markdown_version is omitted, converted locally to blocks (legacy behavior); when specified, sent to Notion for native Markdown parsing."),
+    markdown_version: z.enum(["v1", "v2"]).optional().describe("With markdown only: opt into native Notion Markdown v2 or explicitly use v1 without local GFM conversion."),
     children: z.array(BLOCK_INPUT_SCHEMA).optional().describe("Structured Notion blocks. Mutually exclusive with markdown."),
     template: z
       .object({
@@ -154,6 +155,9 @@ const CreatePageParams = z
   })
   .refine((v) => !(v.markdown && v.children), {
     message: "Pass either `markdown` or `children`, not both.",
+  })
+  .refine((v) => !(v.markdown_version && v.markdown === undefined), {
+    message: "markdown_version requires a markdown body.",
   })
   .refine((v) => !(v.template && (v.markdown || v.children)), {
     message: "Pass either a `template` or body content (`markdown`/`children`), not both — the Notion API rejects children alongside a template.",
@@ -240,8 +244,10 @@ register({
     });
     if (!prepared.ok) return prepared;
     const { properties, warnings } = prepared;
-    // A template and explicit body content are mutually exclusive (API rule).
-    const children = params.template
+    // With an explicit markdown_version, use Notion's native Markdown API
+    // rather than round-tripping Notion-flavored v2 through a local GFM parser.
+    // Omitted markdown_version preserves the existing block conversion behavior.
+    const children = params.template || params.markdown_version !== undefined
       ? undefined
       : params.markdown
         ? parseMarkdownToBlocks(params.markdown)
@@ -264,6 +270,9 @@ register({
       parent: rowParent,
       properties,
       ...(inline.length ? { children: inline } : {}),
+      ...(params.markdown_version !== undefined
+        ? { markdown: params.markdown!, markdown_version: params.markdown_version }
+        : {}),
       ...(params.template ? { template: params.template } : {}),
       ...(params.icon !== undefined ? { icon: params.icon } : {}),
       ...(params.cover !== undefined ? { cover: params.cover } : {}),
@@ -1018,9 +1027,19 @@ const UpdatePageMarkdownParams = z.object({
     "Targeted search-and-replace edits. Mutually exclusive with markdown and insert_content."
   ),
   insert_content: z.object({
-    position: z.enum(["start", "end"]).optional(),
+    position: z.union([
+      z.enum(["start", "end"]),
+      z.discriminatedUnion("type", [
+        z.object({ type: z.literal("start") }),
+        z.object({ type: z.literal("end") }),
+        z.object({ type: z.literal("after_content"), anchor: z.string().min(1) }),
+        z.object({ type: z.literal("before_content"), anchor: z.string().min(1) }),
+      ]),
+    ]).optional().describe(
+      'Use "start"/"end" or { type: "after_content" | "before_content", anchor: "## Exact heading" }. Anchored positions require markdown_version: "v2".'
+    ),
     after: z.string().min(1).optional().describe(
-      'Notion ellipsis-based content selection, e.g. "start text...end text", not a block UUID.'
+      'Deprecated ellipsis-based selector; prefer position: { type: "after_content", anchor } with v2.'
     ),
   }).refine((v) => !(v.after && v.position), {
     message: "Choose either insert_content.after or insert_content.position, never both.",
@@ -1040,6 +1059,13 @@ const UpdatePageMarkdownParams = z.object({
     ctx.addIssue({ code: "custom",
       message: "Either markdown or content_updates is required." });
   }
+  const position = v.insert_content?.position;
+  if (position && typeof position === "object" &&
+      (position.type === "after_content" || position.type === "before_content") &&
+      v.markdown_version !== "v2") {
+    ctx.addIssue({ code: "custom", path: ["markdown_version"],
+      message: 'Anchored insert_content positions require markdown_version: "v2".' });
+  }
 });
 
 register({
@@ -1047,7 +1073,7 @@ register({
   access: "write",
   domain: "pages",
   description:
-    "Targeted update_content search-and-replace (preferred), or legacy Markdown replace/insert. Return parser warnings and async task receipts. Replacing whole pages risks deleting inaccessible or truncated blocks; prefer content_updates.",
+    "Targeted update_content search-and-replace (preferred), Markdown replace or insert, including v2 after_content/before_content anchored placement. Return parser warnings and async task receipts. Replacing whole pages risks deleting inaccessible or truncated blocks; prefer content_updates.",
   batchable: true,
   schema: UpdatePageMarkdownParams,
   example: {
@@ -1081,7 +1107,9 @@ register({
               ...(insert_content.after !== undefined
                 ? { after: insert_content.after }
                 : insert_content.position !== undefined
-                  ? { position: { type: insert_content.position } }
+                  ? { position: typeof insert_content.position === "string"
+                      ? { type: insert_content.position }
+                      : insert_content.position }
                   : {}),
             },
           }
