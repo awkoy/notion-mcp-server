@@ -148,6 +148,22 @@ describe("create_view Dashboard widgets", () => {
     expect(stub.views.create).toHaveBeenCalledTimes(1);
   });
 
+  it("compiles unhinted Dashboard where using its declared status type", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1",
+      properties: { Status: { id: "%3DV%5BM", type: "status" } },
+    });
+    stub.views.create.mockResolvedValue({
+      id: "status-widget", name: "Open Items", type: "table", dashboard_view_id: "dash-1",
+    });
+    const result = await dispatch("create_view", { ...widget, where: { Status: "Open" } });
+    expect(result.ok).toBe(true);
+    expect(stub.views.create).toHaveBeenCalledWith(expect.objectContaining({
+      filter: { property: "Status", status: { equals: "Open" } },
+    }));
+  });
+
   it("allows a new row when the Dashboard has capacity", async () => {
     stub.views.retrieve.mockResolvedValue(dashboard([4]));
     stub.views.create.mockResolvedValue({
@@ -215,6 +231,39 @@ describe("ensure_dashboard_widget", () => {
     expect(stub.dataSources.retrieve).toHaveBeenCalledWith({
       data_source_id: "source-1",
     });
+    expect(stub.views.create).not.toHaveBeenCalled();
+  });
+
+  it("reuses status widgets for equivalent hinted and unhinted where", async () => {
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1",
+      properties: { Status: { id: "%3DV%5BM", type: "status" } },
+    });
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-1"
+        ? { ...dashboard(), configuration: { rows: [{ widgets: [{ view_id: "w-1" }] }] } }
+        : {
+            id: "w-1", name: "Open Items", type: "table",
+            data_source_id: "source-1",
+            filter: { property: "=V[M", status: { equals: "Open" } },
+          }
+    );
+    for (const where of [
+      { Status: "Open" },
+      { Status: { eq: "Open", __type: "status" } },
+    ]) {
+      const result = await dispatch("ensure_dashboard_widget", { ...request, where });
+      expect(result).toMatchObject({
+        ok: true, data: { action: "existing", verified: true, widget: { id: "w-1" } },
+      });
+    }
+    const different = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { Status: "Closed" },
+    });
+    expect(different).toMatchObject({
+      ok: false, error: { code: "dashboard_widget_conflict" },
+    });
+    expect(stub.dataSources.retrieve).toHaveBeenCalledWith({ data_source_id: "source-1" });
     expect(stub.views.create).not.toHaveBeenCalled();
   });
 

@@ -7,7 +7,7 @@ import { tryHandler } from "../utils/handler.js";
 import { slimView, slimPage, truncatedRowWarnings } from "../utils/slim.js";
 import { mapWithConcurrency } from "../dispatch/concurrency.js";
 import { stableStringify } from "../utils/stable-json.js";
-import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
+import { WHERE_SCHEMA, compileWhere, type PropertyTypes } from "../schema/filter-dsl.js";
 import {
   asSdk,
   type CreateViewBody,
@@ -124,24 +124,28 @@ async function resolveViewTarget(
   return { data_source_id: sources[0].id, database_id };
 }
 
-// Compile the typed `where` DSL into a Notion filter, or pass `filter` through.
+// Validate mutually exclusive filter inputs before making any API requests.
+function viewFilterConflict(where: unknown, filter: unknown): OpError | undefined {
+  if (where === undefined || filter === undefined) return undefined;
+  return {
+    code: "filter_conflict",
+    message: "Pass `where` (typed DSL) or `filter` (raw JSON), not both.",
+    fix: "Use exactly one of `where` or `filter`.",
+  };
+}
+
+// Use the data source's property types when compiling `where`, rather than
+// misinferring (for example) a status property's string as a select.
 function compileViewFilter(
   where: unknown,
-  filter: unknown
+  filter: unknown,
+  propertyTypes?: PropertyTypes
 ): { ok: true; filter?: unknown } | { ok: false; error: OpError } {
-  if (where !== undefined && filter !== undefined) {
-    return {
-      ok: false,
-      error: {
-        code: "filter_conflict",
-        message: "Pass `where` (typed DSL) or `filter` (raw JSON), not both.",
-        fix: "Use exactly one of `where` or `filter`.",
-      },
-    };
-  }
+  const conflict = viewFilterConflict(where, filter);
+  if (conflict) return { ok: false, error: conflict };
   if (where !== undefined) {
     try {
-      return { ok: true, filter: compileWhere(where as never) };
+      return { ok: true, filter: compileWhere(where as never, propertyTypes) };
     } catch (err) {
       return {
         ok: false,
@@ -548,8 +552,8 @@ register({
       code: "placement_without_dashboard", message: "placement requires view_id.",
       fix: "Supply the Dashboard view_id or remove placement.",
     } };
-    const compiled = compileViewFilter(where, filter);
-    if (!compiled.ok) return { ok: false, error: compiled.error };
+    const conflict = viewFilterConflict(where, filter);
+    if (conflict) return { ok: false, error: conflict };
     const notion = await getClient();
     if (view_id) {
       const dashboard = await notion.views.retrieve({ view_id });
@@ -560,6 +564,13 @@ register({
       ? { data_source_id }
       : await resolveViewTarget(notion, database_id, data_source_id);
     if (resolved.error) return { ok: false, error: resolved.error };
+    // Compile unhinted filters using the actual data source property types.
+    const source = where !== undefined
+      ? await notion.dataSources.retrieve({ data_source_id: resolved.data_source_id! })
+      : null;
+    const propertyTypes = (source as { properties?: PropertyTypes } | null)?.properties;
+    const compiled = compileViewFilter(where, filter, propertyTypes);
+    if (!compiled.ok) return { ok: false, error: compiled.error };
     const body = {
       data_source_id: resolved.data_source_id,
       // Dashboard widgets are scoped to view_id; ordinary views keep their database_id.
@@ -622,8 +633,8 @@ register({
       code: "missing_view_config", message: `A ${type} widget needs configuration.`,
       fix: `Pass configuration with ${REQUIRES_CONFIG[type]}.`,
     } };
-    const compiled = compileViewFilter(where, filter);
-    if (!compiled.ok) return { ok: false, error: compiled.error };
+    const conflict = viewFilterConflict(where, filter);
+    if (conflict) return { ok: false, error: conflict };
     const notion = await getClient();
     const dashboard = await notion.views.retrieve({ view_id });
     const target = dashboard as {
@@ -645,16 +656,20 @@ register({
       filter?: unknown; dashboard_view_id?: string;
     }>;
     const sameName = fullViews.filter((item) => item.name === name);
-    // A saved filter can refer to an ID while the input used a property name.
-    // Resolve the source schema only when comparing an existing named widget.
+    // Use one schema for requested property types and saved property IDs.
+    // Resolve it even on create: inferred types can produce invalid filters.
     const needsPropertyMapping = sameName.length > 0 &&
-      (compiled.filter != null || sameName.some((item) => item.filter != null));
-    const source = needsPropertyMapping
+      (filter != null || sameName.some((item) => item.filter != null));
+    const source = (where !== undefined || needsPropertyMapping)
       ? await notion.dataSources.retrieve({ data_source_id })
       : null;
     const properties = (source as {
-      properties?: Record<string, { id?: string }>
+      properties?: Record<string, { id?: string; type: string }>
     } | null)?.properties ?? {};
+    const compiled = compileViewFilter(
+      where, filter, Object.keys(properties).length ? properties : undefined
+    );
+    if (!compiled.ok) return { ok: false, error: compiled.error };
     const expectedFilter = canonicalViewFilter(compiled.filter, properties);
     const matches = sameName.filter((item) =>
       item.type === type && item.data_source_id === data_source_id &&
