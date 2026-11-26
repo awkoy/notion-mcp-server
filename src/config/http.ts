@@ -1,3 +1,5 @@
+import { parseWebhookConfiguration, type NotionWebhookConfig } from "../server/notion-webhook-ingest.js";
+
 export type TransportKind = "stdio" | "http";
 
 // The transport this process is serving. startHttp sets it; stdio is the
@@ -23,6 +25,8 @@ export type HttpConfig = {
   allowUnauthenticated: boolean;
   allowedHosts: string[];
   allowedOrigins: string[];
+  /** Optional, account-bound Notion event ingress on the existing HTTP listener. */
+  webhooks?: NotionWebhookConfig;
 };
 
 const DEFAULT_PORT = 3000;
@@ -63,7 +67,10 @@ export function parseHttpConfig(env: NodeJS.ProcessEnv): HttpConfig {
   const allowedHosts = parseList(env.MCP_ALLOWED_HOSTS);
   const allowedOrigins = parseList(env.MCP_ALLOWED_ORIGINS);
 
-  return { transport, port, host, authToken, allowUnauthenticated, allowedHosts, allowedOrigins };
+  const webhooks = parseWebhookConfiguration(env);
+  return { transport, port, host, authToken, allowUnauthenticated, allowedHosts, allowedOrigins,
+    ...(webhooks ? { webhooks } : {}),
+  };
 }
 
 /** Bind addresses only this machine can reach: 127.0.0.0/8, ::1 and `localhost`. */
