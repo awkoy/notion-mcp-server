@@ -164,6 +164,54 @@ describe("create_view Dashboard widgets", () => {
     }));
   });
 
+  it("fails closed on an unavailable property schema for typed creation", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.dataSources.retrieve.mockResolvedValue({ id: "source-1" });
+    const result = await dispatch("create_view", { ...widget, where: { Status: "Open" } });
+    expect(result).toMatchObject({
+      ok: false, error: { code: "view_filter_schema_unavailable" },
+    });
+    expect(stub.views.create).not.toHaveBeenCalled();
+    expect(stub.dataSources.retrieve).toHaveBeenCalledExactlyOnceWith({ data_source_id: "source-1" });
+  });
+
+  it("preserves raw null and rejects where combined with raw null", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.views.create.mockResolvedValue({ id: "raw-null", type: "table", name: "Open Items" });
+    const raw = await dispatch("create_view", { ...widget, filter: null });
+    expect(raw.ok).toBe(true);
+    expect(stub.views.create).toHaveBeenCalledWith(expect.objectContaining({ filter: null }));
+    expect(stub.dataSources.retrieve).not.toHaveBeenCalled();
+    stub.views.create.mockClear();
+    const both = await dispatch("create_view", {
+      ...widget, where: { Status: "Open" }, filter: null,
+    });
+    expect(both).toMatchObject({ ok: false, error: { code: "filter_conflict" } });
+    expect(stub.views.create).not.toHaveBeenCalled();
+  });
+
+  it("compiles a compound AND with status and number using the schema", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1", properties: {
+        Status: { id: "id-status", type: "status" },
+        Count: { id: "id-count", type: "number" },
+      },
+    });
+    stub.views.create.mockResolvedValue({ id: "compound-view", name: "Open Items", type: "table" });
+    const result = await dispatch("create_view", {
+      ...widget, where: { AND: [{ Status: "Open" }, { Count: { gte: 2 } }] },
+    });
+    expect(result.ok).toBe(true);
+    expect(stub.views.create).toHaveBeenCalledWith(expect.objectContaining({
+      filter: { and: [
+        { property: "Status", status: { equals: "Open" } },
+        { property: "Count", number: { greater_than_or_equal_to: 2 } },
+      ] },
+    }));
+    expect(stub.dataSources.retrieve).toHaveBeenCalledExactlyOnceWith({ data_source_id: "source-1" });
+  });
+
   it("allows a new row when the Dashboard has capacity", async () => {
     stub.views.retrieve.mockResolvedValue(dashboard([4]));
     stub.views.create.mockResolvedValue({
@@ -267,6 +315,62 @@ describe("ensure_dashboard_widget", () => {
     expect(stub.views.create).not.toHaveBeenCalled();
   });
 
+  it("fails closed for unhinted ensure when the data-source schema is empty", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.dataSources.retrieve.mockResolvedValue({ id: "source-1", properties: {} });
+    const result = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { Status: "Open" },
+    });
+    expect(result).toMatchObject({
+      ok: false, error: { code: "view_filter_schema_unavailable" },
+    });
+    expect(stub.views.create).not.toHaveBeenCalled();
+  });
+
+  it("preserves unknown-property errors rather than false widget conflict", async () => {
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-1"
+        ? { ...dashboard(), configuration: { rows: [{ widgets: [{ view_id: "w-1" }] }] } }
+        : {
+            id: "w-1", name: "Open Items", type: "table",
+            data_source_id: "source-1",
+            filter: { property: "known", status: { equals: "Open" } },
+          }
+    );
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1", properties: { Known: { id: "known", type: "status" } },
+    });
+    const result = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { NotAProperty: "Open" },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "where_compile_error" } });
+    expect(stub.views.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects same-name wrong type and duplicate widgets without schema reads", async () => {
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-1"
+        ? { ...dashboard(), configuration: { rows: [{ widgets: [{ view_id: "w-1" }] }] } }
+        : { id: "w-1", name: "Open Items", type: "list", data_source_id: "source-1" }
+    );
+    const wrongType = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { Status: "Open" },
+    });
+    expect(wrongType).toMatchObject({ ok: false, error: { code: "dashboard_widget_conflict" } });
+    expect(stub.dataSources.retrieve).not.toHaveBeenCalled();
+    stub.views.retrieve.mockImplementation(async ({ view_id }) =>
+      view_id === "dash-1"
+        ? { ...dashboard(), configuration: { rows: [{ widgets: [{ view_id: "w-1" }, { view_id: "w-2" }] }] } }
+        : { id: view_id, name: "Open Items", type: "table", data_source_id: "source-1" }
+    );
+    const duplicated = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { Status: "Open" },
+    });
+    expect(duplicated).toMatchObject({ ok: false, error: { code: "dashboard_widget_conflict" } });
+    expect(stub.dataSources.retrieve).not.toHaveBeenCalled();
+    expect(stub.views.create).not.toHaveBeenCalled();
+  });
+
   it("holds a same-name widget with mismatched source", async () => {
     stub.views.retrieve.mockImplementation(async ({ view_id }) =>
       view_id === "dash-1"
@@ -284,6 +388,7 @@ describe("ensure_dashboard_widget", () => {
       ok: false, error: { code: "dashboard_widget_conflict" },
     });
     expect(stub.views.create).not.toHaveBeenCalled();
+    expect(stub.dataSources.retrieve).not.toHaveBeenCalled();
   });
 
   it("holds a same-name widget with a different saved filter", async () => {
