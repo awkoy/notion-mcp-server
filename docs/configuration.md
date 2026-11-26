@@ -55,7 +55,8 @@ or dedicated project. Do not use the example to expose an HTTP endpoint.
 A failed BWS retrieval must stop startup; never retry by launching the server
 outside BWS. If the retrieved environment lacks a nonblank `NOTION_TOKEN`,
 `--require-token` exits nonzero before opening a transport, with a fixed
-diagnostic and no credential contents. This checks presence, not validity:
+diagnostic and no credential contents. It is a standalone CLI flag; additional
+arguments are rejected rather than silently ignored. This checks presence, not validity:
 a revoked or invalid Notion token cannot authorize requests. Rotate the
 secret in Bitwarden and restart the process to pick up the new value.
 

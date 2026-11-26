@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { execFile } from "node:child_process";
+import { execFile, spawn as spawnChild } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,64 @@ describe("command-line flags (spawned build/index.js)", () => {
     }
   );
 
+  it.each([
+    ["--require-token", "--verison"],
+    ["--version", "--require-token"],
+    ["--require-token", "unexpected"],
+  ])("rejects extra argument %s %s before launching", async (first, second) => {
+    const { code, stdout, stderr } = await spawn(first, second);
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toContain(`Unknown option: ${second}`);
+  });
+
+  it("starts stdio with a synthetic nonblank injected token", async () => {
+    // This tests the positive startup gate, not a real vault or Notion login.
+    // Never inherit a real credential into the child process.
+    const child = spawnChild(process.execPath, [BIN, "--require-token"], {
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        NOTION_TOKEN: "synthetic-notion-token-not-valid",
+        NOTION_READ_ONLY: "true",
+        MCP_TRANSPORT: "stdio",
+        HTTPS_PROXY: "http://127.0.0.1:9",
+        HTTP_PROXY: "http://127.0.0.1:9",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let output = "";
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`stdio startup was not observed: ${output}`));
+        }, 10_000);
+        child.stderr.on("data", (chunk: Buffer) => {
+          output += chunk.toString("utf8");
+          if (output.includes("running on stdio")) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+        child.once("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+        child.once("exit", (code) => {
+          if (!output.includes("running on stdio")) {
+            clearTimeout(timer);
+            reject(new Error(`server exited before stdio start (code ${code}): ${output}`));
+          }
+        });
+      });
+      expect(output).not.toContain("NOTION_TOKEN is missing or blank");
+      expect(output).toContain("running on stdio");
+    } finally {
+      child.stdin.end();
+      child.kill();
+    }
+  });
+
   it("rejects an unknown option on stderr with exit code 2", async () => {
     const { code, stdout, stderr } = await spawn("--verison");
 
@@ -98,6 +156,14 @@ describe("parseCliArgs", () => {
 
   it("opts in to strict token presence without changing default startup", () => {
     expect(parseCliArgs(["--require-token"])).toEqual({ kind: "run", requireToken: true });
+  });
+
+  it.each([
+    ["--require-token", "--verison"],
+    ["--version", "--require-token"],
+    ["--help", "ignored"],
+  ])("never ignores a trailing argument after %s", (first, extra) => {
+    expect(parseCliArgs([first, extra])).toEqual({ kind: "unknown", option: extra });
   });
 
   it.each(["--version", "-v"])("%s asks for the version", (flag) => {
