@@ -320,6 +320,7 @@ describe("create_view", () => {
       object: "data_source",
       id: "ds-1",
       parent: { type: "database_id", database_id: "db-parent" },
+      properties: { Status: { id: "status-id", type: "status" } },
     });
     notionStub.views.create.mockImplementation(async (args) => {
       calls.push({ method: "views.create", args });
@@ -341,7 +342,10 @@ describe("create_view", () => {
       name: "Open",
       type: "table",
     });
-    expect(call).toHaveProperty("filter");
+    expect(call).toHaveProperty("filter", {
+      property: "Status", status: { equals: "Open" },
+    });
+    expect(notionStub.dataSources.retrieve).toHaveBeenCalledWith({ data_source_id: "ds-1" });
   });
 
   it("rejects a calendar view without required configuration", async () => {

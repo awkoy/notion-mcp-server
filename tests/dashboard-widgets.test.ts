@@ -47,6 +47,9 @@ const widget = {
 describe("create_view Dashboard widgets", () => {
   it("creates a widget using view_id and placement, not database_id", async () => {
     stub.views.retrieve.mockResolvedValue(dashboard([1]));
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1", properties: { Status: { id: "status-id", type: "status" } },
+    });
     stub.views.create.mockResolvedValue({
       id: "widget-1", name: "Open Items", type: "table", dashboard_view_id: "dash-1",
     });
@@ -65,6 +68,10 @@ describe("create_view Dashboard widgets", () => {
       placement: { type: "existing_row", row_index: 0 },
     }));
     expect(stub.views.create.mock.calls[0][0]).not.toHaveProperty("database_id");
+    expect(stub.views.create.mock.calls[0][0]).toMatchObject({
+      filter: { property: "Status", status: { equals: "Open" } },
+    });
+    expect(stub.dataSources.retrieve).toHaveBeenCalledExactlyOnceWith({ data_source_id: "source-1" });
   });
 
   it("rejects ambiguous, invalid, or unsafe targets before creation", async () => {
@@ -210,6 +217,27 @@ describe("create_view Dashboard widgets", () => {
       ] },
     }));
     expect(stub.dataSources.retrieve).toHaveBeenCalledExactlyOnceWith({ data_source_id: "source-1" });
+  });
+
+  it("compiles nested OR/NOT status filters with the declared schema type", async () => {
+    stub.views.retrieve.mockResolvedValue(dashboard([]));
+    stub.dataSources.retrieve.mockResolvedValue({
+      id: "source-1", properties: {
+        Status: { id: "status-id", type: "status" },
+        Count: { id: "count-id", type: "number" },
+      },
+    });
+    stub.views.create.mockResolvedValue({ id: "v-nested", name: "Open Items", type: "table" });
+    const result = await dispatch("create_view", {
+      ...widget, where: { OR: [{ NOT: { Status: "Open" } }, { Count: { gt: 5 } }] },
+    });
+    expect(result.ok).toBe(true);
+    expect(stub.views.create).toHaveBeenCalledWith(expect.objectContaining({
+      filter: { or: [
+        { property: "Status", status: { does_not_equal: "Open" } },
+        { property: "Count", number: { greater_than: 5 } },
+      ] },
+    }));
   });
 
   it("allows a new row when the Dashboard has capacity", async () => {
@@ -383,7 +411,9 @@ describe("ensure_dashboard_widget", () => {
             filter: null,
           }
     );
-    const result = await dispatch("ensure_dashboard_widget", request);
+    const result = await dispatch("ensure_dashboard_widget", {
+      ...request, where: { Status: "Open" },
+    });
     expect(result).toMatchObject({
       ok: false, error: { code: "dashboard_widget_conflict" },
     });
@@ -506,10 +536,15 @@ describe("ensure_dashboard_widget", () => {
     expect(first).toMatchObject({
       ok: true, data: { action: "created", verified: false, verification_required: true },
     });
-    const second = await dispatch("ensure_dashboard_widget", pendingRequest);
+    // A different unhinted where must not defeat an outstanding uncertain
+    // membership write by attempting schema resolution or another create.
+    const second = await dispatch("ensure_dashboard_widget", {
+      ...pendingRequest, where: { Status: "Open" },
+    });
     expect(second).toMatchObject({
       ok: false, error: { code: "dashboard_widget_verification_pending" },
     });
+    expect(stub.dataSources.retrieve).not.toHaveBeenCalled();
     stub.views.retrieve.mockImplementation(async ({ view_id }) =>
       view_id === "dash-pending"
         ? { ...dashboard(), id: "dash-pending",
