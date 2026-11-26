@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import {
   chmodSync,
@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   realpathSync,
   renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -15,7 +16,7 @@ import https from "node:https";
 import type { LookupAddress } from "node:dns";
 import type { LookupFunction } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import type {
   BatchResult,
@@ -25,6 +26,18 @@ import type {
 
 const MB = 1024 * 1024;
 const MAX_PART_BYTES = 5 * MB;
+
+// Windows usually puts os.tmpdir() under AppData, which the upload policy
+// correctly refuses. Keep fixtures outside that protected tree on Windows.
+const FILE_TEST_TEMP_ROOT = process.platform === "win32"
+  ? mkdtempSync(join(process.cwd(), "notion-files-test-"))
+  : tmpdir();
+
+afterAll(() => {
+  if (process.platform === "win32") {
+    rmSync(FILE_TEST_TEMP_ROOT, { recursive: true, force: true });
+  }
+});
 
 // Mock signatures that mirror the SDK shapes we exercise. Typing the
 // fakes (rather than `as`-casting their call args later) makes
@@ -937,10 +950,9 @@ describe("upload_file (URL source limits)", () => {
 describe("upload_file (path source)", () => {
   it("reads the file from disk and derives filename from the path basename", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
 
-    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const dir = await mkdtemp(join(FILE_TEST_TEMP_ROOT, "notion-upload-"));
     const filePath = join(dir, "report.txt");
     const payload = Buffer.from("local bytes on disk");
     await writeFile(filePath, payload);
@@ -971,10 +983,9 @@ describe("upload_file (path source)", () => {
 
   it("honors an explicit filename over the path basename", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
 
-    const dir = await mkdtemp(join(tmpdir(), "notion-upload-"));
+    const dir = await mkdtemp(join(FILE_TEST_TEMP_ROOT, "notion-upload-"));
     const filePath = join(dir, "tmpname.bin");
     await writeFile(filePath, Buffer.from("x"));
 
@@ -1005,7 +1016,7 @@ describe("upload_file (path source)", () => {
     });
     assertErr(res);
     expect(res.error.code).toBe("validation_error");
-    expect(res.error.message).toBe("/no/such/file-xyz.txt does not exist (ENOENT).");
+    expect(res.error.message).toBe(`${resolve("/no/such/file-xyz.txt")} does not exist (ENOENT).`);
     expect(res.error.fix).toContain("Check the path");
     expect(notionStub.fileUploads.create).not.toHaveBeenCalled();
     expect(notionStub.fileUploads.send).not.toHaveBeenCalled();
@@ -1017,7 +1028,7 @@ describe("upload_file (path source)", () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 describe("upload_file (path policy)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "notion-policy-"));
+  const dir = mkdtempSync(join(FILE_TEST_TEMP_ROOT, "notion-policy-"));
   writeFileSync(join(dir, "plain.txt"), "plain");
   writeFileSync(join(dir, ".hidden.txt"), "hidden");
   mkdirSync(join(dir, ".secret"));
@@ -1153,7 +1164,7 @@ describe("upload_file (path policy)", () => {
   );
 
   describe("app-data folders, with a stand-in home directory", () => {
-    const home = mkdtempSync(join(tmpdir(), "notion-home-"));
+    const home = mkdtempSync(join(FILE_TEST_TEMP_ROOT, "notion-home-"));
     const write = (rel: string, body: string) => {
       const full = join(home, rel);
       mkdirSync(join(full, ".."), { recursive: true });
@@ -1239,7 +1250,7 @@ describe("upload_file (path policy)", () => {
       const res = await uploadPath(join(dir, "plain.txt", "child.txt"));
       assertErr(res);
       expect(res.error.code).toBe("validation_error");
-      expect(res.error.message).toContain("(ENOTDIR)");
+      expect(res.error.message).toContain(process.platform === "win32" ? "(ENOENT)" : "(ENOTDIR)");
       expect(res.error.fix).toBeTruthy();
     });
 
@@ -1413,9 +1424,9 @@ describe("get_file_upload", () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 describe("upload_file (upload root)", () => {
-  const root = mkdtempSync(join(tmpdir(), "notion-root-"));
+  const root = mkdtempSync(join(FILE_TEST_TEMP_ROOT, "notion-root-"));
   writeFileSync(join(root, "inside.txt"), "in");
-  const outside = mkdtempSync(join(tmpdir(), "notion-out-"));
+  const outside = mkdtempSync(join(FILE_TEST_TEMP_ROOT, "notion-out-"));
   writeFileSync(join(outside, "outside.txt"), "out");
 
   beforeEach(() => {

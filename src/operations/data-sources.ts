@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { isFullDatabase, isFullDataSource } from "@notionhq/client";
+import { isFullDatabase, isFullDataSource } from "../utils/notion-sdk-runtime.js";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import { tryHandler } from "../utils/handler.js";
-import { slimDataSource } from "../utils/slim.js";
+import { slimDataSource, slimSyncMetadata } from "../utils/slim.js";
 import { DATABASE_PROPERTY_SCHEMA } from "../schema/database.js";
 import { asSdk, type UpdateDataSourceBody } from "../utils/notion-types.js";
 import { notionId } from "../schema/id.js";
@@ -35,7 +35,10 @@ register({
         ? { database_id, data_sources: sources }
         : {
             database_id,
-            data_sources: sources.map((s) => ({ id: s.id, name: s.name })),
+            data_sources: sources.map((s) => {
+              const sync = slimSyncMetadata((s as { sync_metadata?: unknown }).sync_metadata);
+              return { id: s.id, name: s.name, ...(sync ? { sync_metadata: sync } : {}) };
+            }),
           },
     };
   }),

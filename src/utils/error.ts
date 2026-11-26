@@ -1,4 +1,4 @@
-import { APIResponseError } from "@notionhq/client";
+import { APIResponseError } from "./notion-sdk-runtime.js";
 import { AuthError } from "../services/auth.js";
 import type { OperationError } from "../operations/types.js";
 

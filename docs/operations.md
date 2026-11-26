@@ -1,6 +1,6 @@
 # Tools, calls and resources
 
-The [README](../README.md#tools-and-operations) lists the 48 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
+The [README](../README.md#tools-and-operations) lists the 49 operations. This page shows what a call looks like on the wire, which is mostly useful when you're debugging an agent or writing your own client. Models learn all of this from the tool schemas, so you don't need to teach it to them.
 
 ## Three tools
 
@@ -176,6 +176,10 @@ Notion cuts some reads short. The server passes on what it knows and warns befor
 - **`get_page` with `include_properties: true`** returns every value of a relation or people property. A page object holds at most 25, so for a longer list the server reads the property itself through Notion's property endpoint, up to 1,000 values. A list longer than that is named in `truncated_properties`, with a warning not to write it back with `set_page_property`, which replaces the whole list. So is a list Notion refuses to read in full: it keeps the 25 values from the page object, and the warning gives Notion's error. With `verbose: true` the raw page comes back as Notion sent it, with a warning naming the cut properties.
 - **`query_database` and `query_view`** rows keep the 25 values a query returns. Reading the rest would take an extra call for each cut property in each row, so the server names the properties that may hold more in each row's `truncated_properties` and adds one warning (people carries no `has_more`, so a people list of exactly 25 counts); read the row with `get_page` before writing such a property back.
 - **`query_meeting_notes`** returns at most 50 notes, and Notion gives this endpoint no cursor. When more match, `has_more` is `true` and a warning says to narrow the filter or change the sort. The call needs a plan with AI meeting notes (without one Notion answers 400 `validation_error`) and returns only notes the token's user attends. A note comes back with `id`, `title`, `status`, its times, `calendar_event`, `recording` and the `summary_block_id`, `notes_block_id` and `transcript_block_id` of its content blocks; `verbose: true` gives Notion's block objects. `filter` takes one property filter or an `and`/`or` combinator; a single property filter is sent as a one-clause `and`, because the API rejects one at the root.
+
+## Dashboards and targeted markdown edits
+
+Adding widgets to a Dashboard view and reconciling them without duplicates: [dashboard-widgets.md](./dashboard-widgets.md). Markdown v2 reads and writes, and exact-match page edits with `content_updates`: [markdown-v2-targeted-edits.md](./markdown-v2-targeted-edits.md).
 
 ## MCP resources
 

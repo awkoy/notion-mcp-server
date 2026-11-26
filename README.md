@@ -159,7 +159,7 @@ HTTP variables are in [Remote / HTTP transport](#remote--http-transport). Upgrad
 { "env": { "NOTION_ALLOWED_OPERATIONS": "read,append_blocks,add_page_comment" } }
 ```
 
-Disabled operations disappear from the tool schemas, so the model never sees them. The server prints what resolved at startup, for example `Operation access: 23/50 enabled (allow=read; block=(none))`.
+Disabled operations disappear from the tool schemas, so the model never sees them. The server prints what resolved at startup, for example `Operation access: 23/51 enabled (allow=read; block=(none))`.
 
 To be asked instead of blocked, set `NOTION_CONFIRM_DESTRUCTIVE=true`: before a destructive operation runs, your client shows a yes/no dialog naming the target. The client has to support MCP elicitation. The full rules, the per-operation list and the limits of per-operation control are in [docs/configuration.md](./docs/configuration.md#restricting-operations).
 
@@ -206,7 +206,7 @@ Docker, health checks and protocol versions: [docs/http-transport.md](./docs/htt
 
 ## Tools and operations
 
-Three tools, whichever of the 48 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
+Three tools, whichever of the 49 operations you end up calling: `notion_read` runs reads, `notion_write` runs writes, and `notion_describe` returns an operation's JSON Schema with a working example. Every id field also accepts a Notion URL, so paste what **Share → Copy link** gives you. Call examples, batch options and MCP resources: [docs/operations.md](./docs/operations.md).
 
 ### Per-tool permissions
 
@@ -216,7 +216,7 @@ The read/write split lets you approve reads once and keep writes behind a prompt
 { "permissions": { "allow": ["mcp__notion__notion_read", "mcp__notion__notion_describe"] } }
 ```
 
-### Operations menu (48 ops, plus two aliases)
+### Operations menu (49 ops, plus two aliases)
 
 | Area | Operations |
 | --- | --- |
@@ -224,10 +224,12 @@ The read/write split lets you approve reads once and keep writes behind a prompt
 | **Blocks** | `append_blocks`, `get_block`, `get_block_children`, `query_meeting_notes`, `update_block`, `delete_block`, `batch_mixed_blocks` |
 | **Databases** | `create_database`, `query_database`, `update_database`, `delete_database` |
 | **Data sources** | `list_data_sources`, `get_data_source`, `update_data_source`, `delete_data_source`, `list_data_source_templates` |
-| **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `update_view`, `delete_view` |
+| **Views** | `list_views`, `get_view`, `query_view`, `create_view`, `ensure_dashboard_widget`, `update_view`, `delete_view` |
 | **Comments** | `list_comments`, `add_page_comment`, `add_discussion_comment`, `get_comment`, `update_comment`, `delete_comment` |
 | **Users** | `list_users`, `get_user`, `get_bot_user` (alias: `get_self`) |
 | **Files** | `upload_file`, `upload_to_property`, `list_file_uploads`, `get_file_upload`, `get_file_url`, `get_image` |
+
+Widgets on a Dashboard view (`create_view` with `view_id`, and `ensure_dashboard_widget` for repeated automation): [docs/dashboard-widgets.md](./docs/dashboard-widgets.md). Markdown v2 and exact-match page edits through `content_updates`: [docs/markdown-v2-targeted-edits.md](./docs/markdown-v2-targeted-edits.md).
 
 ## FAQ
 

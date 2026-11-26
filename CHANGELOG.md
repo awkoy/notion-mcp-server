@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-11-25
+
+### Added
+
+- **Dashboard widgets.** `create_view` adds a widget to an existing Dashboard view: pass the Dashboard as `view_id`, the widget's source as `data_source_id`, and optionally `placement` (`new_row`, or `existing_row` with a zero-based `row_index`). The Dashboard type, the row and the limits (4 widgets per row, 12 per Dashboard) are checked before anything is written. The new `ensure_dashboard_widget` operation is for automation that runs more than once: it returns the widget that already has the same name, source, view type and saved filter (`action: "existing"`), creates it otherwise, and refuses a same-named widget that differs with `dashboard_widget_conflict`; `dry_run: true` only reports what it would do. Calls for one Dashboard run one at a time within a server process. `get_view` shows a short `layout` for a Dashboard and `dashboard_view_id` on its widgets. See [docs/dashboard-widgets.md](docs/dashboard-widgets.md). Contributed by @insane66613 in #146.
+- **Markdown v2 and exact-match page edits.** `get_page_markdown` and `update_page_markdown` take `markdown_version: "v2"`; without it they use Notion's Markdown v1 as before. `get_page_markdown` also takes `include_transcript` and returns Notion's parser warnings as `content_warnings`. `update_page_markdown` takes `content_updates`, a list of `{ old_str, new_str }` replacements with optional `replace_all_matches`, which changes only the matched text and leaves the page's other blocks as they were. Notion refuses an `old_str` it can't find or finds more than once; when only some edits match, the call succeeds with a warning and `reconciliation_required: true`. `allow_async: true` returns a task receipt when Notion queues the update. See [docs/markdown-v2-targeted-edits.md](docs/markdown-v2-targeted-edits.md). Contributed by @insane66613 in #147.
+- **Sync health of synced data sources.** Compact `get_data_source` and `list_data_sources` results carry `sync_metadata` for a data source Notion syncs from another service: provider, source resource, health flags and check times. `health: null` stays `null`, meaning unknown. Ordinary data sources return exactly what they did. Contributed by @insane66613 in #149.
+- **Payloads sent as a JSON string.** Some MCP clients serialize the `payload` object of `notion_read` and `notion_write` into a string, once or more. Such a payload is now decoded, up to three layers, before validation; string values inside it are never parsed, so a title that looks like JSON stays as typed. Any other string is refused with a message that says what a payload must be. Contributed by @insane66613 in #150.
+
+### Changed
+
+- **`insert_content.after` in `update_page_markdown` is a text selector.** Notion's endpoint picks the insertion point by text (`"start text...end text"`), not by block id, so `after` now takes that text, `position` became optional, and a call sets one of the two, never both. A block id in `after` no longer matches anything. (#147)
+- Dependencies: `@notionhq/client` 5.31.1 (was 5.29.0). Its CommonJS build still hides `Client` from Node 22's named-import detection, so the server loads the client's runtime through a default import; it starts on Node 22 and 24, and CI checks both. Contributed by @insane66613 in #148.
+- Tests: the upload tests pass on Windows, where the temp directory sits under AppData, which the upload path policy refuses. The policy itself is unchanged. Contributed by @insane66613 in #151.
+
 ## [3.5.0] - 2026-11-19
 
 ### Added

@@ -3,7 +3,7 @@ import {
   APIResponseError,
   RequestTimeoutError,
   UnknownHTTPResponseError,
-} from "@notionhq/client";
+} from "../utils/notion-sdk-runtime.js";
 import type { CallContext } from "../services/call-context.js";
 import { isRetryableNotionCode, isRetryableWriteCode } from "../utils/error.js";
 import { readRetryAfterMs } from "../utils/retry-after.js";

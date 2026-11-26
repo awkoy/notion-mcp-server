@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { isFullDatabase } from "@notionhq/client";
+import { isFullDatabase } from "../utils/notion-sdk-runtime.js";
 import { getClient } from "../services/notion.js";
 import { register } from "./registry.js";
 import type { OperationResult } from "./types.js";
 import { tryHandler } from "../utils/handler.js";
 import { slimView, slimPage, truncatedRowWarnings } from "../utils/slim.js";
 import { mapWithConcurrency } from "../dispatch/concurrency.js";
+import { stableStringify } from "../utils/stable-json.js";
 import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
 import {
   asSdk,
@@ -46,6 +47,17 @@ const REQUIRES_CONFIG: Record<string, string> = {
   chart: "chart axes/aggregation configuration",
   map: "a location property configuration",
 };
+
+const DASHBOARD_PLACEMENT = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("new_row"),
+    row_index: z.number().int().min(0).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("existing_row"),
+    row_index: z.number().int().min(0),
+  }).strict(),
+]);
 
 type ClientInstance = Awaited<ReturnType<typeof getClient>>;
 type OpError = { code: string; message: string; fix: string };
@@ -143,6 +155,39 @@ function compileViewFilter(
   }
   if (filter !== undefined) return { ok: true, filter };
   return { ok: true };
+}
+
+// Notion often returns property IDs, not property names, in saved view filters.
+// Data source property IDs may themselves be percent-encoded in API responses.
+// Canonicalize both filters against the same source schema before declaring an
+// exact match, otherwise a safe rerun can spuriously conflict with its own view.
+function canonicalViewFilter(
+  filter: unknown,
+  properties: Record<string, { id?: string }> = {}
+): string {
+  const decodeId = (value: string): string => {
+    try { return decodeURIComponent(value); } catch { return value; }
+  };
+  const aliases = new Map<string, string>();
+  for (const [name, config] of Object.entries(properties)) {
+    const id = decodeId(config.id ?? name);
+    aliases.set(name, id);
+    if (config.id) aliases.set(config.id, id);
+    aliases.set(id, id);
+  }
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        key === "property" && typeof item === "string"
+          ? (aliases.get(item) ?? item)
+          : normalize(item),
+      ])
+    );
+  };
+  return stableStringify(normalize(filter ?? null));
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -369,11 +414,79 @@ register({
 // create_view
 // ──────────────────────────────────────────────────────────────────────────
 
+// Serialize check-then-create Dashboard mutations inside this server process.
+// No local mutex can coordinate separate MCP servers or external Notion writers.
+const dashboardWrites = new Map<string, Promise<void>>();
+// A completed create whose membership readback lagged must not be retried as
+// a fresh create in this process. Keep the ID until a later read confirms it.
+const pendingDashboardWidgetIds = new Map<string, string>();
+
+function serializeDashboardWrite<T>(viewId: string, run: () => Promise<T>): Promise<T> {
+  const previous = dashboardWrites.get(viewId) ?? Promise.resolve();
+  const current = previous.then(run, run);
+  const settled = current.then(() => {}, () => {});
+  dashboardWrites.set(viewId, settled);
+  void settled.then(() => {
+    if (dashboardWrites.get(viewId) === settled) dashboardWrites.delete(viewId);
+  });
+  return current;
+}
+
+// Notion exposes dashboard rows as read-only layout metadata. Never guess
+// row placement or create a duplicate after layout cannot be inspected.
+function checkDashboardCapacity(
+  dashboard: unknown,
+  placement?: z.infer<typeof DASHBOARD_PLACEMENT>
+): OpError | undefined {
+  const view = dashboard as {
+    type?: string;
+    configuration?: { type?: string; rows?: Array<{ widgets?: unknown[] }> };
+  };
+  if (view.type !== "dashboard") return {
+    code: "not_dashboard", message: "view_id does not identify a Dashboard view.",
+    fix: "Pass the id of a view with type dashboard, not a page or table view.",
+  };
+  const rows = view.configuration?.rows;
+  if (!Array.isArray(rows)) return {
+    code: "dashboard_layout_unavailable",
+    message: "Dashboard row layout could not be verified.",
+    fix: "Retrieve the Dashboard with get_view(verbose:true) and check its configuration.rows.",
+  };
+  const total = rows.reduce((count, row) => count + (row.widgets?.length ?? 0), 0);
+  if (total >= 12) return {
+    code: "dashboard_full", message: "Dashboard already has 12 widgets.",
+    fix: "Remove or reorganize widgets in Notion before adding another.",
+  };
+  if (placement?.type === "existing_row") {
+    const row = rows[placement.row_index];
+    if (!row) return {
+      code: "invalid_dashboard_row", message: "Requested Dashboard row does not exist.",
+      fix: `Choose an existing row index 0..${Math.max(0, rows.length - 1)} or new_row.`,
+    };
+    if ((row.widgets?.length ?? 0) >= 4) return {
+      code: "dashboard_row_full", message: "Dashboard row already has 4 widgets.",
+      fix: "Use placement.type=new_row, or another row with space.",
+    };
+  }
+  if (placement?.type === "new_row" && placement.row_index !== undefined &&
+    placement.row_index > rows.length) return {
+    code: "invalid_dashboard_row", message: "New row index is beyond the Dashboard.",
+    fix: `Choose an insertion index from 0..${rows.length}.`,
+  };
+  return undefined;
+}
+
 const CreateViewParams = z.object({
   data_source_id: notionId().optional(),
   database_id: notionId()
     .optional()
     .describe("Single-source databases are auto-resolved; multi-source require data_source_id."),
+  view_id: notionId("view").optional().describe(
+    "Target Dashboard view for a widget. Requires data_source_id; cannot combine with database_id."
+  ),
+  placement: DASHBOARD_PLACEMENT.optional().describe(
+    "Dashboard widget location: new_row (optional row_index) or existing_row (required row_index)."
+  ),
   name: z.string().describe("View name."),
   type: z.enum(VIEW_TYPES).describe("View type."),
   where: WHERE_SCHEMA.optional().describe(
@@ -393,7 +506,7 @@ register({
   access: "write",
   domain: "views",
   description:
-    "Create a database view. table/list/gallery/form need only name+type; calendar/board/timeline/chart/map require `configuration`.",
+    "Create a database view, or add a filtered widget to an existing Dashboard with view_id, data_source_id and optional placement. Honors 4-per-row/12-total limits.",
   batchable: true,
   schema: CreateViewParams,
   example: {
@@ -412,29 +525,46 @@ register({
       /* ignore */
     }
   },
-  handler: tryHandler(async ({ data_source_id, database_id, name, type, where, filter, sorts, configuration, verbose }) => {
+  handler: tryHandler(async ({
+    data_source_id, database_id, view_id, placement,
+    name, type, where, filter, sorts, configuration, verbose,
+  }) => {
+    const run = async (): Promise<OperationResult<unknown>> => {
     if (REQUIRES_CONFIG[type] && configuration === undefined) {
-      return {
-        ok: false,
-        error: {
-          code: "missing_view_config",
-          message: `A ${type} view requires \`configuration\`.`,
-          fix: `Pass \`configuration\` with ${REQUIRES_CONFIG[type]}.`,
-        },
-      };
+      return { ok: false, error: {
+        code: "missing_view_config",
+        message: `A ${type} view requires \`configuration\`.`,
+        fix: `Pass \`configuration\` with ${REQUIRES_CONFIG[type]}.`,
+      } };
     }
-    // Validate inputs (filter shape) before any network call, so bad input
-    // surfaces without a round-trip and regardless of target resolution.
+    if (view_id && (database_id || !data_source_id || type === "dashboard")) {
+      return { ok: false, error: {
+        code: "invalid_dashboard_target",
+        message: "A Dashboard widget needs view_id and data_source_id, no database_id, and cannot itself be a dashboard.",
+        fix: "Use {view_id, data_source_id, name, type:'table'|'list'|...} without database_id.",
+      } };
+    }
+    if (placement && !view_id) return { ok: false, error: {
+      code: "placement_without_dashboard", message: "placement requires view_id.",
+      fix: "Supply the Dashboard view_id or remove placement.",
+    } };
     const compiled = compileViewFilter(where, filter);
     if (!compiled.ok) return { ok: false, error: compiled.error };
     const notion = await getClient();
-    const resolved = await resolveViewTarget(notion, database_id, data_source_id);
+    if (view_id) {
+      const dashboard = await notion.views.retrieve({ view_id });
+      const error = checkDashboardCapacity(dashboard, placement);
+      if (error) return { ok: false, error };
+    }
+    const resolved = view_id
+      ? { data_source_id }
+      : await resolveViewTarget(notion, database_id, data_source_id);
     if (resolved.error) return { ok: false, error: resolved.error };
     const body = {
       data_source_id: resolved.data_source_id,
-      // createView requires database_id in the body (SDK types it optional, but
-      // the API rejects a body without it — confirmed against the live API).
-      database_id: resolved.database_id,
+      // Dashboard widgets are scoped to view_id; ordinary views keep their database_id.
+      ...(view_id ? { view_id } : { database_id: resolved.database_id }),
+      ...(view_id && placement ? { placement } : {}),
       name,
       type,
       ...(compiled.filter !== undefined ? { filter: compiled.filter } : {}),
@@ -443,6 +573,143 @@ register({
     };
     const view = await notion.views.create(asSdk<CreateViewBody>(body));
     return { ok: true, data: slimView(view, verbose ?? false) };
+    };
+    return view_id ? serializeDashboardWrite(view_id, run) : run();
+  }),
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// ensure_dashboard_widget
+// ──────────────────────────────────────────────────────────────────────────
+
+// A single-widget reconciler. Compare actual dashboard membership, source,
+// type and filter before creating. Same-name mismatches are an explicit HOLD.
+const EnsureDashboardWidgetParams = CreateViewParams.pick({
+  view_id: true, data_source_id: true, placement: true,
+  name: true, type: true, where: true, filter: true,
+  sorts: true, configuration: true, verbose: true,
+}).extend({
+  view_id: notionId("view"),
+  data_source_id: notionId(),
+  dry_run: z.boolean().optional().describe("Report create/existing without writing."),
+});
+
+register({
+  name: "ensure_dashboard_widget",
+  access: "write",
+  domain: "views",
+  description: "Idempotently reconcile one named Dashboard widget by membership, data source, type and filter. A mismatched same-name widget is a conflict, not a duplicate opportunity.",
+  batchable: true,
+  schema: EnsureDashboardWidgetParams,
+  example: {
+    view_id: "<dashboard-view-id>", data_source_id: "<data-source-id>",
+    name: "Open Tasks", type: "table", where: { Status: "Open" },
+    dry_run: true,
+  },
+  // No atomic rollback: ensure may reuse an existing widget. Deleting it on
+  // failure of another batch item would be destructive.
+  handler: tryHandler(async ({
+    view_id, data_source_id, placement, name, type, where, filter,
+    sorts, configuration, verbose, dry_run,
+  }): Promise<OperationResult<unknown>> => {
+    const run = async (): Promise<OperationResult<unknown>> => {
+    if (type === "dashboard") return { ok: false, error: {
+      code: "nested_dashboard_not_supported",
+      message: "A Dashboard widget cannot itself be another Dashboard.",
+      fix: "Choose a table, list, chart, board or another widget view type.",
+    } };
+    if (REQUIRES_CONFIG[type] && configuration === undefined) return { ok: false, error: {
+      code: "missing_view_config", message: `A ${type} widget needs configuration.`,
+      fix: `Pass configuration with ${REQUIRES_CONFIG[type]}.`,
+    } };
+    const compiled = compileViewFilter(where, filter);
+    if (!compiled.ok) return { ok: false, error: compiled.error };
+    const notion = await getClient();
+    const dashboard = await notion.views.retrieve({ view_id });
+    const target = dashboard as {
+      type?: string; configuration?: { rows?: Array<{widgets?: Array<{view_id?: string}>}> };
+    };
+    if (target.type !== "dashboard" || !Array.isArray(target.configuration?.rows)) {
+      return { ok: false, error: checkDashboardCapacity(dashboard) ?? {
+        code: "dashboard_layout_unavailable", message: "Dashboard layout not available.",
+        fix: "Inspect get_view(verbose:true).",
+      } };
+    }
+    const ids = target.configuration.rows.flatMap((row) => row.widgets ?? [])
+      .map((widget) => widget.view_id).filter((id): id is string => Boolean(id));
+    const existingViews = await mapWithConcurrency(ids, HYDRATE_CONCURRENCY, async (id) =>
+      notion.views.retrieve({ view_id: id })
+    );
+    const fullViews = existingViews as Array<{
+      id: string; name?: string; type?: string; data_source_id?: string;
+      filter?: unknown; dashboard_view_id?: string;
+    }>;
+    const sameName = fullViews.filter((item) => item.name === name);
+    // A saved filter can refer to an ID while the input used a property name.
+    // Resolve the source schema only when comparing an existing named widget.
+    const needsPropertyMapping = sameName.length > 0 &&
+      (compiled.filter != null || sameName.some((item) => item.filter != null));
+    const source = needsPropertyMapping
+      ? await notion.dataSources.retrieve({ data_source_id })
+      : null;
+    const properties = (source as {
+      properties?: Record<string, { id?: string }>
+    } | null)?.properties ?? {};
+    const expectedFilter = canonicalViewFilter(compiled.filter, properties);
+    const matches = sameName.filter((item) =>
+      item.type === type && item.data_source_id === data_source_id &&
+      canonicalViewFilter(item.filter, properties) === expectedFilter
+    );
+    if (sameName.length > 0 && (sameName.length !== 1 || matches.length !== 1))
+      return { ok: false, error: {
+        code: "dashboard_widget_conflict",
+        message: `Widget "${name}" exists with different source, type or filter (or is duplicated).`,
+        fix: "Inspect the existing widget and reconcile the intended source/filter before creating.",
+      } };
+    const pendingKey = JSON.stringify([view_id, name]);
+    if (matches.length === 1) {
+      pendingDashboardWidgetIds.delete(pendingKey);
+      return {
+        ok: true, data: { action: "existing", widget: slimView(matches[0], verbose ?? false), verified: true },
+      };
+    }
+    const pendingId = pendingDashboardWidgetIds.get(pendingKey);
+    if (pendingId) return { ok: false, error: {
+      code: "dashboard_widget_verification_pending",
+      message: `Widget "${name}" was created as ${pendingId}, but membership is not yet verifiable.`,
+      fix: "Inspect the Dashboard and created widget before attempting another creation.",
+    } };
+    const capacityError = checkDashboardCapacity(dashboard, placement);
+    if (capacityError) return { ok: false, error: capacityError };
+    if (dry_run) return { ok: true, data: {
+      action: "would_create", dashboard_view_id: view_id,
+      data_source_id, name, type, placement: placement ?? { type: "new_row" },
+    } };
+    const created = await notion.views.create(asSdk<CreateViewBody>({
+      view_id, data_source_id, name, type,
+      ...(placement ? { placement } : {}),
+      ...(compiled.filter !== undefined ? { filter: compiled.filter } : {}),
+      ...(sorts ? { sorts } : {}),
+      ...(configuration !== undefined ? { configuration } : {}),
+    }));
+    // Read-after-write verification is best effort; a successful mutation
+    // must NEVER be represented as a failed create merely because reads lag.
+    let verified = false;
+    try {
+      const child = await notion.views.retrieve({ view_id: created.id });
+      const parent = await notion.views.retrieve({ view_id });
+      const p = parent as { configuration?: { rows?: Array<{ widgets?: Array<{view_id?: string}> }> } };
+      verified = (child as {dashboard_view_id?: string}).dashboard_view_id === view_id &&
+        Boolean(p.configuration?.rows?.some((r) => r.widgets?.some((w) => w.view_id === created.id)));
+    } catch { /* The created id remains authoritative; do not retry blindly. */ }
+    if (verified) pendingDashboardWidgetIds.delete(pendingKey);
+    else pendingDashboardWidgetIds.set(pendingKey, created.id);
+    return { ok: true, data: {
+      action: "created", widget: slimView(created, verbose ?? false), verified,
+      ...(verified ? {} : { verification_required: true }),
+    } };
+    };
+    return serializeDashboardWrite(view_id, run);
   }),
 });
 
