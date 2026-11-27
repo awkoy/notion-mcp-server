@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] - 2026-11-27
+
+### Fixed
+
+- **A view filter uses the property's real type.** `create_view` and `ensure_dashboard_widget` used to guess a property's type from a plain `where` value, so `{ Status: "Done" }` on a status property went to Notion as a select filter and Notion refused it with `validation_error`. In `ensure_dashboard_widget` the guess also caused a false `dashboard_widget_conflict`: a widget created with a type hint (`__type: "status"`) did not match the same call sent without one. Both operations now read the data source's schema before compiling `where`, so a plain value gets the declared type. A property name that is not in the data source fails before anything is written, and the error lists the names it has. If the schema can't be read, the call fails with `view_filter_schema_unavailable` and does not guess the type. A Dashboard widget whose data source can't be resolved fails with `missing_target`. Contributed by @insane66613 in #155.
+
+### Changed
+
+- Dev toolchain: `vitest` 5.1.0 (was 5.0.5) (#153). No runtime impact.
+
 ## [3.6.0] - 2026-11-25
 
 ### Added
