@@ -7,7 +7,7 @@ import { tryHandler } from "../utils/handler.js";
 import { slimView, slimPage, truncatedRowWarnings } from "../utils/slim.js";
 import { mapWithConcurrency } from "../dispatch/concurrency.js";
 import { stableStringify } from "../utils/stable-json.js";
-import { WHERE_SCHEMA, compileWhere } from "../schema/filter-dsl.js";
+import { WHERE_SCHEMA, compileWhere, type PropertyTypes } from "../schema/filter-dsl.js";
 import {
   asSdk,
   type CreateViewBody,
@@ -124,24 +124,28 @@ async function resolveViewTarget(
   return { data_source_id: sources[0].id, database_id };
 }
 
-// Compile the typed `where` DSL into a Notion filter, or pass `filter` through.
+// Validate mutually exclusive filter inputs before making any API requests.
+function viewFilterConflict(where: unknown, filter: unknown): OpError | undefined {
+  if (where === undefined || filter === undefined) return undefined;
+  return {
+    code: "filter_conflict",
+    message: "Pass `where` (typed DSL) or `filter` (raw JSON), not both.",
+    fix: "Use exactly one of `where` or `filter`.",
+  };
+}
+
+// Use the data source's property types when compiling `where`, rather than
+// misinferring (for example) a status property's string as a select.
 function compileViewFilter(
   where: unknown,
-  filter: unknown
+  filter: unknown,
+  propertyTypes?: PropertyTypes
 ): { ok: true; filter?: unknown } | { ok: false; error: OpError } {
-  if (where !== undefined && filter !== undefined) {
-    return {
-      ok: false,
-      error: {
-        code: "filter_conflict",
-        message: "Pass `where` (typed DSL) or `filter` (raw JSON), not both.",
-        fix: "Use exactly one of `where` or `filter`.",
-      },
-    };
-  }
+  const conflict = viewFilterConflict(where, filter);
+  if (conflict) return { ok: false, error: conflict };
   if (where !== undefined) {
     try {
-      return { ok: true, filter: compileWhere(where as never) };
+      return { ok: true, filter: compileWhere(where as never, propertyTypes) };
     } catch (err) {
       return {
         ok: false,
@@ -155,6 +159,41 @@ function compileViewFilter(
   }
   if (filter !== undefined) return { ok: true, filter };
   return { ok: true };
+}
+
+// Reject missing/unusable schemas rather than silently falling back to value
+// inference, which is precisely what caused the status/select false conflict.
+type ViewFilterProperties = Record<string, { id?: string; type: string }>;
+async function resolveViewFilterProperties(
+  notion: ClientInstance,
+  dataSourceId: string
+): Promise<{ ok: true; properties: ViewFilterProperties } | { ok: false; error: OpError }> {
+  try {
+    const source = await notion.dataSources.retrieve({ data_source_id: dataSourceId });
+    const properties = (source as { properties?: unknown }).properties;
+    if (
+      !properties || typeof properties !== "object" || Array.isArray(properties) ||
+      Object.keys(properties).length === 0 ||
+      Object.values(properties).some(
+        (item) => !item || typeof item !== "object" || Array.isArray(item) ||
+          typeof (item as { type?: unknown }).type !== "string" ||
+          (item as { type: string }).type.trim().length === 0
+      )
+    ) {
+      return { ok: false, error: {
+        code: "view_filter_schema_unavailable",
+        message: "The data source did not return usable property types.",
+        fix: "Verify the target data_source_id and its schema before retrying.",
+      } };
+    }
+    return { ok: true, properties: properties as ViewFilterProperties };
+  } catch {
+    return { ok: false, error: {
+      code: "view_filter_schema_unavailable",
+      message: "The data source's property types could not be retrieved.",
+      fix: "Verify data source access and retry only after checking its schema.",
+    } };
+  }
 }
 
 // Notion often returns property IDs, not property names, in saved view filters.
@@ -548,8 +587,8 @@ register({
       code: "placement_without_dashboard", message: "placement requires view_id.",
       fix: "Supply the Dashboard view_id or remove placement.",
     } };
-    const compiled = compileViewFilter(where, filter);
-    if (!compiled.ok) return { ok: false, error: compiled.error };
+    const conflict = viewFilterConflict(where, filter);
+    if (conflict) return { ok: false, error: conflict };
     const notion = await getClient();
     if (view_id) {
       const dashboard = await notion.views.retrieve({ view_id });
@@ -560,6 +599,17 @@ register({
       ? { data_source_id }
       : await resolveViewTarget(notion, database_id, data_source_id);
     if (resolved.error) return { ok: false, error: resolved.error };
+    if (!resolved.data_source_id) return { ok: false, error: {
+      code: "missing_target", message: "The view's data source could not be resolved.",
+      fix: "Supply a valid data_source_id.",
+    } };
+    // Ordinary views and Dashboard widgets use the declared property type.
+    const propertyResult = where !== undefined
+      ? await resolveViewFilterProperties(notion, resolved.data_source_id)
+      : { ok: true as const, properties: {} as ViewFilterProperties };
+    if (!propertyResult.ok) return { ok: false, error: propertyResult.error };
+    const compiled = compileViewFilter(where, filter, propertyResult.properties);
+    if (!compiled.ok) return { ok: false, error: compiled.error };
     const body = {
       data_source_id: resolved.data_source_id,
       // Dashboard widgets are scoped to view_id; ordinary views keep their database_id.
@@ -622,8 +672,8 @@ register({
       code: "missing_view_config", message: `A ${type} widget needs configuration.`,
       fix: `Pass configuration with ${REQUIRES_CONFIG[type]}.`,
     } };
-    const compiled = compileViewFilter(where, filter);
-    if (!compiled.ok) return { ok: false, error: compiled.error };
+    const conflict = viewFilterConflict(where, filter);
+    if (conflict) return { ok: false, error: conflict };
     const notion = await getClient();
     const dashboard = await notion.views.retrieve({ view_id });
     const target = dashboard as {
@@ -645,40 +695,51 @@ register({
       filter?: unknown; dashboard_view_id?: string;
     }>;
     const sameName = fullViews.filter((item) => item.name === name);
-    // A saved filter can refer to an ID while the input used a property name.
-    // Resolve the source schema only when comparing an existing named widget.
-    const needsPropertyMapping = sameName.length > 0 &&
-      (compiled.filter != null || sameName.some((item) => item.filter != null));
-    const source = needsPropertyMapping
-      ? await notion.dataSources.retrieve({ data_source_id })
-      : null;
-    const properties = (source as {
-      properties?: Record<string, { id?: string }>
-    } | null)?.properties ?? {};
+    const conflictError: OpError = {
+      code: "dashboard_widget_conflict",
+      message: `Widget "${name}" exists with different source, type or filter (or is duplicated).`,
+      fix: "Inspect the existing widget and reconcile the intended source/filter before creating.",
+    };
+    // Reject objective source/type conflicts and duplicates *before* asking
+    // for a schema. Never interpret a foreign source's filter with ours.
+    if (sameName.length > 1 ||
+      (sameName.length === 1 && (
+        sameName[0].type !== type || sameName[0].data_source_id !== data_source_id
+      ))) return { ok: false, error: conflictError };
+
+    const pendingKey = JSON.stringify([view_id, name]);
+    const pendingId = pendingDashboardWidgetIds.get(pendingKey);
+    const pendingError: OpError | undefined = pendingId ? {
+      code: "dashboard_widget_verification_pending",
+      message: `Widget "${name}" was created as ${pendingId}, but membership is not yet verifiable.`,
+      fix: "Inspect the Dashboard and created widget before attempting another creation.",
+    } : undefined;
+    // If the last create has not appeared in Dashboard membership yet, do not
+    // issue a schema request or another create; preserve the uncertainty HOLD.
+    if (pendingError && sameName.length === 0) return { ok: false, error: pendingError };
+
+    const needsPropertyMapping = sameName.length === 1 &&
+      (filter != null || sameName[0].filter != null);
+    const propertyResult = (where !== undefined || needsPropertyMapping)
+      ? await resolveViewFilterProperties(notion, data_source_id)
+      : { ok: true as const, properties: {} as ViewFilterProperties };
+    if (!propertyResult.ok) return { ok: false, error: pendingError ?? propertyResult.error };
+    const properties = propertyResult.properties;
+    const compiled = compileViewFilter(where, filter, properties);
+    if (!compiled.ok) return { ok: false, error: compiled.error };
     const expectedFilter = canonicalViewFilter(compiled.filter, properties);
     const matches = sameName.filter((item) =>
       item.type === type && item.data_source_id === data_source_id &&
       canonicalViewFilter(item.filter, properties) === expectedFilter
     );
-    if (sameName.length > 0 && (sameName.length !== 1 || matches.length !== 1))
-      return { ok: false, error: {
-        code: "dashboard_widget_conflict",
-        message: `Widget "${name}" exists with different source, type or filter (or is duplicated).`,
-        fix: "Inspect the existing widget and reconcile the intended source/filter before creating.",
-      } };
-    const pendingKey = JSON.stringify([view_id, name]);
+    if (sameName.length === 1 && matches.length === 0)
+      return { ok: false, error: conflictError };
     if (matches.length === 1) {
       pendingDashboardWidgetIds.delete(pendingKey);
       return {
         ok: true, data: { action: "existing", widget: slimView(matches[0], verbose ?? false), verified: true },
       };
     }
-    const pendingId = pendingDashboardWidgetIds.get(pendingKey);
-    if (pendingId) return { ok: false, error: {
-      code: "dashboard_widget_verification_pending",
-      message: `Widget "${name}" was created as ${pendingId}, but membership is not yet verifiable.`,
-      fix: "Inspect the Dashboard and created widget before attempting another creation.",
-    } };
     const capacityError = checkDashboardCapacity(dashboard, placement);
     if (capacityError) return { ok: false, error: capacityError };
     if (dry_run) return { ok: true, data: {
