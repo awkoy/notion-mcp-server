@@ -964,6 +964,8 @@ describe("comment body field-presence safety", () => {
   ] as const)("rejects conflicting present bodies for %s with %j", async (operation, ids, body) => {
     const result = await dispatch(operation, { ...ids, ...body });
     expect(result).toMatchObject({ ok: false });
+    const issues = (result as { error: { issues?: Array<{ message: string }> } }).error.issues ?? [];
+    expect(issues.map((issue) => issue.message)).toContain("Pass exactly one of `text` or `markdown`.");
     expect(notionStub.comments.create).not.toHaveBeenCalled();
   });
 
@@ -973,6 +975,8 @@ describe("comment body field-presence safety", () => {
   ])("rejects conflicting comment update bodies without mutation: %j", async (body) => {
     const result = await dispatch("update_comment", { comment_id: "c-1", ...body });
     expect(result).toMatchObject({ ok: false });
+    const issues = (result as { error: { issues?: Array<{ message: string }> } }).error.issues ?? [];
+    expect(issues.map((issue) => issue.message)).toContain("Pass exactly one of `rich_text` or `markdown`.");
     expect(notionStub.comments.update).not.toHaveBeenCalled();
   });
 
@@ -984,6 +988,40 @@ describe("comment body field-presence safety", () => {
       expect(await dispatch(operation, { ...ids, ...body })).toMatchObject({ ok: false });
     }
     expect(notionStub.comments.create).not.toHaveBeenCalled();
+  });
+
+  it("accepts rich_text: [] alone and forwards it without Markdown", async () => {
+    notionStub.comments.update.mockResolvedValue({ id: "c-1", rich_text: [] });
+    const result = await dispatch("update_comment", { comment_id: "c-1", rich_text: [] });
+    expect(result).toMatchObject({ ok: true });
+    expect(notionStub.comments.update).toHaveBeenCalledTimes(1);
+    expect(notionStub.comments.update).toHaveBeenCalledWith({
+      comment_id: "c-1", rich_text: [],
+    });
+  });
+
+  it.each([
+    ["add_page_comment", { page_id: "p-1" }, { parent: { page_id: "p-1" } }],
+    ["add_discussion_comment", { discussion_id: "d-1" }, { discussion_id: "d-1" }],
+    ["update_comment", { comment_id: "c-1" }, { comment_id: "c-1" }],
+  ] as const)("passes both supported markdown versions for %s", async (operation, ids, expected) => {
+    notionStub.comments.create.mockResolvedValue({ id: "c-1", rich_text: [] });
+    notionStub.comments.update.mockResolvedValue({ id: "c-1", rich_text: [] });
+    for (const version of ["v1", "v2"] as const) {
+      const result = await dispatch(operation, { ...ids, markdown: "**Body**", markdown_version: version });
+      expect(result).toMatchObject({ ok: true });
+      const method = operation === "update_comment"
+        ? notionStub.comments.update : notionStub.comments.create;
+      expect(method).toHaveBeenLastCalledWith({
+        ...expected, markdown: "**Body**", markdown_version: version,
+      });
+    }
+    const method = operation === "update_comment"
+      ? notionStub.comments.update : notionStub.comments.create;
+    expect(method).toHaveBeenCalledTimes(2);
+    const unused = operation === "update_comment"
+      ? notionStub.comments.create : notionStub.comments.update;
+    expect(unused).not.toHaveBeenCalled();
   });
 
   it("preserves empty Markdown rejection for comment update", async () => {
