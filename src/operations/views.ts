@@ -319,7 +319,7 @@ const MAX_ITEM_LIMIT = 1000;
 const QueryViewParams = z.object({
   view_id: notionId("view").describe("View ID. Executes the view's stored filters/sorts server-side."),
   page_size: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
-  paginate: z.boolean().optional().describe("Walk all result pages, up to page_limit rows."),
+  paginate: z.boolean().optional().describe("Walk all result pages up to page_limit rows. Without paginate, only the first page is returned; query jobs and cursors are not reusable."),
   page_limit: z
     .number()
     .int()
@@ -403,15 +403,19 @@ register({
     try {
       if (!paginate) {
         const rows = await hydrateIds(first.results ?? []);
-        const truncated = first.request_status?.type === "incomplete";
+        // This is a one-shot read: the query job is deleted in finally.
+        // Never expose a continuation cursor that has already been invalidated.
+        const truncated =
+          first.request_status?.type === "incomplete" ||
+          Boolean(first.has_more) ||
+          (totalCount !== undefined && totalCount > rows.length);
         return {
           ok: true,
           data: {
             ...(totalCount !== undefined ? { total_count: totalCount } : {}),
             results: rows,
             has_more: first.has_more ?? false,
-            next_cursor: first.next_cursor ?? null,
-            ...(truncated ? { truncated: true } : {}),
+            truncated,
           },
           ...truncatedRowWarnings(rows),
         };

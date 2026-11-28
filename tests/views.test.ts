@@ -165,6 +165,38 @@ describe("query_view", () => {
     expect(calls[0]).toMatchObject({ method: "views.queries.create", args: { view_id: "v-1" } });
   });
 
+  it("does not expose a dead cursor after one-shot query cleanup", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-one-shot", view_id: "v-1",
+      total_count: 3, results: [{ id: "p-1" }],
+      has_more: true, next_cursor: "c-dead",
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual([{ id: "p-1" }]);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.has_more).toBe(true);
+    expect(res.data).not.toHaveProperty("next_cursor");
+    expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-one-shot",
+    });
+  });
+
+  it("marks first-page incomplete without a reusable cursor", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-incomplete", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: false, next_cursor: null,
+      request_status: { type: "incomplete" },
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false,
+    })) as { ok: boolean; data: any };
+    expect(res.data.truncated).toBe(true);
+    expect(res.data).not.toHaveProperty("next_cursor");
+  });
+
   it("returns ids only when hydrate:false (no page retrieves)", async () => {
     notionStub.views.queries.create.mockResolvedValue({
       object: "view_query",
