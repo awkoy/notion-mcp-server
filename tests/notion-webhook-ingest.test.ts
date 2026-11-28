@@ -148,7 +148,7 @@ describe("signed Notion webhook ingestion", () => {
 
   it("refuses directories and hard-linked ledger files", async () => {
     await expect(NotionWebhookInbox.open({ ...config, ledgerPath: dir }))
-      .rejects.toThrow(/regular file/);
+      .rejects.toThrow(/regular file|parent directory permissions/);
     const target = join(dir, "other-owned-file");
     await writeFile(target, "not-a-ledger\n");
     const linked = join(dir, "linked-ledger");
@@ -185,12 +185,15 @@ describe("signed Notion webhook ingestion", () => {
     const file = await open(config.ledgerPath, "w");
     try { await file.truncate(32 * 1024 * 1024 + 1); }
     finally { await file.close(); }
+    // Posix fixtures must meet private-file requirements to reach capacity validation.
+    await chmod(config.ledgerPath, 0o600);
     await expect(NotionWebhookInbox.open(config))
       .rejects.toThrow(/operator review\/reconciliation/);
   });
 
   it("refuses to start with a partial or corrupt durable ledger", async () => {
     await writeFile(config.ledgerPath, '{"id":"broken"', "utf8");
+    await chmod(config.ledgerPath, 0o600);
     await expect(NotionWebhookInbox.open(config)).rejects.toThrow(/reconciliation/);
   });
 
