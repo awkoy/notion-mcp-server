@@ -119,6 +119,31 @@ Both resolvers re-read the object through the Notion API, so a ref stays valid a
 
 `HTTPS_PROXY` / `HTTP_PROXY` (lowercase also accepted) route all outbound traffic through an HTTP(S) proxy: Notion API calls, the downloads in `get_image`, and `upload_file`'s `url` source. For the `url` source the private-address check runs on the server's own DNS answer, since the proxy opens the connection. So the server must be able to resolve names itself; on a network where only the proxy can, set `NOTION_UPLOAD_ALLOW_PRIVATE_URLS=true` to skip the check, or URL uploads fail with `fetch_failed`.
 
+## Bitwarden Secrets Manager (optional)
+
+The server reads `NOTION_TOKEN` from its environment. [Bitwarden Secrets Manager](https://bitwarden.com/help/secrets-manager-cli/) can inject it at startup without a vault SDK or a secret in the MCP client configuration. Create a dedicated project containing only `NOTION_TOKEN` and grant its machine account access to that project only. Supply `BWS_ACCESS_TOKEN` through a trusted launcher, never in command arguments, source files, client JSON or logs.
+
+Install and verify `bws` and the server, then launch the fixed command with your project UUID:
+
+```sh
+bws run --project-id YOUR_PROJECT_UUID --no-inherit-env -- 'notion-mcp-server --require-token'
+```
+
+On Windows, `bws run` uses Windows PowerShell 5.1 by default; add `--shell pwsh` for PowerShell 7. An MCP client can use:
+
+```json
+{
+  "command": "bws",
+  "args": ["run", "--project-id", "YOUR_PROJECT_UUID", "--no-inherit-env", "--", "notion-mcp-server --require-token"]
+}
+```
+
+`--no-inherit-env` prevents fallback to a stale inherited `NOTION_TOKEN`; independently, `bws run` removes `BWS_ACCESS_TOKEN` from the child's environment. BWS injects all secrets in its project, so exclude duplicate secret names, executable-control variables such as PATH or NODE_OPTIONS, and unrelated secrets. Disable secret-dumping logs and trust the launcher and executable.
+
+This example starts stdio and does **not** automatically preserve parent-environment restrictions such as `NOTION_READ_ONLY`, operation allow/block lists or upload-root limits. Carry those settings into the trusted launch configuration before replacing a restricted launcher. Do not use this example to expose HTTP.
+
+If BWS retrieval fails, stop; never fall back to launching outside BWS. `--require-token` rejects missing or blank `NOTION_TOKEN` before starting a transport and rejects extra CLI arguments, but does not verify token validity. Rotate the secret in Bitwarden and restart to pick up its value. Existing launches without `--require-token` are unchanged.
+
 ## Logs
 
 Logs go to stderr and are also sent to the client as MCP `notifications/message` entries (logger `notion-mcp-server`). They show up in the client's own log view, such as VS Code's output channel, MCP Inspector or Claude Desktop's logs, where stderr is usually hidden.

@@ -7,7 +7,7 @@ import { CONFIG } from "./config/index.js";
  * socket or reads NOTION_TOKEN.
  */
 export type CliAction =
-  | { kind: "run" }
+  | { kind: "run"; requireToken?: true }
   | { kind: "version" }
   | { kind: "help" }
   | { kind: "unknown"; option: string };
@@ -20,14 +20,18 @@ export type CliReply = {
 
 /**
  * The server is configured entirely through environment variables; the only
- * arguments it takes are informational, so the first one decides and there is
- * nothing to combine. Anything else — a typo, a stray positional — is an
- * unknown option rather than something to ignore, because a server that
- * silently starts on stdin after `--verison` is worse than one that says no.
+ * arguments are informational or opt in to strict token presence. Each
+ * mode accepts exactly one flag, so additional positional arguments or typos
+ * cannot silently start a server with a different configuration.
  */
 export function parseCliArgs(argv: readonly string[]): CliAction {
   const first = argv[0];
   if (first === undefined) return { kind: "run" };
+  // In particular, "--require-token --verison" must not silently start
+  // a server and ignore the typo after the guard.
+  if (argv.length > 1 && ["--require-token", "--version", "-v", "--help", "-h"].includes(first))
+    return { kind: "unknown", option: argv[1] };
+  if (first === "--require-token") return { kind: "run", requireToken: true };
   if (first === "--version" || first === "-v") return { kind: "version" };
   if (first === "--help" || first === "-h") return { kind: "help" };
   return { kind: "unknown", option: first };
@@ -45,11 +49,12 @@ const REPO = CONFIG.serverUrl;
  * tests/cli.test.ts (every variable in the README must appear here).
  */
 export function usageText(): string {
-  return `Usage: notion-mcp-server [--version | --help]
+  return `Usage: notion-mcp-server [--version | --help | --require-token]
 
 Notion MCP server for Claude, Cursor, VS Code and any other MCP client.
 Everything is configured through environment variables; the only command-line
-options are the two above.
+options are the three above. --require-token exits before starting a transport
+if NOTION_TOKEN is missing or blank (for external secret-manager launchers).
 
 Transports:
   stdio (default)   MCP over stdin/stdout — what \`claude mcp add\`, Cursor and

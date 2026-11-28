@@ -117,6 +117,7 @@ To chat with Notion in claude.ai or ChatGPT, Notion's hosted connector is one cl
 ### Token: PAT or internal integration
 
 Both go in the same `NOTION_TOKEN` env var; only where you get them differs.
+For external secret storage, see [Bitwarden Secrets Manager startup injection](./docs/configuration.md#bitwarden-secrets-manager-optional).
 
 | | **Personal Access Token** (recommended) | **Internal Integration** (scoped) |
 | --- | --- | --- |
