@@ -84,12 +84,12 @@ register({
 const AddPageCommentParams = z
   .object({
     page_id: notionId(),
-    text: z.string().optional().describe("Plain-text comment body."),
-    markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    text: z.string().min(1).optional().describe("Plain-text comment body."),
+    markdown: z.string().min(1).optional().describe("Comment body as markdown. Mutually exclusive with text."),
     markdown_version: z.enum(["v1", "v2"]).optional().describe("With markdown: select Notion-flavored Markdown v2; omit for default."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.text) !== Boolean(v.markdown), {
+  .refine((v) => (v.text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `text` or `markdown`.",
   })
   .refine((v) => !v.markdown_version || v.markdown !== undefined, {
@@ -127,12 +127,12 @@ register({
 const AddDiscussionCommentParams = z
   .object({
     discussion_id: notionId(),
-    text: z.string().optional(),
-    markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    text: z.string().min(1).optional(),
+    markdown: z.string().min(1).optional().describe("Comment body as markdown. Mutually exclusive with text."),
     markdown_version: z.enum(["v1", "v2"]).optional().describe("With markdown: select Notion-flavored Markdown v2; omit for default."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.text) !== Boolean(v.markdown), {
+  .refine((v) => (v.text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `text` or `markdown`.",
   })
   .refine((v) => !v.markdown_version || v.markdown !== undefined, {
@@ -189,11 +189,11 @@ const UpdateCommentParams = z
   .object({
     comment_id: notionId(),
     rich_text: z.array(z.unknown()).optional(),
-    markdown: z.string().optional(),
+    markdown: z.string().min(1).optional(),
     markdown_version: z.enum(["v1", "v2"]).optional().describe("Select Notion-flavored Markdown v2 when markdown is provided."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.rich_text) !== Boolean(v.markdown), {
+  .refine((v) => (v.rich_text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `rich_text` or `markdown`.",
   })
   .refine((v) => !v.markdown_version || v.markdown !== undefined, {

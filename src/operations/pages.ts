@@ -249,7 +249,7 @@ register({
     // Omitted markdown_version preserves the existing block conversion behavior.
     const children = params.template || params.markdown_version !== undefined
       ? undefined
-      : params.markdown
+      : params.markdown !== undefined
         ? parseMarkdownToBlocks(params.markdown)
         : params.children;
 

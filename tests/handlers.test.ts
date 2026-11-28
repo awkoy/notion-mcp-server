@@ -955,6 +955,44 @@ describe("update_comment", () => {
   });
 });
 
+describe("comment body field-presence safety", () => {
+  it.each([
+    ["add_page_comment", { page_id: "p-1" }, { text: "", markdown: "replacement" }],
+    ["add_page_comment", { page_id: "p-1" }, { text: "intended text", markdown: "" }],
+    ["add_discussion_comment", { discussion_id: "d-1" }, { text: "", markdown: "replacement" }],
+    ["add_discussion_comment", { discussion_id: "d-1" }, { text: "intended text", markdown: "" }],
+  ] as const)("rejects conflicting present bodies for %s with %j", async (operation, ids, body) => {
+    const result = await dispatch(operation, { ...ids, ...body });
+    expect(result).toMatchObject({ ok: false });
+    expect(notionStub.comments.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { rich_text: [], markdown: "" },
+    { rich_text: [{ type: "text", text: { content: "Keep" } }], markdown: "" },
+  ])("rejects conflicting comment update bodies without mutation: %j", async (body) => {
+    const result = await dispatch("update_comment", { comment_id: "c-1", ...body });
+    expect(result).toMatchObject({ ok: false });
+    expect(notionStub.comments.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["add_page_comment", { page_id: "p-1" }],
+    ["add_discussion_comment", { discussion_id: "d-1" }],
+  ] as const)("preserves empty-content rejection for %s", async (operation, ids) => {
+    for (const body of [{ text: "" }, { markdown: "" }]) {
+      expect(await dispatch(operation, { ...ids, ...body })).toMatchObject({ ok: false });
+    }
+    expect(notionStub.comments.create).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty Markdown rejection for comment update", async () => {
+    expect(await dispatch("update_comment", { comment_id: "c-1", markdown: "" }))
+      .toMatchObject({ ok: false });
+    expect(notionStub.comments.update).not.toHaveBeenCalled();
+  });
+});
+
 describe("delete_comment", () => {
   it("calls comments.delete and returns ok", async () => {
     notionStub.comments.delete.mockResolvedValue(undefined);
