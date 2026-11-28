@@ -1,4 +1,4 @@
-import { open, type FileHandle } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { openPrivateLedger, readBoundedLedgerText } from "./notion-webhook-ingest.js";
 import { isAbsolute } from "node:path";
 import type {
@@ -106,7 +106,7 @@ export class NotionWebhookReconciler {
       throw new Error("Invalid webhook reconciliation budget");
     const task = this.active.then(async () => {
       if (this.failedWrite) throw new Error("Webhook reconcile write is uncertain");
-      const incomingFile = await open(this.config.ledgerPath, "r");
+      const incomingFile = await openPrivateLedger(this.config.ledgerPath, "read");
       let incoming: unknown[];
       try { incoming = readLines(await readBoundedLedgerText(incomingFile)); }
       finally { await incomingFile.close(); }

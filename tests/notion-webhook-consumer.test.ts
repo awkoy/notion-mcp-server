@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { chmod, link, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -129,10 +129,62 @@ describe("account-bound Notion webhook reconciliation", () => {
     } finally { await worker.close(); }
   });
 
+  it("rejects a source ledger hardlink before reading fabricated events", async () => {
+    const forged = join(dir, "untrusted-foreign-ledger");
+    const event = {
+      id: "fabricated", type: "page.created",
+      timestamp: "2026-11-26T14:30:00Z",
+      page_id: "55555555-5555-4555-8555-555555555555",
+      subscription_id: subscription,
+      integration_id: config.bindings[0].integrationId,
+      workspace_id: config.bindings[0].workspaceId,
+      account_id: config.bindings[0].accountId,
+      state: "pending_refetch",
+    };
+    await writeFile(forged, JSON.stringify(event) + "\n");
+    await chmod(forged, 0o600);
+    await link(forged, config.ledgerPath);
+    const worker = await NotionWebhookReconciler.open(config, resultPath);
+    const reader = vi.fn(async (_binding, pageId) => ({ id: pageId }));
+    try {
+      await expect(worker.reconcile(reader)).rejects.toThrow(/ledger|link|metadata|operator review/i);
+      expect(reader).not.toHaveBeenCalled();
+    } finally { await worker.close(); }
+  });
+
+  it("rejects a source ledger symlink before reading fabricated events", async () => {
+    const target = join(dir, "untrusted-source");
+    const event = {
+      id: "fabricated", type: "page.created",
+      timestamp: "2026-11-26T14:30:00Z",
+      page_id: "55555555-5555-4555-8555-555555555555",
+      subscription_id: subscription,
+      integration_id: config.bindings[0].integrationId,
+      workspace_id: config.bindings[0].workspaceId,
+      account_id: config.bindings[0].accountId,
+      state: "pending_refetch",
+    };
+    await writeFile(target, JSON.stringify(event) + "\n");
+    await chmod(target, 0o600);
+    try { await symlink(target, config.ledgerPath, "file"); }
+    catch (error) {
+      if (["EPERM", "ENOTSUP", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
+        return; // Some Windows accounts cannot create symbolic links
+      throw error;
+    }
+    const worker = await NotionWebhookReconciler.open(config, resultPath);
+    const reader = vi.fn(async (_binding, pageId) => ({ id: pageId }));
+    try {
+      await expect(worker.reconcile(reader)).rejects.toThrow(/ledger|link|metadata|operator review/i);
+      expect(reader).not.toHaveBeenCalled();
+    } finally { await worker.close(); }
+  });
+
   it("refuses an over-capacity incoming ledger before processing events", async () => {
     const incoming = await open(config.ledgerPath, "w");
     try { await incoming.truncate(32 * 1024 * 1024 + 1); }
     finally { await incoming.close(); }
+    await chmod(config.ledgerPath, 0o600);
     const worker = await NotionWebhookReconciler.open(config, resultPath);
     const fetcher = vi.fn();
     try {

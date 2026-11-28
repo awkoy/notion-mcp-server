@@ -94,7 +94,9 @@ export async function readWebhookBytes(req: http.IncomingMessage): Promise<Buffe
  * Linux/macOS open uses O_NOFOLLOW to close the final-component swap race.
  * Windows also needs operator-owned ACL validation at deployment time.
  */
-export async function openPrivateLedger(path: string): Promise<FileHandle> {
+export async function openPrivateLedger(
+  path: string, access: "append" | "read" = "append"
+): Promise<FileHandle> {
   if (!isAbsolute(path)) throw new Error("Webhook ledger requires an absolute path");
   let parent = dirname(path);
   while (true) {
@@ -117,7 +119,9 @@ export async function openPrivateLedger(path: string): Promise<FileHandle> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const flags = constants.O_RDWR | constants.O_APPEND | constants.O_CREAT |
+  const flags = (access === "read"
+    ? constants.O_RDONLY
+    : constants.O_RDWR | constants.O_APPEND | constants.O_CREAT) |
     (constants.O_NOFOLLOW ?? 0);
   const handle = await open(path, flags, 0o600);
   try {
