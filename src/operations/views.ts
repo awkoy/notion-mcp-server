@@ -318,10 +318,11 @@ const MAX_ITEM_LIMIT = 1000;
 
 const QueryViewParams = z.object({
   view_id: notionId("view").describe("View ID. Executes the view's stored filters/sorts server-side."),
-  page_size: z.number().min(1).max(MAX_PAGE_SIZE).optional(),
+  page_size: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
   paginate: z.boolean().optional().describe("Walk all result pages, up to page_limit rows."),
   page_limit: z
     .number()
+    .int()
     .min(1)
     .max(MAX_ITEM_LIMIT)
     .optional()
@@ -361,7 +362,11 @@ register({
     verbose,
   }): Promise<OperationResult<unknown>> => {
     const notion = await getClient();
-    const pageSize = page_size ?? DEFAULT_PAGE_SIZE;
+    // Bound each API page by the caller's item limit to avoid fetching rows
+    // that cannot be returned, while retaining an overflow guard below.
+    const pageSize = paginate
+      ? Math.min(page_size ?? DEFAULT_PAGE_SIZE, page_limit ?? DEFAULT_ITEM_LIMIT)
+      : page_size ?? DEFAULT_PAGE_SIZE;
     const doHydrate = hydrate !== false;
 
     const hydrateIds = async (refs: Array<{ id: string }>) => {
@@ -383,69 +388,88 @@ register({
     const queryId = first.id;
     const totalCount = first.total_count;
 
-    if (!paginate) {
-      const rows = await hydrateIds(first.results ?? []);
-      const truncated = first.request_status?.type === "incomplete";
+    // Notion creates a server-side view-query job even for the first page.
+    // Release it for every exit path, including a failed follow-up page.
+    const cleanupQuery = async () => {
+      try {
+        await notion.views.queries.delete(
+          asSdk<DeleteViewQueryBody>({ view_id, query_id: queryId })
+        );
+      } catch {
+        /* Best-effort cleanup must not mask the original query result/error. */
+      }
+    };
+
+    try {
+      if (!paginate) {
+        const rows = await hydrateIds(first.results ?? []);
+        const truncated = first.request_status?.type === "incomplete";
+        return {
+          ok: true,
+          data: {
+            ...(totalCount !== undefined ? { total_count: totalCount } : {}),
+            results: rows,
+            has_more: first.has_more ?? false,
+            next_cursor: first.next_cursor ?? null,
+            ...(truncated ? { truncated: true } : {}),
+          },
+          ...truncatedRowWarnings(rows),
+        };
+      }
+
+      // paginate: accumulate refs across pages up to page_limit, then hydrate once.
+      const limit = page_limit ?? DEFAULT_ITEM_LIMIT;
+      const refs: Array<{ id: string }> = [];
+      let page: ViewQueryPage = first;
+      let pagesWalked = 1;
+      let incomplete = first.request_status?.type === "incomplete";
+      // has_more can be false even when page_limit cuts through the final page.
+      let cutWithinPage = false;
+      for (const r of page.results ?? []) {
+        if (refs.length >= limit) {
+          cutWithinPage = true;
+          break;
+        }
+        refs.push({ id: r.id });
+      }
+      while (refs.length < limit && page.has_more && page.next_cursor) {
+        page = (await notion.views.queries.results(
+          asSdk<GetViewQueryResultsBody>({
+            view_id,
+            query_id: queryId,
+            start_cursor: page.next_cursor,
+            page_size: Math.min(pageSize, limit - refs.length),
+          })
+        )) as unknown as ViewQueryPage;
+        pagesWalked += 1;
+        if (page.request_status?.type === "incomplete") incomplete = true;
+        for (const r of page.results ?? []) {
+          if (refs.length >= limit) {
+            cutWithinPage = true;
+            break;
+          }
+          refs.push({ id: r.id });
+        }
+      }
+      const rows = await hydrateIds(refs);
+      const truncated =
+        incomplete ||
+        cutWithinPage ||
+        Boolean(page.has_more) ||
+        (totalCount !== undefined && totalCount > refs.length);
       return {
         ok: true,
         data: {
           ...(totalCount !== undefined ? { total_count: totalCount } : {}),
           results: rows,
-          has_more: first.has_more ?? false,
-          next_cursor: first.next_cursor ?? null,
-          ...(truncated ? { truncated: true } : {}),
+          truncated,
+          pages_walked: pagesWalked,
         },
         ...truncatedRowWarnings(rows),
       };
+    } finally {
+      await cleanupQuery();
     }
-
-    // paginate: accumulate refs across pages up to page_limit, then hydrate once.
-    const limit = page_limit ?? DEFAULT_ITEM_LIMIT;
-    const refs: Array<{ id: string }> = [];
-    let page: ViewQueryPage = first;
-    let pagesWalked = 1;
-    let incomplete = first.request_status?.type === "incomplete";
-    for (const r of page.results ?? []) {
-      if (refs.length >= limit) break;
-      refs.push({ id: r.id });
-    }
-    while (refs.length < limit && page.has_more && page.next_cursor) {
-      page = (await notion.views.queries.results(
-        asSdk<GetViewQueryResultsBody>({
-          view_id,
-          query_id: queryId,
-          start_cursor: page.next_cursor,
-          page_size: pageSize,
-        })
-      )) as unknown as ViewQueryPage;
-      pagesWalked += 1;
-      if (page.request_status?.type === "incomplete") incomplete = true;
-      for (const r of page.results ?? []) {
-        if (refs.length >= limit) break;
-        refs.push({ id: r.id });
-      }
-    }
-    // Best-effort cleanup of the server-side query job.
-    try {
-      await notion.views.queries.delete(
-        asSdk<DeleteViewQueryBody>({ view_id, query_id: queryId })
-      );
-    } catch {
-      /* ignore cleanup failures */
-    }
-
-    const rows = await hydrateIds(refs);
-    const truncated = incomplete || (Boolean(page.has_more) && refs.length >= limit);
-    return {
-      ok: true,
-      data: {
-        ...(totalCount !== undefined ? { total_count: totalCount } : {}),
-        results: rows,
-        truncated,
-        pages_walked: pagesWalked,
-      },
-      ...truncatedRowWarnings(rows),
-    };
   }),
 });
 
