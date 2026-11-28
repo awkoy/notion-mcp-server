@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { chmod, link, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -180,6 +180,16 @@ describe("signed Notion webhook ingestion", () => {
     expect(await readFile(target, "utf8")).toBe("private\n");
   });
 
+  it.skipIf(process.platform !== "win32")("rejects a Windows directory junction in the ledger path", async () => {
+    const realParent = join(dir, "real-ledger-parent");
+    const alias = join(dir, "junction-ledger-parent");
+    await mkdir(realParent);
+    await symlink(realParent, alias, "junction");
+    const candidate = { ...config, ledgerPath: join(alias, "receipts.jsonl") };
+    await expect(NotionWebhookInbox.open(candidate)).rejects.toThrow(/real directory|link|reparse/i);
+    await expect(readFile(join(realParent, "receipts.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects an oversized ledger before reading and parsing it", async () => {
     const { open } = await import("node:fs/promises");
     const file = await open(config.ledgerPath, "w");
@@ -232,6 +242,25 @@ describe("signed Notion webhook ingestion", () => {
       expect(JSON.stringify(first)).not.toContain("synthetic-challenge-value");
       expect(await readFile(bootstrapFile, "utf8")).toBe("synthetic-challenge-value");
       expect(await inbox.accept(route, raw)).toMatchObject({ status: 409 });
+    } finally { await inbox.close(); }
+  });
+
+  it("keeps the first unsigned challenge provisional and never auto-activates it", async () => {
+    const bootstrapFile = join(dir, "operator-review-only");
+    const boot: NotionWebhookConfig = {
+      ...config, bindings: [{ ...config.bindings[0], verificationToken: undefined, bootstrapFile }],
+    };
+    const inbox = await NotionWebhookInbox.open(boot);
+    try {
+      const spoofed = Buffer.from(JSON.stringify({ verification_token: "synthetic-spoof" }));
+      const authentic = Buffer.from(JSON.stringify({ verification_token: "synthetic-legitimate" }));
+      expect(await inbox.accept(route, spoofed)).toMatchObject({ status: 202 });
+      expect(await inbox.accept(route, authentic)).toMatchObject({ status: 409 });
+      const raw = event("must-not-be-accepted");
+      expect(await inbox.accept(route, Buffer.from(raw), signature(raw, "synthetic-spoof")))
+        .toMatchObject({ status: 403 });
+      expect(await readFile(bootstrapFile, "utf8")).toBe("synthetic-spoof");
+      expect(await readFile(config.ledgerPath, "utf8")).toBe("");
     } finally { await inbox.close(); }
   });
 

@@ -65,6 +65,18 @@ nonpublic based on current API readback; do not infer from the webhook.
 This consumer and end-to-end public HTTPS subscription QA are required
 before production activation. No new orchestrator is permitted.
 
+## Windows-only ACL and reparse preflight
+
+After staging **both existing** incoming and reconciliation JSONL files under a protected, service-owned directory, run this read-only preflight as the **same Windows identity that launches the affected Notion MCP service**:
+
+```powershell
+& .\scripts\verify-notion-webhook-windows-acl.ps1 `
+  -LedgerPaths @('C:\private-notion\incoming.jsonl', 'C:\private-notion\readbacks.jsonl') `
+  -ExpectedServiceSid 'S-1-5-21-REPLACE-WITH-VERIFIED-SERVICE-SID'
+```
+
+The script refuses missing files, an unexpected service SID, any reparse component in either path, untrusted owners or writable ACL grants on each ledger file and its **immediate parent**. It is read-only and has been exercised on Windows against a hardened temporary fixture and an intentionally writable fixture. It does **not** verify ancestors' effective delete/rename rights, hard-link count, future ACL changes, public HTTPS routing, the actual subscription, or the native Notion handshake. The existing Node ledger opener checks hard-link count separately. Independently inspect protected ancestor ownership/rights and actual runner identity; retain the release HOLD until those production checks and the signed native-endpoint acceptance pass. Never treat a preflight test on temporary files as production certification.
+
 ## Limits and rollback
 
 Max request body 256 KiB; ledger 50,000 event identities or 32 MiB at startup.
