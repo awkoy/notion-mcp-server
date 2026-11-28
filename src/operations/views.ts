@@ -349,7 +349,7 @@ register({
   access: "read",
   domain: "views",
   description:
-    "Query a view: runs its stored filters/sorts and returns the matching rows. Hydrates row data by default.",
+    "Query a view using its stored filters/sorts. One-shot has_more reports upstream omitted rows, not an actionable cursor; continuation_available is always false after query-job cleanup. Hydrates rows by default.",
   batchable: false,
   schema: QueryViewParams,
   example: { view_id: "<view-id>", page_size: 50 },
@@ -405,17 +405,20 @@ register({
         const rows = await hydrateIds(first.results ?? []);
         // This is a one-shot read: the query job is deleted in finally.
         // Never expose a continuation cursor that has already been invalidated.
-        const truncated =
-          first.request_status?.type === "incomplete" ||
-          Boolean(first.has_more) ||
+        const incomplete = first.request_status?.type === "incomplete";
+        const truncated = incomplete || Boolean(first.has_more) ||
           (totalCount !== undefined && totalCount > rows.length);
         return {
           ok: true,
           data: {
             ...(totalCount !== undefined ? { total_count: totalCount } : {}),
             results: rows,
-            has_more: first.has_more ?? false,
+            has_more: first.has_more ?? false, // informational, not a reusable continuation
+            continuation_available: false,
             truncated,
+            ...(incomplete ? { incomplete: true } : {}),
+            ...(incomplete && first.request_status?.incomplete_reason
+              ? { incomplete_reason: first.request_status.incomplete_reason } : {}),
           },
           ...truncatedRowWarnings(rows),
         };
@@ -427,6 +430,9 @@ register({
       let page: ViewQueryPage = first;
       let pagesWalked = 1;
       let incomplete = first.request_status?.type === "incomplete";
+      const incompleteReasons = new Set<string>();
+      if (incomplete && first.request_status?.incomplete_reason)
+        incompleteReasons.add(first.request_status.incomplete_reason);
       // has_more can be false even when page_limit cuts through the final page.
       let cutWithinPage = false;
       for (const r of page.results ?? []) {
@@ -446,7 +452,11 @@ register({
           })
         )) as unknown as ViewQueryPage;
         pagesWalked += 1;
-        if (page.request_status?.type === "incomplete") incomplete = true;
+        if (page.request_status?.type === "incomplete") {
+          incomplete = true;
+          if (page.request_status.incomplete_reason)
+            incompleteReasons.add(page.request_status.incomplete_reason);
+        }
         for (const r of page.results ?? []) {
           if (refs.length >= limit) {
             cutWithinPage = true;
@@ -468,6 +478,9 @@ register({
           results: rows,
           truncated,
           pages_walked: pagesWalked,
+          continuation_available: false,
+          ...(incomplete ? { incomplete: true } : {}),
+          ...(incompleteReasons.size ? { incomplete_reasons: [...incompleteReasons] } : {}),
         },
         ...truncatedRowWarnings(rows),
       };

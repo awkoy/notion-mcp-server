@@ -177,7 +177,8 @@ describe("query_view", () => {
     expect(res.ok).toBe(true);
     expect(res.data.results).toEqual([{ id: "p-1" }]);
     expect(res.data.truncated).toBe(true);
-    expect(res.data.has_more).toBe(true);
+    expect(res.data.has_more).toBe(true); // informational: upstream rows remain
+    expect(res.data.continuation_available).toBe(false);
     expect(res.data).not.toHaveProperty("next_cursor");
     expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
       view_id: "v-1", query_id: "q-one-shot",
@@ -188,12 +189,14 @@ describe("query_view", () => {
     notionStub.views.queries.create.mockResolvedValue({
       object: "view_query", id: "q-incomplete", view_id: "v-1",
       results: [{ id: "p-1" }], has_more: false, next_cursor: null,
-      request_status: { type: "incomplete" },
+      request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
     });
     const res = (await dispatch("query_view", {
       view_id: "v-1", hydrate: false,
     })) as { ok: boolean; data: any };
     expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBe(true);
+    expect(res.data.incomplete_reason).toBe("query_result_limit_reached");
     expect(res.data).not.toHaveProperty("next_cursor");
   });
 
@@ -263,6 +266,29 @@ describe("query_view", () => {
     expect(notionStub.views.queries.delete).toHaveBeenCalled();
   });
 
+  it("preserves distinct incomplete reasons across paginated response pages", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-reasons", view_id: "v-1", total_count: 2,
+      results: [{ id: "p-1" }], has_more: true, next_cursor: "c1",
+      request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
+    });
+    notionStub.views.queries.results.mockResolvedValue({
+      object: "view_query", id: "q-reasons", view_id: "v-1",
+      results: [{ id: "p-2" }], has_more: false, next_cursor: null,
+      request_status: { type: "incomplete", incomplete_reason: "provider_timeout" },
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBe(true);
+    expect(res.data.incomplete_reasons).toEqual([
+      "query_result_limit_reached", "provider_timeout",
+    ]);
+    expect(res.data.continuation_available).toBe(false);
+  });
+
   it("marks truncated when page_limit cuts a terminal response page", async () => {
     notionStub.views.queries.create.mockResolvedValue({
       object: "view_query", id: "q-limit", view_id: "v-1",
@@ -276,6 +302,7 @@ describe("query_view", () => {
     expect(res.ok).toBe(true);
     expect(res.data.results).toEqual([{ id: "p-1" }, { id: "p-2" }]);
     expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBeUndefined(); // caller limit alone is not provider incompleteness
   });
 
   it("does not mark an exact-limit terminal page as truncated", async () => {
