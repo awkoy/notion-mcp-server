@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -146,9 +146,74 @@ describe("signed Notion webhook ingestion", () => {
     } finally { await inbox.close(); }
   });
 
+  it("refuses directories and hard-linked ledger files", async () => {
+    await expect(NotionWebhookInbox.open({ ...config, ledgerPath: dir }))
+      .rejects.toThrow(/regular file/);
+    const target = join(dir, "other-owned-file");
+    await writeFile(target, "not-a-ledger\n");
+    const linked = join(dir, "linked-ledger");
+    await link(target, linked);
+    await expect(NotionWebhookInbox.open({ ...config, ledgerPath: linked }))
+      .rejects.toThrow(/metadata/);
+    expect(await readFile(target, "utf8")).toBe("not-a-ledger\n");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a writable ledger parent directory on POSIX", async () => {
+      await chmod(dir, 0o777);
+      await expect(NotionWebhookInbox.open(config)).rejects.toThrow(/permissions/);
+    }
+  );
+
+  it("refuses a ledger symlink without changing its target", async () => {
+    const target = join(dir, "target-private-file");
+    const alias = join(dir, "symlink-ledger");
+    await writeFile(target, "private\n");
+    try { await symlink(target, alias, "file"); }
+    catch (error) {
+      if (["EPERM", "ENOTSUP", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
+        return; // Windows installations without symlink creation rights
+      throw error;
+    }
+    await expect(NotionWebhookInbox.open({ ...config, ledgerPath: alias }))
+      .rejects.toThrow(/link/);
+    expect(await readFile(target, "utf8")).toBe("private\n");
+  });
+
+  it("rejects an oversized ledger before reading and parsing it", async () => {
+    const { open } = await import("node:fs/promises");
+    const file = await open(config.ledgerPath, "w");
+    try { await file.truncate(32 * 1024 * 1024 + 1); }
+    finally { await file.close(); }
+    await expect(NotionWebhookInbox.open(config))
+      .rejects.toThrow(/operator review\/reconciliation/);
+  });
+
   it("refuses to start with a partial or corrupt durable ledger", async () => {
     await writeFile(config.ledgerPath, '{"id":"broken"', "utf8");
     await expect(NotionWebhookInbox.open(config)).rejects.toThrow(/reconciliation/);
+  });
+
+  it("rejects malformed or extended unsigned bootstrap envelopes", async () => {
+    const bootstrapFile = join(dir, "bootstrap-provisional");
+    const boot: NotionWebhookConfig = {
+      ...config, bindings: [{ ...config.bindings[0], verificationToken: undefined, bootstrapFile }],
+    };
+    const inbox = await NotionWebhookInbox.open(boot);
+    try {
+      const invalid = [
+        { verification_token: "synthetic-token", extra: "untrusted" },
+        { verification_token: "" },
+        { verification_token: "x".repeat(1025) },
+        { verification_token: 123 },
+      ];
+      for (const body of invalid) {
+        expect(await inbox.accept(route, Buffer.from(JSON.stringify(body))))
+          .toMatchObject({ status: 400 });
+      }
+      const { stat } = await import("node:fs/promises");
+      await expect(stat(bootstrapFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await inbox.close(); }
   });
 
   it("captures the one-time subscription challenge privately without responding with the token", async () => {

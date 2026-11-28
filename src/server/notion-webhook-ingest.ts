@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { open, type FileHandle } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { constants } from "node:fs";
+import { lstat, open, type FileHandle } from "node:fs/promises";
+import { dirname, isAbsolute, parse } from "node:path";
 import type http from "node:http";
 
 // SanityCloud's existing NotionAwkoy HTTP listener accepts signed events.
@@ -89,6 +90,72 @@ export async function readWebhookBytes(req: http.IncomingMessage): Promise<Buffe
   return Buffer.concat(chunks);
 }
 
+/** Reject obvious symlinks/reparse points and unsafe existing ledgers before append.
+ * Linux/macOS open uses O_NOFOLLOW to close the final-component swap race.
+ * Windows also needs operator-owned ACL validation at deployment time.
+ */
+export async function openPrivateLedger(path: string): Promise<FileHandle> {
+  if (!isAbsolute(path)) throw new Error("Webhook ledger requires an absolute path");
+  let parent = dirname(path);
+  while (true) {
+    const meta = await lstat(parent);
+    if (!meta.isDirectory() || meta.isSymbolicLink())
+      throw new Error("Webhook ledger parent must be a real directory");
+    if (parent === dirname(path) && process.platform !== "win32" &&
+        ((meta.mode & 0o022) !== 0 ||
+         (process.getuid && meta.uid !== process.getuid())))
+      throw new Error("Webhook ledger parent directory permissions are unsafe");
+    const next = dirname(parent);
+    if (next === parent || parent === parse(parent).root) break;
+    parent = next;
+  }
+  let previous: Awaited<ReturnType<typeof lstat>> | undefined;
+  try {
+    previous = await lstat(path);
+    if (!previous.isFile() || previous.isSymbolicLink())
+      throw new Error("Webhook ledger must be a regular file, not a link");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const flags = constants.O_RDWR | constants.O_APPEND | constants.O_CREAT |
+    (constants.O_NOFOLLOW ?? 0);
+  const handle = await open(path, flags, 0o600);
+  try {
+    const current = await handle.stat();
+    const after = await lstat(path);
+    if (!current.isFile() || !after.isFile() || after.isSymbolicLink() ||
+        current.dev !== after.dev || current.ino !== after.ino ||
+        (previous && (previous.dev !== current.dev || previous.ino !== current.ino)) ||
+        current.nlink > 1 ||
+        (process.platform !== "win32" &&
+         ((current.mode & 0o077) !== 0 ||
+          (process.getuid && current.uid !== process.getuid()))))
+      throw new Error("Webhook ledger metadata requires operator review");
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/** Bound reads of existing ledgers before allocating/parsing; fail closed on concurrent growth. */
+export async function readBoundedLedgerText(file: FileHandle): Promise<string> {
+  const maxBytes = 32 * 1024 * 1024;
+  const stat = await file.stat();
+  if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size > maxBytes)
+    throw new Error("Webhook ledger requires operator review/reconciliation");
+  const bytes = Buffer.alloc(stat.size + 1);
+  let count = 0;
+  while (count < bytes.length) {
+    const step = await file.read(bytes, count, bytes.length - count, count);
+    if (!step.bytesRead) break;
+    count += step.bytesRead;
+  }
+  if (count !== stat.size)
+    throw new Error("Webhook ledger changed; operator review/reconciliation required");
+  return bytes.subarray(0, count).toString("utf8");
+}
+
 export class NotionWebhookInbox {
   private readonly bindings: Map<string, NotionWebhookBinding>;
   private readonly seen = new Set<string>();
@@ -100,11 +167,10 @@ export class NotionWebhookInbox {
 
   static async open(config: NotionWebhookConfig): Promise<NotionWebhookInbox> {
     if (!isAbsolute(config.ledgerPath)) throw new Error("Notion webhook ledger must be absolute");
-    const handle = await open(config.ledgerPath, "a+", 0o600);
+    const handle = await openPrivateLedger(config.ledgerPath);
     try {
-      const existing = await handle.readFile({ encoding: "utf8" });
-      if (Buffer.byteLength(existing) > 32 * 1024 * 1024 ||
-          (existing !== "" && !existing.endsWith("\n")))
+      const existing = await readBoundedLedgerText(handle);
+      if (existing !== "" && !existing.endsWith("\n"))
         throw new Error("Notion webhook ledger requires operator reconciliation");
       const inbox = new NotionWebhookInbox(handle, config.bindings);
       for (const line of existing.split("\n")) {
@@ -171,8 +237,13 @@ export class NotionWebhookInbox {
     try { body = JSON.parse(raw.toString("utf8")); } catch {
       return { status: 400, message: "Invalid verification JSON" };
     }
+    // This unsigned handshake is provisional evidence, not authentication.
+    // Accept only the one expected field; an operator must independently verify
+    // the captured value in Notion before enabling signed event acceptance.
     if (!body || typeof body !== "object" || Array.isArray(body) ||
-        !nonempty((body as { verification_token?: unknown }).verification_token))
+        Object.keys(body).length !== 1 ||
+        !nonempty((body as { verification_token?: unknown }).verification_token) ||
+        (body as { verification_token: string }).verification_token.length > 1024)
       return { status: 400, message: "Invalid verification payload" };
     // One-time capture goes only to the managed runner's protected file.
     // Never return the token in a response or write it to the event ledger.

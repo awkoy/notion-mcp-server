@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,6 +126,18 @@ describe("account-bound Notion webhook reconciliation", () => {
       expect(await worker.reconcile(async () => ({ id: "unrelated-page" })))
         .toEqual({ processed: 0, duplicates: 0, blocked: 1 });
       expect((await readFile(resultPath, "utf8"))).toBe("");
+    } finally { await worker.close(); }
+  });
+
+  it("refuses an over-capacity incoming ledger before processing events", async () => {
+    const incoming = await open(config.ledgerPath, "w");
+    try { await incoming.truncate(32 * 1024 * 1024 + 1); }
+    finally { await incoming.close(); }
+    const worker = await NotionWebhookReconciler.open(config, resultPath);
+    const fetcher = vi.fn();
+    try {
+      await expect(worker.reconcile(fetcher)).rejects.toThrow(/operator review/);
+      expect(fetcher).not.toHaveBeenCalled();
     } finally { await worker.close(); }
   });
 

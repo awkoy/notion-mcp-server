@@ -1,4 +1,5 @@
-import { open, readFile, type FileHandle } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
+import { openPrivateLedger, readBoundedLedgerText } from "./notion-webhook-ingest.js";
 import { isAbsolute } from "node:path";
 import type {
   NotionEventReceipt, NotionWebhookBinding, NotionWebhookConfig,
@@ -71,10 +72,10 @@ export class NotionWebhookReconciler {
   ): Promise<NotionWebhookReconciler> {
     if (!isAbsolute(resultPath) || resultPath === config.ledgerPath)
       throw new Error("Webhook reconciliation path must be a separate absolute file");
-    const file = await open(resultPath, "a+", 0o600);
+    const file = await openPrivateLedger(resultPath);
     try {
       const consumer = new NotionWebhookReconciler(config, resultPath, file);
-      const lines = readLines(await file.readFile({ encoding: "utf8" }));
+      const lines = readLines(await readBoundedLedgerText(file));
       for (const raw of lines) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw))
           throw new Error("Webhook reconciliation ledger requires operator review");
@@ -105,7 +106,10 @@ export class NotionWebhookReconciler {
       throw new Error("Invalid webhook reconciliation budget");
     const task = this.active.then(async () => {
       if (this.failedWrite) throw new Error("Webhook reconcile write is uncertain");
-      const incoming = readLines(await readFile(this.config.ledgerPath, "utf8"));
+      const incomingFile = await open(this.config.ledgerPath, "r");
+      let incoming: unknown[];
+      try { incoming = readLines(await readBoundedLedgerText(incomingFile)); }
+      finally { await incomingFile.close(); }
       let processed = 0, duplicates = 0, blocked = 0;
       for (const raw of incoming) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw))
