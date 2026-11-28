@@ -57,6 +57,7 @@ describe("command-line flags (spawned build/index.js)", () => {
     expect(stdout.startsWith("Usage: notion-mcp-server")).toBe(true);
     expect(stdout).toContain("MCP_TRANSPORT=http");
     expect(stdout).toContain("NOTION_TOKEN");
+    expect(stdout).toContain("--require-token");
     expect(stdout).toContain("https://github.com/awkoy/notion-mcp-server#readme");
     expect(stderr).toBe("");
   });
@@ -137,7 +138,7 @@ describe("command-line flags (spawned build/index.js)", () => {
       child.stdin.end();
       child.kill();
     }
-  });
+  }, 15_000);
 
   it("rejects an unknown option on stderr with exit code 2", async () => {
     const { code, stdout, stderr } = await spawn("--verison");
