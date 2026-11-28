@@ -84,12 +84,16 @@ register({
 const AddPageCommentParams = z
   .object({
     page_id: notionId(),
-    text: z.string().optional().describe("Plain-text comment body."),
-    markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    text: z.string().min(1).optional().describe("Plain-text comment body."),
+    markdown: z.string().min(1).optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    markdown_version: z.enum(["v1", "v2"]).optional().describe("With markdown: select Notion-flavored Markdown v2; omit for default."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.text) !== Boolean(v.markdown), {
+  .refine((v) => (v.text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `text` or `markdown`.",
+  })
+  .refine((v) => !v.markdown_version || v.markdown !== undefined, {
+    message: "markdown_version requires markdown, not text.",
   });
 
 register({
@@ -106,10 +110,10 @@ register({
       { page_id: "<page-id>", markdown: "**Second** note." },
     ],
   },
-  handler: tryHandler(async ({ page_id, text, markdown, verbose }) => {
+  handler: tryHandler(async ({ page_id, text, markdown, markdown_version, verbose }) => {
     const notion = await getClient();
     const body = markdown !== undefined
-      ? { parent: { page_id }, markdown }
+      ? { parent: { page_id }, markdown, ...(markdown_version ? { markdown_version } : {}) }
       : { parent: { page_id }, rich_text: plainTextRich(text!) };
     const response = await notion.comments.create(asSdk<CreateCommentBody>(body));
     return { ok: true, data: slimComment(response, verbose ?? false) };
@@ -123,12 +127,16 @@ register({
 const AddDiscussionCommentParams = z
   .object({
     discussion_id: notionId(),
-    text: z.string().optional(),
-    markdown: z.string().optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    text: z.string().min(1).optional(),
+    markdown: z.string().min(1).optional().describe("Comment body as markdown. Mutually exclusive with text."),
+    markdown_version: z.enum(["v1", "v2"]).optional().describe("With markdown: select Notion-flavored Markdown v2; omit for default."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.text) !== Boolean(v.markdown), {
+  .refine((v) => (v.text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `text` or `markdown`.",
+  })
+  .refine((v) => !v.markdown_version || v.markdown !== undefined, {
+    message: "markdown_version requires markdown, not text.",
   });
 
 register({
@@ -139,10 +147,10 @@ register({
   batchable: true,
   schema: AddDiscussionCommentParams,
   example: { discussion_id: "<discussion-id>", text: "Thanks for the heads-up." },
-  handler: tryHandler(async ({ discussion_id, text, markdown, verbose }) => {
+  handler: tryHandler(async ({ discussion_id, text, markdown, markdown_version, verbose }) => {
     const notion = await getClient();
     const body = markdown !== undefined
-      ? { discussion_id, markdown }
+      ? { discussion_id, markdown, ...(markdown_version ? { markdown_version } : {}) }
       : { discussion_id, rich_text: plainTextRich(text!) };
     const response = await notion.comments.create(asSdk<CreateCommentBody>(body));
     return { ok: true, data: slimComment(response, verbose ?? false) };
@@ -181,11 +189,15 @@ const UpdateCommentParams = z
   .object({
     comment_id: notionId(),
     rich_text: z.array(z.unknown()).optional(),
-    markdown: z.string().optional(),
+    markdown: z.string().min(1).optional(),
+    markdown_version: z.enum(["v1", "v2"]).optional().describe("Select Notion-flavored Markdown v2 when markdown is provided."),
     verbose: VERBOSE,
   })
-  .refine((v) => Boolean(v.rich_text) !== Boolean(v.markdown), {
+  .refine((v) => (v.rich_text !== undefined) !== (v.markdown !== undefined), {
     message: "Pass exactly one of `rich_text` or `markdown`.",
+  })
+  .refine((v) => !v.markdown_version || v.markdown !== undefined, {
+    message: "markdown_version requires markdown, not rich_text.",
   });
 
 register({
@@ -196,10 +208,10 @@ register({
   batchable: true,
   schema: UpdateCommentParams,
   example: { comment_id: "<comment-id>", markdown: "Updated body" },
-  handler: tryHandler(async ({ comment_id, rich_text, markdown, verbose }) => {
+  handler: tryHandler(async ({ comment_id, rich_text, markdown, markdown_version, verbose }) => {
     const notion = await getClient();
     const body = markdown !== undefined
-      ? { comment_id, markdown }
+      ? { comment_id, markdown, ...(markdown_version ? { markdown_version } : {}) }
       : { comment_id, rich_text };
     const response = await notion.comments.update(asSdk<UpdateCommentBody>(body));
     return { ok: true, data: slimComment(response, verbose ?? false) };
