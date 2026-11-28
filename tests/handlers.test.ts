@@ -596,6 +596,33 @@ describe("create_page Markdown versioning", () => {
     expect(notionStub.pages.create.mock.calls[0][0]).not.toHaveProperty("children");
   });
 
+  it.each([
+    { markdown: "", children: [] },
+    { markdown: "", children: [{ object: "block", type: "paragraph", paragraph: { rich_text: [] } }] },
+    { template: { type: "default" }, markdown: "" },
+    { template: { type: "default" }, markdown: "", markdown_version: "v2" },
+    { template: { type: "default" }, children: [] },
+  ])("rejects mutually exclusive present body fields before API calls: %j", async (body) => {
+    const res = await dispatch("create_page", {
+      parent: { type: "page_id", page_id: "p-root" }, title: "Invalid body", ...body,
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(notionStub.pages.create).not.toHaveBeenCalled();
+  });
+
+  it("forwards explicit v1 Markdown natively, without local block conversion", async () => {
+    notionStub.pages.create.mockResolvedValue({
+      id: "new-1", object: "page", properties: {}, parent: { type: "page_id", page_id: "p-root" },
+    });
+    const res = await dispatch("create_page", {
+      parent: { type: "page_id", page_id: "p-root" }, markdown: "**Legacy native**", markdown_version: "v1",
+    });
+    expect(res).toMatchObject({ ok: true });
+    const request = notionStub.pages.create.mock.calls[0][0];
+    expect(request).toMatchObject({ markdown: "**Legacy native**", markdown_version: "v1" });
+    expect(request).not.toHaveProperty("children");
+  });
+
   it("rejects markdown_version without markdown before creating anything", async () => {
     const result = await dispatch("create_page", {
       parent: { type: "page_id", page_id: "p-root" }, title: "No body",

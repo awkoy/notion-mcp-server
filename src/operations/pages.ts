@@ -153,13 +153,13 @@ const CreatePageParams = z
     filter_properties: FILTER_PROPERTIES,
     verbose: VERBOSE,
   })
-  .refine((v) => !(v.markdown && v.children), {
+  .refine((v) => !(v.markdown !== undefined && v.children !== undefined), {
     message: "Pass either `markdown` or `children`, not both.",
   })
   .refine((v) => !(v.markdown_version && v.markdown === undefined), {
     message: "markdown_version requires a markdown body.",
   })
-  .refine((v) => !(v.template && (v.markdown || v.children)), {
+  .refine((v) => !(v.template !== undefined && (v.markdown !== undefined || v.children !== undefined)), {
     message: "Pass either a `template` or body content (`markdown`/`children`), not both — the Notion API rejects children alongside a template.",
   })
   .refine((v) => !(v.template?.type === "template_id" && !v.template.template_id), {
