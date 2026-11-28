@@ -165,6 +165,41 @@ describe("query_view", () => {
     expect(calls[0]).toMatchObject({ method: "views.queries.create", args: { view_id: "v-1" } });
   });
 
+  it("does not expose a dead cursor after one-shot query cleanup", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-one-shot", view_id: "v-1",
+      total_count: 3, results: [{ id: "p-1" }],
+      has_more: true, next_cursor: "c-dead",
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual([{ id: "p-1" }]);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.has_more).toBe(true); // informational: upstream rows remain
+    expect(res.data.continuation_available).toBe(false);
+    expect(res.data).not.toHaveProperty("next_cursor");
+    expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-one-shot",
+    });
+  });
+
+  it("marks first-page incomplete without a reusable cursor", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-incomplete", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: false, next_cursor: null,
+      request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false,
+    })) as { ok: boolean; data: any };
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBe(true);
+    expect(res.data.incomplete_reason).toBe("query_result_limit_reached");
+    expect(res.data).not.toHaveProperty("next_cursor");
+  });
+
   it("returns ids only when hydrate:false (no page retrieves)", async () => {
     notionStub.views.queries.create.mockResolvedValue({
       object: "view_query",
@@ -229,6 +264,174 @@ describe("query_view", () => {
     expect(res.data.results).toEqual([{ id: "p-1" }, { id: "p-2" }, { id: "p-3" }]);
     expect(res.data.pages_walked).toBe(2);
     expect(notionStub.views.queries.delete).toHaveBeenCalled();
+  });
+
+  it("preserves distinct incomplete reasons across paginated response pages", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-reasons", view_id: "v-1", total_count: 2,
+      results: [{ id: "p-1" }], has_more: true, next_cursor: "c1",
+      request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
+    });
+    notionStub.views.queries.results.mockResolvedValue({
+      object: "view_query", id: "q-reasons", view_id: "v-1",
+      results: [{ id: "p-2" }], has_more: false, next_cursor: null,
+      request_status: { type: "incomplete", incomplete_reason: "provider_timeout" },
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBe(true);
+    expect(res.data.incomplete_reasons).toEqual([
+      "query_result_limit_reached", "provider_timeout",
+    ]);
+    expect(res.data.continuation_available).toBe(false);
+  });
+
+  it("marks truncated when page_limit cuts a terminal response page", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-limit", view_id: "v-1",
+      total_count: 3,
+      results: [{ id: "p-1" }, { id: "p-2" }, { id: "p-3" }],
+      has_more: false, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 2,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual([{ id: "p-1" }, { id: "p-2" }]);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBeUndefined(); // caller limit alone is not provider incompleteness
+  });
+
+  it("does not mark an exact-limit terminal page as truncated", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-exact", view_id: "v-1", total_count: 2,
+      results: [{ id: "p-1" }, { id: "p-2" }],
+      has_more: false, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 2,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.truncated).toBe(false);
+    expect(notionStub.views.queries.create).toHaveBeenCalledWith({
+      view_id: "v-1", page_size: 2,
+    });
+  });
+
+  it("marks pagination incomplete when Notion reports more without a cursor", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-no-cursor", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: true, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 10,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual([{ id: "p-1" }]);
+    expect(res.data.truncated).toBe(true);
+    expect(notionStub.views.queries.results).not.toHaveBeenCalled();
+  });
+
+  it("terminates after a later page reports has_more without a cursor", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-later-no-cursor", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: true, next_cursor: "first-cursor",
+    });
+    notionStub.views.queries.results.mockResolvedValue({
+      object: "view_query", id: "q-later-no-cursor", view_id: "v-1",
+      results: [{ id: "p-2" }], has_more: true, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 10,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual([{ id: "p-1" }, { id: "p-2" }]);
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.continuation_available).toBe(false);
+    expect(notionStub.views.queries.results).toHaveBeenCalledTimes(1);
+    expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-later-no-cursor",
+    });
+  });
+
+  it("caps cross-page oversupply at the caller row limit", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-cross-cap", view_id: "v-1",
+      results: [{ id: "p-1" }, { id: "p-2" }],
+      has_more: true, next_cursor: "next",
+    });
+    notionStub.views.queries.results.mockResolvedValue({
+      object: "view_query", id: "q-cross-cap", view_id: "v-1",
+      results: [{ id: "p-3" }, { id: "p-4" }, { id: "p-5" }],
+      has_more: false, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 4,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(res.data.results).toEqual(["p-1", "p-2", "p-3", "p-4"].map((id) => ({ id })));
+    expect(res.data.truncated).toBe(true);
+    expect(res.data.incomplete).toBeUndefined();
+    expect(notionStub.views.queries.results).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-cross-cap",
+      start_cursor: "next", page_size: 2,
+    });
+  });
+
+  it("preserves the original provider error when cleanup also fails", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-double-fail", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: true, next_cursor: "c1",
+    });
+    notionStub.views.queries.results.mockRejectedValue(new Error("distinct-followup-error"));
+    notionStub.views.queries.delete.mockRejectedValue(new Error("distinct-cleanup-error"));
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true,
+    })) as { ok: boolean; error?: { message: string } };
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("distinct-followup-error");
+    expect(res.error?.message).not.toContain("distinct-cleanup-error");
+    expect(notionStub.views.queries.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up the query job for non-paginated reads", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-clean", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: false, next_cursor: null,
+    });
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false,
+    })) as { ok: boolean; data: any };
+    expect(res.ok).toBe(true);
+    expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-clean",
+    });
+  });
+
+  it("rejects fractional page limits before creating a query job", async () => {
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true, page_limit: 2.5,
+    })) as { ok: boolean };
+    expect(res.ok).toBe(false);
+    expect(notionStub.views.queries.create).not.toHaveBeenCalled();
+  });
+
+  it("cleans up an open query job when a pagination request fails", async () => {
+    notionStub.views.queries.create.mockResolvedValue({
+      object: "view_query", id: "q-fail", view_id: "v-1",
+      results: [{ id: "p-1" }], has_more: true, next_cursor: "c1",
+    });
+    notionStub.views.queries.results.mockRejectedValue(new Error("upstream failure"));
+    const res = (await dispatch("query_view", {
+      view_id: "v-1", hydrate: false, paginate: true,
+    })) as { ok: boolean };
+    expect(res.ok).toBe(false);
+    expect(notionStub.views.queries.delete).toHaveBeenCalledWith({
+      view_id: "v-1", query_id: "q-fail",
+    });
   });
 
   describe("rows whose relation or people lists may be cut", () => {
